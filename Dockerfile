@@ -51,12 +51,30 @@ COPY --from=backend /build/dist ./dist
 COPY --from=frontend /build/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Zeilenenden begradigen: wird das Projekt unter Windows ausgecheckt oder
+# bearbeitet, hat das Skript schnell CRLF - der Container stirbt dann beim
+# Start mit "exec /entrypoint.sh: no such file or directory".
+RUN apk add --no-cache --virtual .fix dos2unix && dos2unix /entrypoint.sh && apk del .fix && chmod +x /entrypoint.sh
 
 # /data  – Serverdaten, Backups, Datenbank
 # Der Pfad muss auf dem Host derselbe sein wie im Container, weil die
 # Minecraft-Container ihre Verzeichnisse per Bind-Mount vom Host bekommen.
 VOLUME ["/data"]
+
+# Bauinformationen: der Workflow reicht sie herein, damit das Panel anzeigen
+# kann, welcher Stand laeuft. Beim Bauen von Hand bleiben sie leer.
+ARG VERSION=""
+ARG REVISION=""
+ARG BUILD_DATE=""
+ENV MCPANEL_VERSION=$VERSION
+ENV MCPANEL_REVISION=$REVISION
+ENV MCPANEL_BUILD_DATE=$BUILD_DATE
+
+# image.source verknüpft das Abbild in der Registry mit dem Projekt – ohne die
+# Angabe steht das Paket auf GitHub ohne Bezug zum Repository da.
+LABEL org.opencontainers.image.title="MCPanel"
+LABEL org.opencontainers.image.description="Minecraft-Server-Hosting-Panel mit Modpack-Installer"
+LABEL org.opencontainers.image.source="https://github.com/gottschalkfelix4-source/mcpanel"
 
 # HOST_DATA_ROOT wird bewusst NICHT gesetzt: das Panel liest den Host-Pfad
 # beim Start aus seinen eigenen Mounts. Ein fester Wert hier würde die

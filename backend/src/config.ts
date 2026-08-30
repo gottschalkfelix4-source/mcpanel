@@ -64,6 +64,16 @@ export const config = {
 
   curseforgeApiKey: process.env.CURSEFORGE_API_KEY ?? '',
 
+  /**
+   * Bauinformationen aus dem Abbild. Beim Bauen von Hand leer - dann laeuft
+   * das Panel aus dem Quellcode und es gibt keine Fassung zu melden.
+   */
+  build: {
+    version: process.env.MCPANEL_VERSION ?? '',
+    revision: process.env.MCPANEL_REVISION ?? '',
+    date: process.env.MCPANEL_BUILD_DATE ?? '',
+  },
+
 
   /**
    * Vorgaben fuer einen unbeaufsichtigten ersten Start. Ist kein Passwort

@@ -691,7 +691,14 @@ interface FabricModInfo {
 }
 
 /** Steuerzeichen, an denen JSON.parse sonst scheitert (kommt in Mod-Jars vor). */
-const CONTROL_CHARS = /[ --]/g;
+const CONTROL_CHARS = new RegExp(
+  '[' +
+    String.fromCharCode(0) + '-' + String.fromCharCode(8) +
+    String.fromCharCode(11) + String.fromCharCode(12) +
+    String.fromCharCode(14) + '-' + String.fromCharCode(31) +
+  ']',
+  'g',
+);
 
 function readFabricModInfo(modsDir: string, file: string): FabricModInfo | null {
   try {

@@ -22,6 +22,22 @@ mkdir -p "$PGDATA" /run/postgresql
 chown -R postgres:postgres "$PGDATA" /run/postgresql
 chmod 700 "$PGDATA"
 
+# Bei einem Update kommt eine neue Abbild-Fassung auf ein bestehendes
+# Datenverzeichnis. Passt die PostgreSQL-Hauptversion nicht mehr dazu,
+# startet die Datenbank nicht - dann lieber hier verstaendlich abbrechen als
+# den Nutzer mit "database files are incompatible" allein zu lassen.
+if [ -f "$PGDATA/PG_VERSION" ]; then
+  VORHANDEN=$(cat "$PGDATA/PG_VERSION")
+  # "postgres (PostgreSQL) 16.4" -> "16"
+  INSTALLIERT=$(su-exec postgres postgres --version | awk '{print $3}' | cut -d. -f1)
+  if [ -n "$INSTALLIERT" ] && [ "$VORHANDEN" != "$INSTALLIERT" ]; then
+    log "ABBRUCH: Die Daten stammen von PostgreSQL $VORHANDEN, im Abbild steckt $INSTALLIERT."
+    log "Ein Wechsel der Hauptversion braucht pg_upgrade oder eine Sicherung."
+    log "Bitte vorher ein Backup ziehen und die Hinweise zur Aktualisierung lesen."
+    exit 1
+  fi
+fi
+
 if [ ! -f "$PGDATA/PG_VERSION" ]; then
   log "Datenbank wird angelegt ..."
   su-exec postgres initdb -D "$PGDATA" -E UTF8 --locale=C >/dev/null

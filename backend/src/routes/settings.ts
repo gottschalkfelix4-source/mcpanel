@@ -42,6 +42,11 @@ export default async function settingsRoutes(app: FastifyInstance) {
     }
 
     return {
+      build: {
+        version: config.build.version || null,
+        revision: config.build.revision ? config.build.revision.slice(0, 7) : null,
+        date: config.build.date || null,
+      },
       publicHost: await getPublicHost(),
       portRange: config.portRange,
       dataRoot: config.dataRoot,

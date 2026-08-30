@@ -10,6 +10,7 @@ import {
 } from '../../components/ui';
 
 interface PanelInfo {
+  build: { version: string | null; revision: string | null; date: string | null };
   publicHost: string;
   portRange: { min: number; max: number };
   dataRoot: string;
@@ -149,6 +150,17 @@ export default function PanelSettingsPage() {
           <Row label="Datenpfad (Host)" value={data.hostDataRoot} mono />
           <Row label="Server-Image" value={data.mcImage} mono />
           <Row label="Docker-Netzwerk" value={data.dockerNetwork} mono />
+          <Row
+            label="Panel-Fassung"
+            value={
+              data.build.version
+                ? `${data.build.version}${data.build.revision ? ` · ${data.build.revision}` : ''}${
+                    data.build.date ? ` · ${new Date(data.build.date).toLocaleDateString('de-DE')}` : ''
+                  }`
+                : 'aus dem Quellcode gebaut'
+            }
+            mono
+          />
         </dl>
 
         {!data.docker && (

@@ -32,8 +32,13 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=MCPanel
+            org.opencontainers.image.description=Minecraft-Server-Hosting-Panel mit Modpack-Installer
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -42,6 +47,17 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          # Ohne diese beiden Zeilen legt buildx neben dem Abbild ein
+          # Attestation-Manifest ab, und das Ergebnis ist ein Index mit einem
+          # zweiten Eintrag "unknown/unknown". Unraid vergleicht zur
+          # Update-Erkennung Digests und kommt damit durcheinander - der
+          # Knopf "update ready" bleibt dann dauerhaft stehen.
+          provenance: false
+          sbom: false
           # amd64 reicht fuer Unraid und die uebliche NAS-Hardware. arm64 waere
           # per QEMU zwar moeglich, verdreifacht aber die Bauzeit.
           platforms: linux/amd64

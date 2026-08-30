@@ -172,6 +172,31 @@ Einzustellen sind nur drei Dinge:
 Den Host-Pfad der Daten liest das Panel selbst aus seinen Mounts aus; er ist also nicht
 doppelt einzutragen. Alles Weitere fragt der Assistent beim ersten Aufruf.
 
+### Updates
+
+Unraid zeigt neue Fassungen von selbst an: sobald der Workflow ein neues `:latest`
+veröffentlicht hat, steht auf der Docker-Seite *update ready*, und ein Klick auf
+**Apply Update** zieht das Abbild und setzt den Container neu auf. Daten, Welten und
+Datenbank liegen im `/data`-Volume und bleiben davon unberührt; das Schema wird beim
+Start automatisch abgeglichen.
+
+Welcher Stand gerade läuft, steht im Panel unter *Einstellungen → Systemkonfiguration*
+als **Panel-Fassung** (Kurz-Commit und Baudatum).
+
+Zwei Dinge machen das überhaupt erst zuverlässig:
+
+- Das Abbild wird **ohne Attestierungen** veröffentlicht (`provenance: false`,
+  `sbom: false`). Sonst legt buildx neben das Abbild ein zweites Manifest
+  `unknown/unknown`, und Unraids Digest-Vergleich meldet dauerhaft *update ready*,
+  ohne dass sich etwas geändert hätte.
+- Die PostgreSQL-Hauptversion ist im Abbild festgenagelt. Würde ein Update sie
+  wechseln, käme das alte Datenverzeichnis nicht mehr hoch – das Startskript prüft
+  das und bricht mit einer verständlichen Meldung ab, statt mit
+  „database files are incompatible“ stehenzubleiben.
+
+Wer nicht jeden Push mitnehmen will, trägt im Template statt `latest` eine feste
+Fassung ein – Git-Tags der Form `v1.2.3` erzeugen zusätzlich `:1.2.3` und `:1.2`.
+
 Dasselbe Abbild lässt sich auch ohne Unraid einzeln starten:
 
 ```bash

@@ -22,6 +22,8 @@ Modpacks kommen von Modrinth und CurseForge, inklusive Updater; Serverpakete hab
 
 Beim ersten Aufruf fuehrt ein Assistent durch die Einrichtung - es ist nichts vorzubereiten.
 
+Updates meldet Unraid von selbst: erscheint auf der Docker-Seite "update ready", genuegt ein Klick auf "Apply Update". Serverdaten, Welten und Datenbank liegen im Datenverzeichnis und bleiben dabei unberuehrt. Welche Fassung laeuft, steht im Panel unter Einstellungen - Systemkonfiguration.
+
 WICHTIG - zwei Dinge muessen stimmen:
 
 1. Der Docker-Socket muss eingehaengt sein. Ohne ihn kann das Panel keine Server starten. Damit hat der Container root-gleiche Rechte auf dem Host; wer das nicht moechte, sollte MCPanel nicht betreiben.
