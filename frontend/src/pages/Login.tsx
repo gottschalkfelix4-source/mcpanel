@@ -1,12 +1,25 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Boxes, LogIn } from 'lucide-react';
 import { useAuth } from '../lib/auth';
-import { ApiError } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import { Button, ErrorNote } from '../components/ui';
 import { BlockIcon, Motes } from '../components/pixel';
 
 export default function LoginPage() {
   const { login } = useAuth();
+
+  // Fassung und Anzahl der Konten - hilft bei der Frage, warum hier die
+  // Anmeldung steht und nicht der Einrichtungsassistent.
+  const status = useQuery({
+    queryKey: ['setup-status'],
+    queryFn: () =>
+      api.get<{
+        needsSetup: boolean;
+        build: { version: string | null; revision: string | null; date: string | null };
+      }>('/setup/status'),
+    staleTime: 300_000,
+  });
   const [loginName, setLoginName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +97,15 @@ export default function LoginPage() {
 
         <p className="mt-[22px] text-center text-xs text-stone-500">
           Zugang bekommst du von einem Panel-Administrator.
+          {status.data?.build.version && (
+            <>
+              <br />
+              <span className="font-mono">
+                {status.data.build.version}
+                {status.data.build.revision ? ` · ${status.data.build.revision}` : ''}
+              </span>
+            </>
+          )}
         </p>
       </div>
     </div>

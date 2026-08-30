@@ -52,6 +52,13 @@ export default async function setupRoutes(app: FastifyInstance) {
 
     return {
       needsSetup,
+      // Damit man auch ohne Anmeldung sieht, welcher Stand laeuft - genau die
+      // Frage, die sich stellt, wenn statt des Assistenten die Anmeldung kommt.
+      build: {
+        version: config.build.version || null,
+        revision: config.build.revision ? config.build.revision.slice(0, 7) : null,
+        date: config.build.date || null,
+      },
       docker,
       /** Vorschlag für das Adressfeld. */
       suggestedHost: config.publicHost,
