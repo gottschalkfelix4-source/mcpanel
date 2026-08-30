@@ -8,7 +8,9 @@
  *
  * 0 bedeutet überall „unbegrenzt".
  */
+import fsp from 'node:fs/promises';
 import type { Server } from '@prisma/client';
+import { config } from '../config.js';
 import { prisma } from '../db.js';
 import { badRequest } from '../lib/errors.js';
 import { computeDiskUsage, getDiskUsage } from './diskUsage.js';
@@ -93,6 +95,63 @@ export async function pruneToBackupLimit(server: Server): Promise<number> {
     }
   }
   return removed;
+}
+
+export interface VolumeSpace {
+  totalBytes: number;
+  freeBytes: number;
+  usedBytes: number;
+  /** Auslastung des Datenträgers in Prozent */
+  usedPercent: number;
+  /** Ab weniger freiem Platz gilt der Datenträger als knapp. */
+  warnBytes: number;
+  low: boolean;
+}
+
+/** Warnschwelle: 10 % des Datenträgers, mindestens aber so viele Bytes. */
+const VOLUME_WARN_FLOOR = 5 * 1024 ** 3;
+
+/**
+ * Freier Platz auf dem Datenträger des Datenverzeichnisses – unabhängig von
+ * allen Kontingenten.
+ *
+ * Dort liegen nicht nur Serverdaten, Sicherungen und der Modpack-Cache,
+ * sondern auch das Datenverzeichnis von PostgreSQL. Läuft der Datenträger
+ * voll, hält nicht bloß ein Kontingent nicht: die Datenbank steht, das Panel
+ * ist weg, und ein laufendes tar bricht mitten im Archiv ab.
+ *
+ * Gewarnt wird beim strengeren der beiden Werte. 10 % allein greifen auf
+ * kleinen Datenträgern zu spät – von 20 GB bleiben dann 2 GB, zu wenig für ein
+ * einziges Modpack-Archiv –, die absoluten 5 GB auf großen. Es zählt daher der
+ * jeweils höhere Schwellwert.
+ *
+ * `null`, wenn sich der Datenträger nicht auslesen lässt (etwa auf einem
+ * Einhängepunkt, der statfs nicht beantwortet).
+ */
+export async function volumeSpace(): Promise<VolumeSpace | null> {
+  try {
+    const stat = await fsp.statfs(config.dataRoot);
+    const blockSize = Number(stat.bsize);
+    const totalBytes = blockSize * Number(stat.blocks);
+    // bavail statt bfree: die für root reservierten Blöcke stehen dem Panel
+    // nicht zur Verfügung.
+    const freeBytes = blockSize * Number(stat.bavail);
+    if (!Number.isFinite(totalBytes) || totalBytes <= 0) return null;
+
+    const usedBytes = Math.max(0, totalBytes - freeBytes);
+    const warnBytes = Math.max(totalBytes * 0.1, VOLUME_WARN_FLOOR);
+
+    return {
+      totalBytes,
+      freeBytes,
+      usedBytes,
+      usedPercent: Math.round((usedBytes / totalBytes) * 100),
+      warnBytes,
+      low: freeBytes < warnBytes,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

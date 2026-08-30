@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { Server } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { config } from '../config.js';
@@ -58,6 +59,22 @@ const updateSchema = z.object({
   autoStart: z.boolean().optional(),
   extraEnv: z.record(z.string()).optional(),
 });
+
+/**
+ * Verglichen wird gegen den gespeicherten Stand: nur eine echte Änderung ist
+ * verboten. Sonst könnte ein Nicht-Admin an einem Server mit gesetztem
+ * MC_IMAGE gar nichts mehr speichern – die Oberfläche schickt extraEnv immer
+ * vollständig zurück.
+ */
+function assertProtectedEnvUnchanged(server: Server, next: Record<string, string>): void {
+  const current = (server.extraEnv ?? {}) as Record<string, string>;
+  const changed = dockerSvc.PROTECTED_ENV_KEYS.filter(
+    (key) => (next[key] ?? '') !== (current[key] ?? ''),
+  );
+  if (changed.length > 0) {
+    throw forbidden(`Nur ein Administrator kann ${changed.join(', ')} ändern`);
+  }
+}
 
 const powerSchema = z.object({
   action: z.enum(['start', 'stop', 'restart', 'kill']),
@@ -155,6 +172,9 @@ export default async function serverRoutes(app: FastifyInstance) {
     const wantsQuota = Object.values(quota).some((v) => v !== undefined);
     if (wantsQuota && !access.isAdmin) {
       throw forbidden('Kontingente kann nur ein Administrator ändern');
+    }
+    if (data.extraEnv !== undefined && !access.isAdmin) {
+      assertProtectedEnvUnchanged(access.server, data.extraEnv);
     }
     if (data.memoryMb !== undefined) {
       assertMemoryAllowed(access.server, data.memoryMb, access.isAdmin);

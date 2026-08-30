@@ -50,6 +50,24 @@ export function javaTagForVersion(mcVersion: string): string {
   return 'java21';
 }
 
+/**
+ * Schlüssel aus extraEnv, die nicht den Minecraft-Server konfigurieren,
+ * sondern bestimmen, was überhaupt ausgeführt wird: MC_IMAGE tauscht das
+ * Abbild aus, die JVM-Schalter und EXTRA_ARGS hängen sich an die Kommandozeile
+ * (etwa -javaagent) und UID/GID entscheiden, als wer der Prozess in das
+ * eingehängte Datenverzeichnis schreibt. Deshalb sind sie Administratoren
+ * vorbehalten – das Recht "Servereinstellungen" verspricht das nicht.
+ */
+export const PROTECTED_ENV_KEYS = [
+  'MC_IMAGE',
+  'JVM_OPTS',
+  'JVM_XX_OPTS',
+  'JVM_DD_OPTS',
+  'EXTRA_ARGS',
+  'UID',
+  'GID',
+] as const;
+
 /** Image eines Servers: explizite Vorgabe schlägt automatische Wahl. */
 export function imageForServer(server: Server): string {
   const explicit = (server.extraEnv as Record<string, string> | null)?.MC_IMAGE;

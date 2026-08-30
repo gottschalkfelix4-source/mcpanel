@@ -318,7 +318,8 @@ const diskWarned = new Set<string>();
 
 /**
  * Meldet Server, deren Speicherkontingent zur Neige geht. Ohne Kontingent
- * gibt es keine sinnvolle Grenze, deshalb bleiben solche Server hier aussen vor.
+ * gibt es keine sinnvolle Grenze, deshalb bleiben solche Server hier aussen
+ * vor – für sie greift checkVolumeSpace().
  */
 async function checkDiskQuota(): Promise<void> {
   if (Date.now() - lastDiskCheck < DISK_CHECK_EVERY_MS) return;
@@ -356,6 +357,50 @@ async function checkDiskQuota(): Promise<void> {
       ],
     });
   }
+}
+
+const VOLUME_CHECK_EVERY_MS = 15 * 60 * 1000;
+/** Wie beim Kontingent: erst nach Entspannung wieder melden. */
+let volumeWarned = false;
+let lastVolumeCheck = 0;
+
+/**
+ * Meldet, wenn der Datenträger des Datenverzeichnisses zur Neige geht. Das
+ * betrifft alle Installationen, auch die im Auslieferungszustand ohne jedes
+ * Kontingent – und trifft härter als eine erschöpfte Serverzuteilung, weil auf
+ * demselben Datenträger die Datenbank des Panels liegt.
+ */
+async function checkVolumeSpace(): Promise<void> {
+  if (Date.now() - lastVolumeCheck < VOLUME_CHECK_EVERY_MS) return;
+  lastVolumeCheck = Date.now();
+
+  const { volumeSpace } = await import('./quota.js');
+  const space = await volumeSpace();
+  if (!space) return;
+
+  if (!space.low) {
+    volumeWarned = false;
+    return;
+  }
+  if (volumeWarned) return;
+  volumeWarned = true;
+
+  const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  await notify('disk.low', {
+    serverId: null,
+    serverName: null,
+    title: 'Datenträger wird knapp',
+    message:
+      `Nur noch ${gb(space.freeBytes)} von ${gb(space.totalBytes)} sind frei, ` +
+      `${gb(space.usedBytes)} sind belegt (${space.usedPercent} %). Dort liegen ` +
+      'Serverdaten, Sicherungen und die Datenbank des Panels: ist der Datenträger ' +
+      'voll, brechen Sicherungen mitten im Archiv ab und das Panel selbst fällt aus.',
+    fields: [
+      { name: 'Frei', value: gb(space.freeBytes) },
+      { name: 'Belegt', value: gb(space.usedBytes) },
+      { name: 'Gesamt', value: gb(space.totalBytes) },
+    ],
+  });
 }
 
 /**
@@ -492,6 +537,7 @@ export function startWatcher(log: (msg: string) => void): void {
     await checkStates().catch((err) => log(`Zustandsprüfung fehlgeschlagen: ${err}`));
     await checkModpackUpdates().catch(() => {});
     await checkDiskQuota().catch(() => {});
+    await checkVolumeSpace().catch(() => {});
   };
 
   void run();
