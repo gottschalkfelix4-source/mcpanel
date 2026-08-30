@@ -1,0 +1,77 @@
+name: mcpanel
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mcpanel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcpanel}
+      POSTGRES_DB: ${POSTGRES_DB:-mcpanel}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mcpanel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [mcpanel]
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # Zeitzone bestimmt, wann Automatisierungs-Zeitplaene ausloesen
+      TZ: ${TZ:-Europe/Berlin}
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mcpanel}:${POSTGRES_PASSWORD:-mcpanel}@db:5432/${POSTGRES_DB:-mcpanel}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt – bitte .env anlegen}
+      # In-Container-Pfad der Daten
+      DATA_ROOT: /data
+      # Host-Pfad derselben Daten (für Bind-Mounts der MC-Container)
+      HOST_DATA_ROOT: ${HOST_DATA_ROOT:-./data}
+      MC_PORT_MIN: ${MC_PORT_MIN:-25565}
+      MC_PORT_MAX: ${MC_PORT_MAX:-25700}
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      DOCKER_NETWORK: mcpanel_mcpanel
+      CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme123}
+    volumes:
+      # Docker-Socket: das Panel startet/stoppt die Minecraft-Container
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      # Serverdaten – gleicher Ordner, den auch die MC-Container einhängen.
+      # Lange Syntax, damit Windows-Pfade wie C:/mcpanel funktionieren.
+      - type: bind
+        source: ${HOST_DATA_ROOT:-./data}
+        target: /data
+    # Nur fuer die Samba-Zweitablage: das Panel haengt die Freigabe zur Laufzeit
+    # selbst per CIFS ein, und das geht nicht ohne diese Rechte. Wer sie nicht
+    # braucht, kann beide Zeilen entfernen - S3 und der lokale Betrieb laufen
+    # auch ohne. Im Verhaeltnis zum Docker-Socket weiter oben, der bereits
+    # root-gleiche Rechte auf dem Host gibt, ist das kein zusaetzliches Risiko.
+    cap_add: [SYS_ADMIN, DAC_READ_SEARCH]
+    security_opt: ["apparmor:unconfined"]
+    networks: [mcpanel]
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      - "${PANEL_PORT:-8080}:80"
+    networks: [mcpanel]
+
+volumes:
+  db-data:
+
+networks:
+  mcpanel:
+    name: mcpanel_mcpanel

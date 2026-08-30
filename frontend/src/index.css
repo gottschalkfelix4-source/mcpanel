@@ -1,0 +1,270 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-stone-950 text-stone-50 font-sans antialiased;
+    background-image:
+      radial-gradient(1100px 560px at 10% -12%, rgba(91, 135, 49, 0.2), transparent 62%),
+      radial-gradient(900px 520px at 94% 2%, rgba(60, 68, 170, 0.17), transparent 64%),
+      linear-gradient(180deg, #15151a 0%, #0b0b0d 100%);
+    background-attachment: fixed;
+  }
+
+  /*
+   * Pixelraster plus feine Scanlines – gibt der Fläche die Anmutung eines
+   * hochskalierten 16-px-Blocks, ohne den Inhalt zu stören.
+   */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.5;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 16px),
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 16px),
+      repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 8px, transparent 8px 16px);
+  }
+
+  a {
+    @apply text-grass-light no-underline;
+  }
+  a:hover {
+    color: #a3d15c;
+    @apply underline;
+  }
+
+  ::selection {
+    background: rgba(127, 178, 56, 0.4);
+    color: #fff;
+  }
+
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-stone-950;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-stone-600;
+    border: 2px solid #0d0d0f;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-stone-500;
+  }
+
+  /*
+   * Mobil: iOS zoomt beim Fokussieren von Eingaben mit weniger als 16px
+   * Schriftgröße in die Seite hinein – deshalb dort größer.
+   */
+  @media (max-width: 640px) {
+    .mc-input,
+    .mc-select {
+      font-size: 16px;
+    }
+  }
+
+  /* Notch/Statusleiste im Standalone-Modus nicht überdecken */
+  @supports (padding: env(safe-area-inset-left)) {
+    body {
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+  }
+}
+
+@layer components {
+  /* ------------------------------------------------------------- Rahmen ---
+   * Jede Fläche besteht aus zwei Lagen: einem erhabenen Steinrahmen und einer
+   * vertieften Innenfläche. Das erzeugt den Inventar-Look von Minecraft.
+   */
+  .mc-frame {
+    @apply relative border border-stone-950 bg-stone-600 p-1;
+    background-image: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.1) 0 3px, transparent 3px 6px);
+    box-shadow:
+      inset 2px 2px 0 rgba(255, 255, 255, 0.13),
+      inset -2px -2px 0 rgba(0, 0, 0, 0.5),
+      0 6px 18px -8px rgba(0, 0, 0, 0.8);
+  }
+
+  .mc-frame-inner {
+    @apply bg-stone-800;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.013) 0 4px, transparent 4px 8px),
+      repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.1) 0 4px, transparent 4px 8px);
+    box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.5);
+  }
+
+  /* Kopfzeile innerhalb eines Rahmens */
+  .mc-frame-head {
+    @apply flex flex-wrap items-center justify-between gap-3 border-b border-stone-890 px-4 py-3;
+    background: rgba(15, 15, 18, 0.55);
+  }
+
+  /* Lichtpunkt oben links / Schattenpunkt unten rechts */
+  .mc-frame-stud-light {
+    @apply pointer-events-none absolute left-px top-px h-1 w-1;
+    background: rgba(255, 255, 255, 0.22);
+  }
+  .mc-frame-stud-dark {
+    @apply pointer-events-none absolute bottom-px right-px h-1 w-1;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  /* Vertiefte Fläche für Eingaben, Diagramme und Schienen */
+  .mc-well {
+    @apply border border-stone-700 bg-stone-well;
+    box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.6);
+  }
+
+  /* ------------------------------------------------------------ Buttons --- */
+  .mc-btn {
+    @apply relative inline-flex select-none items-center justify-center gap-2
+           border border-stone-950 px-4 py-2.5 text-sm font-bold
+           transition-[transform,filter,background-color,box-shadow] duration-75
+           disabled:pointer-events-none disabled:opacity-45;
+    letter-spacing: 0.04em;
+    box-shadow:
+      inset 1px 1px 0 rgba(255, 255, 255, 0.24),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.45),
+      0 4px 0 0 rgba(0, 0, 0, 0.5);
+  }
+  .mc-btn:active {
+    transform: translateY(3px);
+    box-shadow:
+      inset 1px 1px 0 rgba(255, 255, 255, 0.16),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.4),
+      0 1px 0 0 rgba(0, 0, 0, 0.5);
+  }
+
+  .mc-btn-primary {
+    @apply mc-btn bg-grass text-white hover:bg-grass-light;
+  }
+  .mc-btn-danger {
+    @apply mc-btn bg-redstone text-white;
+  }
+  .mc-btn-danger:hover {
+    filter: brightness(1.12);
+  }
+  .mc-btn-gold {
+    @apply mc-btn bg-gold text-stone-950;
+  }
+  .mc-btn-gold:hover {
+    filter: brightness(1.12);
+  }
+  .mc-btn-default {
+    @apply mc-btn bg-stone-500 text-stone-50 hover:bg-stone-400;
+  }
+  /* Zurückhaltende Variante: dunkler Stein statt Farbe */
+  .mc-btn-ghost {
+    @apply mc-btn border-stone-600 text-stone-200 hover:text-stone-50;
+    background: rgba(44, 44, 51, 0.75);
+    box-shadow:
+      inset 1px 1px 0 rgba(255, 255, 255, 0.14),
+      0 4px 0 0 rgba(0, 0, 0, 0.5);
+  }
+  .mc-btn-ghost:hover {
+    background: rgba(59, 59, 67, 0.9);
+  }
+
+  /* ------------------------------------------------------------- Inputs --- */
+  .mc-input {
+    @apply w-full border border-stone-600 bg-stone-well px-3 py-2.5 text-sm
+           text-stone-50 placeholder-stone-450 outline-none transition-[border-color,box-shadow];
+    box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.6);
+  }
+  .mc-input:focus {
+    @apply border-grass-light;
+    box-shadow:
+      inset 2px 2px 0 rgba(0, 0, 0, 0.6),
+      0 0 0 3px rgba(127, 178, 56, 0.25);
+  }
+  .mc-select {
+    @apply mc-input appearance-none pr-8;
+  }
+  .mc-label {
+    @apply mb-1.5 block text-[11px] font-bold uppercase tracking-[0.14em] text-stone-300;
+  }
+
+  /* --------------------------------------------------------------- Tabs --- */
+  .mc-tab {
+    @apply relative flex items-center gap-2 whitespace-nowrap border-b-[3px] border-transparent
+           px-4 py-3 text-[13px] font-bold text-stone-400 transition-colors;
+  }
+  .mc-tab:hover {
+    @apply text-stone-50;
+    background: rgba(59, 59, 67, 0.4);
+  }
+  .mc-tab-active {
+    @apply border-grass-light text-white;
+    background: rgba(91, 135, 49, 0.14);
+  }
+
+  /* -------------------------------------------------------------- Badge --- */
+  .mc-badge {
+    @apply inline-flex items-center gap-1.5 border px-2 py-[3px]
+           text-[10px] font-bold uppercase tracking-[0.09em] whitespace-nowrap;
+  }
+
+  /* ------------------------------------------------------------ Konsole --- */
+  .console-view {
+    @apply font-mono text-[12.5px] leading-[1.55] text-stone-100;
+  }
+
+  /* --------------------------------------------------------- Typografie --- */
+  .heading {
+    @apply font-display tracking-[0.02em] text-stone-50;
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.55);
+  }
+  .heading-pixel {
+    @apply font-pixel text-white;
+    text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.7);
+  }
+  .pixel {
+    @apply font-pixel;
+  }
+
+  /* Grasnarbe als Zierleiste – heller Halm, Gras, Erde */
+  .grass-strip {
+    background-image:
+      repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.16) 0 6px, transparent 6px 13px),
+      linear-gradient(180deg, #8fc242 0 4px, #7fb238 4px 8px, #5b8731 8px 11px, #866043 11px 100%);
+  }
+  .grass-strip-thin {
+    background-image:
+      repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.15) 0 6px, transparent 6px 13px),
+      linear-gradient(180deg, #8fc242 0 3px, #7fb238 3px 5px, #5b8731 5px 8px);
+  }
+}
+
+@layer utilities {
+  .text-shadow-pixel {
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+  }
+  .text-shadow-pixel-lg {
+    text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.7);
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Ladeplatzhalter mit wanderndem Glanz */
+  .skeleton {
+    background: linear-gradient(90deg, #242429 0, #33333a 40%, #242429 80%);
+    background-size: 320px 100%;
+    @apply animate-shimmer;
+  }
+}

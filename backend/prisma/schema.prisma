@@ -1,0 +1,224 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum ServerType {
+  VANILLA
+  PAPER
+  PURPUR
+  SPIGOT
+  FABRIC
+  FORGE
+  NEOFORGE
+  QUILT
+  MODPACK
+}
+
+enum TaskStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  ownedServers Server[]       @relation("ServerOwner")
+  memberships  ServerMember[]
+  backups      Backup[]
+  auditLogs    AuditLog[]
+}
+
+model Server {
+  id          String     @id @default(cuid())
+  name        String
+  description String     @default("")
+  ownerId     String
+  owner       User       @relation("ServerOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Container / Runtime
+  containerId String?
+  containerName String   @unique
+  port        Int        @unique
+  rconPort    Int
+  rconPassword String
+  memoryMb    Int        @default(4096)
+  javaVersion String     @default("21")
+  type        ServerType @default(PAPER)
+  mcVersion   String     @default("LATEST")
+  extraEnv    Json       @default("{}")
+  autoStart   Boolean    @default(false)
+
+  // --- Kontingent (0 = unbegrenzt), nur von Administratoren aenderbar -----
+  /// Obergrenze fuer Serverdaten + Backups zusammen, in MB
+  quotaDiskMb    Int @default(0)
+  /// Hoechstzahl aufbewahrter Backups; aeltere werden automatisch entfernt
+  quotaBackups   Int @default(0)
+  /// Hoechster Arbeitsspeicher, den Nicht-Administratoren einstellen duerfen
+  quotaMemoryMb  Int @default(0)
+
+  // Modpack-Bindung (für Updater)
+  modpackProvider    String?  // "modrinth" | "curseforge"
+  modpackProjectId   String?
+  modpackVersionId   String?
+  modpackName        String?
+  modpackVersionName String?
+  modpackIconUrl     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members ServerMember[]
+  backups Backup[]
+  tasks   Task[]
+  automations Automation[]
+  notifications NotificationChannel[]
+  auditLogs AuditLog[]
+
+  @@index([ownerId])
+}
+
+model ServerMember {
+  id          String   @id @default(cuid())
+  serverId    String
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissions String[] @default([])
+  createdAt   DateTime @default(now())
+
+  @@unique([serverId, userId])
+}
+
+model Backup {
+  id          String   @id @default(cuid())
+  serverId    String
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name        String
+  filename    String
+  /// Liegt zusaetzlich in der Zweitablage
+  mirrored    Boolean  @default(false)
+  sizeBytes   BigInt   @default(0)
+  note        String   @default("")
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([serverId])
+}
+
+model Task {
+  id        String     @id @default(cuid())
+  serverId  String?
+  server    Server?    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  type      String
+  status    TaskStatus @default(PENDING)
+  progress  Int        @default(0)
+  message   String     @default("")
+  log       String     @default("")
+  error     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([serverId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  serverId  String?
+  server    Server?  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  action    String
+  detail    String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([serverId])
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+/// Automatisierung: zeitgesteuerte oder ereignisbasierte Aktionen je Server.
+model Automation {
+  id       String  @id @default(cuid())
+  serverId String
+  server   Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  name    String
+  enabled Boolean @default(true)
+
+  /// SCHEDULE = Zeitplan (cron), ON_CRASH = Container unerwartet beendet
+  trigger String
+  /// 5-Feld-Cron, nur bei trigger = SCHEDULE
+  cron    String?
+
+  /// COMMAND | BACKUP | RESTART | START | STOP | MODPACK_UPDATE
+  action String
+  /// Aktionsabhängige Werte, z. B. { "command": "say Neustart in 5 Min" }
+  config Json   @default("{}")
+
+  /// Aktion überspringen, wenn der Server gerade nicht läuft
+  onlyWhenRunning Boolean @default(false)
+
+  lastRunAt   DateTime?
+  /// OK | FEHLER | UEBERSPRUNGEN
+  lastStatus  String?
+  lastMessage String?
+  runCount    Int       @default(0)
+
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([serverId])
+}
+
+/// Benachrichtigungsziel. serverId = null bedeutet: gilt fuer alle Server.
+model NotificationChannel {
+  id       String  @id @default(cuid())
+  serverId String?
+  server   Server? @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  name    String
+  enabled Boolean @default(true)
+
+  /// DISCORD | WEBHOOK
+  type   String  @default("DISCORD")
+  /// Webhook-URL des Ziels
+  target String
+
+  /// Liste der abonnierten Ereignisse, z. B. ["server.crashed","backup.done"]
+  events Json @default("[]")
+
+  lastSentAt  DateTime?
+  /// OK | FEHLER
+  lastStatus  String?
+  lastMessage String?
+  sentCount   Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serverId])
+}
