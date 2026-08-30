@@ -44,7 +44,13 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: true
+          # oci-mediatypes=false: buildx wuerde sonst ein Manifest in
+          # OCI-Medientypen ablegen. Das laesst sich nur abrufen, wenn der
+          # Client die OCI-Typen im Accept-Kopf mitschickt - Docker tut das,
+          # Unraids Update-Pruefung fragt aber nur nach den Docker-Typen und
+          # bekommt dann 404. In der Oberflaeche steht dann
+          # "Update-Status: nicht verfuegbar".
+          outputs: type=registry,oci-mediatypes=false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
