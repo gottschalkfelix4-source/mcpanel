@@ -169,12 +169,39 @@ export interface Member {
   createdAt?: string;
 }
 
-export interface ModFile {
+/** Art des verwaltbaren Zusatzinhalts – null bei Servern, die keinen kennen. */
+export type ContentKind = 'mod' | 'plugin';
+
+/**
+ * Bukkit-Abkoemmlinge laden aus plugins/, die Loader aus mods/, Vanilla aus
+ * keinem von beiden. Dient nur der Beschriftung, bis die Liste geladen ist –
+ * massgeblich bleibt das `kind` aus der Antwort.
+ */
+export const CONTENT_KIND_BY_TYPE: Record<ServerType, ContentKind | null> = {
+  VANILLA: null,
+  PAPER: 'plugin',
+  PURPUR: 'plugin',
+  SPIGOT: 'plugin',
+  FABRIC: 'mod',
+  FORGE: 'mod',
+  NEOFORGE: 'mod',
+  QUILT: 'mod',
+  MODPACK: 'mod',
+};
+
+export interface ContentFile {
   filename: string;
   displayName: string;
   enabled: boolean;
   size: number;
   modified: string;
+}
+
+export interface ContentListing {
+  /** null: Der Servertyp unterstuetzt weder Mods noch Plugins. */
+  kind: ContentKind | null;
+  dirName: string | null;
+  items: ContentFile[];
 }
 
 export interface PlayerInfo {

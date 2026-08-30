@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { getSocket } from '../../lib/socket';
+import { CONTENT_KIND_BY_TYPE } from '../../lib/types';
 import type { ContainerStats, PowerState, ServerDetail } from '../../lib/types';
 import { Button, ConfirmDialog, ErrorNote, LoadingBlock, StateBadge, useToast } from '../../components/ui';
 import { BlockIcon } from '../../components/pixel';
@@ -31,7 +32,7 @@ const TABS = [
   { to: '', label: 'Übersicht', icon: LayoutDashboard, permission: null, end: true },
   { to: 'console', label: 'Konsole', icon: Terminal, permission: 'console.read' },
   { to: 'modpack', label: 'Modpack', icon: Package, permission: null },
-  { to: 'mods', label: 'Mods', icon: Puzzle, permission: 'files.read' },
+  { to: 'content', label: 'Mods', icon: Puzzle, permission: 'files.read' },
   { to: 'files', label: 'Dateien', icon: FolderTree, permission: 'files.read' },
   { to: 'config', label: 'Konfiguration', icon: FileCode2, permission: 'files.read' },
   { to: 'backups', label: 'Backups', icon: HardDriveDownload, permission: 'files.read' },
@@ -116,6 +117,9 @@ export default function ServerLayout() {
   const running = state === 'running' || state === 'starting';
   const can = (permission: string) => server.permissions.includes(permission);
   const look = TYPE_LOOK[server.type] ?? TYPE_LOOK.PAPER;
+  // Paper & Co. verwalten plugins/, die Loader mods/ – Vanilla gar nichts,
+  // dort faellt der Reiter weg.
+  const contentKind = CONTENT_KIND_BY_TYPE[server.type];
 
   const context: ServerContext = {
     server,
@@ -234,8 +238,17 @@ export default function ServerLayout() {
 
           {/* Reiter */}
           <nav className="flex overflow-x-auto border-t border-stone-890 bg-stone-well/60 no-scrollbar">
-            {TABS.filter((tab) => !tab.permission || can(tab.permission)).map((tab) => {
+            {TABS.filter(
+              (tab) =>
+                (!tab.permission || can(tab.permission)) &&
+                (tab.to !== 'content' || contentKind !== null) &&
+                // Auf einem Bukkit-Server hat ein Modpack nichts verloren: die
+                // Installation ersetzt mods/ und setzt den Typ auf MODPACK um.
+                (tab.to !== 'modpack' || contentKind !== 'plugin'),
+            ).map((tab) => {
               const Icon = tab.icon;
+              const label =
+                tab.to === 'content' && contentKind === 'plugin' ? 'Plugins' : tab.label;
               return (
                 <NavLink
                   key={tab.to}
@@ -244,7 +257,7 @@ export default function ServerLayout() {
                   className={({ isActive }) => clsx('mc-tab', isActive && 'mc-tab-active')}
                 >
                   <Icon size={15} />
-                  {tab.label}
+                  {label}
                 </NavLink>
               );
             })}

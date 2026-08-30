@@ -15,7 +15,7 @@ const FALLBACK_VERSIONS = [
 const searchSchema = z.object({
   provider: z.enum(['modrinth', 'curseforge', 'all']).default('all'),
   q: z.string().optional(),
-  type: z.enum(['modpack', 'mod']).default('modpack'),
+  type: z.enum(['modpack', 'mod', 'plugin']).default('modpack'),
   gameVersion: z.string().optional(),
   loader: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),

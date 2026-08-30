@@ -1,6 +1,11 @@
 export type ProviderId = 'modrinth' | 'curseforge';
 
-export type ProjectType = 'modpack' | 'mod';
+/**
+ * `plugin` meint Bukkit-Abkoemmlinge (Paper/Spigot/Purpur). Beide Anbieter
+ * fuehren sie getrennt von den Mods: Modrinth ueber die Facette
+ * `project_type:plugin`, CurseForge ueber die Klasse "Bukkit Plugins".
+ */
+export type ProjectType = 'modpack' | 'mod' | 'plugin';
 
 export interface SearchQuery {
   query?: string;

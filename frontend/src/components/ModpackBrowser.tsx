@@ -8,6 +8,13 @@ import type { ProjectSummary, ProjectVersion } from '../lib/types';
 import { Badge, Button, EmptyState, ErrorNote, InfoNote, LoadingBlock, Modal, Spinner } from './ui';
 
 type Provider = 'all' | 'modrinth' | 'curseforge';
+type CatalogType = 'modpack' | 'mod' | 'plugin';
+
+const SEARCH_PLACEHOLDER: Record<CatalogType, string> = {
+  modpack: 'Modpacks durchsuchen …',
+  mod: 'Mods durchsuchen …',
+  plugin: 'Plugins durchsuchen …',
+};
 
 const PROVIDER_STYLES: Record<string, string> = {
   modrinth: 'border-emerald/40 bg-emerald/15 text-emerald',
@@ -51,10 +58,13 @@ export function ModpackBrowser({
   onPick,
   actionLabel = 'Installieren',
 }: {
-  type?: 'modpack' | 'mod';
+  type?: CatalogType;
   onPick: (project: ProjectSummary, version: ProjectVersion) => unknown;
   actionLabel?: string;
 }) {
+  // Plugins laufen per Definition auf dem Server – der Servertauglichkeits-
+  // filter und seine Abzeichen sagen dort nichts aus.
+  const isPlugin = type === 'plugin';
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState<Provider>('all');
   const [gameVersion, setGameVersion] = useState('');
@@ -65,7 +75,11 @@ export function ModpackBrowser({
 
   const debouncedQuery = useDebounced(query);
 
-  useEffect(() => setPage(1), [debouncedQuery, provider, gameVersion, sort, serverOnly]);
+  // Ohne diesen Parameter filtert die Schnittstelle von sich aus auf
+  // servertaugliche Projekte – bei Plugins waere das eine leere Aussage.
+  const effectiveServerOnly = isPlugin ? false : serverOnly;
+
+  useEffect(() => setPage(1), [debouncedQuery, provider, gameVersion, sort, effectiveServerOnly]);
 
   const providers = useQuery({
     queryKey: ['catalog-providers'],
@@ -83,7 +97,9 @@ export function ModpackBrowser({
   });
 
   const search = useQuery({
-    queryKey: ['catalog-search', type, debouncedQuery, provider, gameVersion, sort, page, serverOnly],
+    queryKey: [
+      'catalog-search', type, debouncedQuery, provider, gameVersion, sort, page, effectiveServerOnly,
+    ],
     queryFn: () => {
       const params = new URLSearchParams({
         type,
@@ -91,7 +107,7 @@ export function ModpackBrowser({
         sort,
         page: String(page),
         pageSize: '24',
-        serverOnly: String(serverOnly),
+        serverOnly: String(effectiveServerOnly),
       });
       if (debouncedQuery) params.set('q', debouncedQuery);
       if (gameVersion) params.set('gameVersion', gameVersion);
@@ -117,7 +133,7 @@ export function ModpackBrowser({
           <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-450" />
           <input
             className="mc-input pl-8"
-            placeholder={type === 'mod' ? 'Mods durchsuchen …' : 'Modpacks durchsuchen …'}
+            placeholder={SEARCH_PLACEHOLDER[type]}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -170,26 +186,28 @@ export function ModpackBrowser({
           );
         })}
 
-        <button
-          onClick={() => setServerOnly((v) => !v)}
-          className={clsx(
-            'ml-auto flex items-center gap-1.5 border px-3 py-1 text-xs font-bold uppercase tracking-wider transition',
-            serverOnly
-              ? 'border-grass-dark bg-grass/25 text-white'
-              : 'border-stone-700 bg-stone-800/60 text-stone-400 hover:text-stone-100',
-          )}
-          title={
-            serverOnly
-              ? 'Es werden nur Packs gezeigt, die serverseitig laufen. Klicken für alle.'
-              : 'Es werden alle Packs gezeigt – auch reine Client-Packs.'
-          }
-        >
-          <ServerIcon size={12} />
-          {serverOnly ? 'nur servertauglich' : 'alle Packs'}
-        </button>
+        {!isPlugin && (
+          <button
+            onClick={() => setServerOnly((v) => !v)}
+            className={clsx(
+              'ml-auto flex items-center gap-1.5 border px-3 py-1 text-xs font-bold uppercase tracking-wider transition',
+              serverOnly
+                ? 'border-grass-dark bg-grass/25 text-white'
+                : 'border-stone-700 bg-stone-800/60 text-stone-400 hover:text-stone-100',
+            )}
+            title={
+              serverOnly
+                ? 'Es werden nur Packs gezeigt, die serverseitig laufen. Klicken für alle.'
+                : 'Es werden alle Packs gezeigt – auch reine Client-Packs.'
+            }
+          >
+            <ServerIcon size={12} />
+            {serverOnly ? 'nur servertauglich' : 'alle Packs'}
+          </button>
+        )}
       </div>
 
-      {!serverOnly && (
+      {!effectiveServerOnly && !isPlugin && (
         <InfoNote>
           Reine Client-Packs sind eingeblendet. Die laufen auf einem Server oft nicht oder
           nur nach Handarbeit – siehe das Abzeichen an den Treffern.
@@ -260,7 +278,7 @@ export function ModpackBrowser({
                           <User size={11} /> {project.author}
                         </span>
                       )}
-                      <ServerSupportBadge project={project} />
+                      {!isPlugin && <ServerSupportBadge project={project} />}
                     </div>
                   </div>
                 </div>
@@ -288,6 +306,7 @@ export function ModpackBrowser({
         project={selected}
         onClose={() => setSelected(null)}
         actionLabel={actionLabel}
+        showServerPack={!isPlugin}
         onPick={async (project, version) => {
           await onPick(project, version);
           setSelected(null);
@@ -302,11 +321,14 @@ function VersionPicker({
   onClose,
   onPick,
   actionLabel,
+  showServerPack,
 }: {
   project: ProjectSummary | null;
   onClose: () => void;
   onPick: (project: ProjectSummary, version: ProjectVersion) => unknown;
   actionLabel: string;
+  /** Bei Plugins gibt es keine Client-/Server-Pakete, die man unterscheiden muesste. */
+  showServerPack: boolean;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
@@ -387,7 +409,7 @@ function VersionPicker({
                         {l}
                       </Badge>
                     ))}
-                    {version.provider === 'curseforge' && (
+                    {showServerPack && version.provider === 'curseforge' && (
                       <Badge
                         tone={version.serverPackFileId ? 'green' : 'neutral'}
                         className="!text-[9px]"

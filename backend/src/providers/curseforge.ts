@@ -11,6 +11,16 @@ const API = 'https://api.curseforge.com';
 const GAME_ID = 432; // Minecraft
 const CLASS_MODPACKS = 4471;
 const CLASS_MODS = 6;
+/** "Bukkit Plugins" – Paper, Spigot und Purpur teilen sich diese Klasse. */
+const CLASS_PLUGINS = 5;
+
+const CLASS_BY_TYPE: Record<string, number> = {
+  mod: CLASS_MODS,
+  plugin: CLASS_PLUGINS,
+  modpack: CLASS_MODPACKS,
+};
+
+const classFor = (type?: string) => CLASS_BY_TYPE[type ?? 'modpack'] ?? CLASS_MODPACKS;
 
 export class CurseforgeNotConfigured extends Error {
   constructor() {
@@ -101,12 +111,12 @@ export async function search(q: SearchQuery): Promise<SearchResponse> {
 
   // CurseForge kennt keinen Filter für Serverpakete – wir müssen nach dem
   // Abruf aussortieren. Deshalb großzügiger anfragen, damit die Seite voll wird.
-  const filterServerPacks = Boolean(q.serverOnly) && q.type !== 'mod';
+  const filterServerPacks = Boolean(q.serverOnly) && (q.type ?? 'modpack') === 'modpack';
   const fetchSize = Math.min(50, filterServerPacks ? pageSize * 2 : pageSize);
 
   const params = new URLSearchParams({
     gameId: String(GAME_ID),
-    classId: String(q.type === 'mod' ? CLASS_MODS : CLASS_MODPACKS),
+    classId: String(classFor(q.type)),
     searchFilter: q.query ?? '',
     sortField: String(SORT_FIELDS[q.sort ?? 'relevance'] ?? 1),
     sortOrder: 'desc',
@@ -114,7 +124,9 @@ export async function search(q: SearchQuery): Promise<SearchResponse> {
     pageSize: String(fetchSize),
   });
   if (q.gameVersion) params.set('gameVersion', q.gameVersion);
-  if (q.loader && MOD_LOADER_IDS[q.loader.toLowerCase()]) {
+  // modLoaderType kennt nur Forge, Fabric und Verwandte. Auf Plugins
+  // angewandt liefert der Filter nichts zurueck, statt nichts zu tun.
+  if (q.type !== 'plugin' && q.loader && MOD_LOADER_IDS[q.loader.toLowerCase()]) {
     params.set('modLoaderType', String(MOD_LOADER_IDS[q.loader.toLowerCase()]));
   }
 

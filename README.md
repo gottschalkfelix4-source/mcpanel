@@ -40,7 +40,7 @@ das Panel steuert sie über den Docker-Socket.
 | Übersicht | Kennzahlen, Serverdetails, Modpack, letzte Aktionen, Spielerliste |
 | Konsole | Live-Log über WebSocket, farbig, Befehlseingabe mit Verlauf (↑), Filter, Log-Download |
 | Modpack | Installiertes Pack, Update-Prüfung, Versionswechsel, Modpack-Suche |
-| Mods | Inhalt von `mods/`, einzeln aktivieren/deaktivieren/löschen, einzelne Mods nachinstallieren |
+| Mods / Plugins | Inhalt von `mods/` bzw. `plugins/`, einzeln aktivieren/deaktivieren/löschen, einzelne nachinstallieren – siehe [Mods und Plugins](#mods-und-plugins) |
 | Dateien | Dateimanager mit Editor, Upload, Download, Umbenennen, ZIP entpacken |
 | Konfiguration | `server.properties` als gruppiertes Formular + Rohwerte |
 | Backups | tar.gz-Sicherungen erstellen, herunterladen, einspielen, löschen, optional mit Zweitkopie |
@@ -239,12 +239,42 @@ Alle Werte kommen aus der `.env` (siehe `.env.example`):
 
 `JWT_SECRET` und `ADMIN_PASSWORD` sind bewusst leer vorgegeben: das Sitzungs-Geheimnis
 erzeugt das Panel sonst selbst, und ohne Admin-Passwort führt der Assistent durch die
-Einrichtung. Wer sie setzt, muss eigene Werte nehmen – die alten Beispielwerte erkennt
-das Backend und verweigert den Start.
+Einrichtung. Wer sie setzt, muss eigene Werte nehmen – die früheren Beispielwerte
+erkennt das Backend und benutzt sie nicht: das Konto wird dann nicht angelegt und das
+Geheimnis kommt wie ohne Angabe aus `data/.jwt-secret`. Beides steht als Warnung im
+Protokoll, der Start läuft weiter.
 
 Der CurseForge-Key lässt sich im laufenden Betrieb unter **Panel → Panel-Einstellungen**
 eintragen; er wird dort direkt gegen die API geprüft und in der Datenbank abgelegt
 (hat Vorrang vor der `.env`).
+
+### Mods und Plugins
+
+Beides ist derselbe Vorgang – eine `.jar` in einem Verzeichnis, das der Server beim
+Start einliest –, nur der Ordner und der Katalog unterscheiden sich. Welcher gilt,
+hängt allein am Servertyp:
+
+| Servertyp | Ordner | Katalog |
+|---|---|---|
+| Paper, Purpur, Spigot | `plugins/` | Modrinth `project_type:plugin`, CurseForge-Klasse *Bukkit Plugins* |
+| Fabric, Forge, NeoForge, Quilt, Modpack | `mods/` | Modrinth `project_type:mod`, CurseForge-Klasse *Mods* |
+| Vanilla | – | – |
+
+Der Reiter heißt entsprechend *Plugins* oder *Mods* und fehlt bei Vanilla ganz; bei
+Paper & Co. ist auch der Reiter *Modpack* ausgeblendet, weil eine Modpack-Installation
+`mods/` anlegt und den Server auf den Typ `MODPACK` umstellt.
+
+Das ist keine Kosmetik: Eine Datei im falschen Ordner wird kommentarlos ignoriert.
+Ein Plugin in `mods/` fehlt im Spiel einfach, ohne dass irgendwo ein Fehler steht –
+deshalb leitet das Panel den Ordner aus dem Servertyp ab, statt ihn raten zu lassen.
+
+Deaktivieren benennt in `.jar.disabled` um, löscht also nichts. Nach dem Installieren
+oder Umschalten ist ein Neustart nötig, damit der Server die Änderung liest.
+
+> Für Paper-Plugins sind Modrinth und Hangar die lebendigen Quellen; die
+> CurseForge-Klasse *Bukkit Plugins* ist vergleichsweise alt. Hangar ist nicht
+> angebunden – von dort geladene Jars lassen sich über den Dateimanager in
+> `plugins/` ablegen.
 
 ### Client- und Serverpakete
 

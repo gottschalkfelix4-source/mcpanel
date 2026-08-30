@@ -51,12 +51,18 @@ const SORT_MAP: Record<string, string> = {
   newest: 'newest',
 };
 
+const PROJECT_TYPES = new Set(['mod', 'plugin', 'modpack']);
+const projectType = (type?: string) => (type && PROJECT_TYPES.has(type) ? type : 'modpack');
+
 export async function search(q: SearchQuery): Promise<SearchResponse> {
-  const facets: string[][] = [[`project_type:${q.type === 'mod' ? 'mod' : 'modpack'}`]];
+  const type = projectType(q.type);
+  const facets: string[][] = [[`project_type:${type}`]];
   if (q.gameVersion) facets.push([`versions:${q.gameVersion}`]);
   if (q.loader) facets.push([`categories:${q.loader.toLowerCase()}`]);
-  // Modrinth filtert selbst – die Facette wirkt als ODER innerhalb der Gruppe.
-  if (q.serverOnly) facets.push(['server_side:required', 'server_side:optional']);
+  // Ein Plugin laeuft ausschliesslich serverseitig; die Facette wuerde hier
+  // nur Projekte aussieben, die ihre Seite gar nicht erst angeben.
+  // Sonst filtert Modrinth selbst - die Facette wirkt als ODER in der Gruppe.
+  if (q.serverOnly && type !== 'plugin') facets.push(['server_side:required', 'server_side:optional']);
 
   const pageSize = q.pageSize ?? 20;
   const params = new URLSearchParams({
@@ -87,7 +93,7 @@ export async function search(q: SearchQuery): Promise<SearchResponse> {
         author: h.author,
         categories: h.categories,
         gameVersions: h.versions,
-        websiteUrl: `https://modrinth.com/${q.type === 'mod' ? 'mod' : 'modpack'}/${h.slug}`,
+        websiteUrl: `https://modrinth.com/${type}/${h.slug}`,
         updatedAt: h.date_modified,
         serverSupport: toServerSupport(h.server_side),
       }),

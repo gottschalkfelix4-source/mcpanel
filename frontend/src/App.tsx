@@ -1,9 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { api } from './lib/api';
+import { api, NETWORK_ERROR_MESSAGE } from './lib/api';
 import { useAuth } from './lib/auth';
 import { LoadErrorBlock, LoadingBlock } from './components/ui';
-import { NETWORK_ERROR_MESSAGE } from './lib/api';
 import Layout from './components/Layout';
 
 import LoginPage from './pages/Login';
@@ -14,7 +13,7 @@ import ServerLayout from './pages/server/ServerLayout';
 import OverviewTab from './pages/server/OverviewTab';
 import ConsoleTab from './pages/server/ConsoleTab';
 import ModpackTab from './pages/server/ModpackTab';
-import ModsTab from './pages/server/ModsTab';
+import ContentTab from './pages/server/ContentTab';
 import FilesTab from './pages/server/FilesTab';
 import ConfigTab from './pages/server/ConfigTab';
 import BackupsTab from './pages/server/BackupsTab';
@@ -93,7 +92,7 @@ export default function App() {
           <Route index element={<OverviewTab />} />
           <Route path="console" element={<ConsoleTab />} />
           <Route path="modpack" element={<ModpackTab />} />
-          <Route path="mods" element={<ModsTab />} />
+          <Route path="content" element={<ContentTab />} />
           <Route path="files" element={<FilesTab />} />
           <Route path="config" element={<ConfigTab />} />
           <Route path="backups" element={<BackupsTab />} />

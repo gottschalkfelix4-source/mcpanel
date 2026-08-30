@@ -22,6 +22,7 @@ import filesRoutes from './files.js';
 import configRoutes from './config.js';
 import backupRoutes from './backups.js';
 import modpackRoutes from './modpacks.js';
+import contentRoutes from './content.js';
 import memberRoutes from './members.js';
 import automationRoutes from './automations.js';
 import notificationRoutes from './notifications.js';
@@ -285,6 +286,7 @@ export default async function serverRoutes(app: FastifyInstance) {
   await app.register(configRoutes, { prefix: '/:id/config' });
   await app.register(backupRoutes, { prefix: '/:id/backups' });
   await app.register(modpackRoutes, { prefix: '/:id/modpack' });
+  await app.register(contentRoutes, { prefix: '/:id/content' });
   await app.register(memberRoutes, { prefix: '/:id/members' });
   await app.register(automationRoutes, { prefix: '/:id/automations' });
   await app.register(notificationRoutes, { prefix: '/:id/notifications' });
