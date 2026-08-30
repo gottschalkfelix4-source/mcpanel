@@ -69,6 +69,8 @@ das Panel steuert sie über den Docker-Socket.
 **Backups**
 - tar.gz je Server; Welt, Mods und Konfiguration, ohne `cache/`, `logs/`, `libraries/`
 - Vor jedem Modpack-Update wird automatisch eines angelegt
+- Beim Einspielen wird das Archiv erst geprüft und das Serververzeichnis danach geleert –
+  bei einer beschädigten Datei wäre am Ende sonst beides weg
 - **Zweitablage**, eingerichtet in den Panel-Einstellungen (nicht in der `.env`):
   - **Samba-Freigabe** – NAS oder Windows-Rechner im Netz; das Panel hängt die Freigabe selbst ein
   - **S3-Speicher** – AWS S3, MinIO, Backblaze B2, Wasabi; Upload mehrteilig, also auch über 5 GB
@@ -144,6 +146,12 @@ Nichts davon ist Pflicht.
 Wer das Panel unbeaufsichtigt ausrollt, setzt `ADMIN_USERNAME`, `ADMIN_EMAIL` und
 `ADMIN_PASSWORD` in der `.env`. Dann wird das Konto direkt beim ersten Start angelegt und
 der Assistent übersprungen.
+
+Die Werte müssen dabei echte sein. Platzhalter aus früheren Fassungen der `.env.example`
+(`changeme123`, `bitte-hier-ein-langes-zufaelliges-secret-eintragen`) weist das Backend
+beim Start zurück und startet gar nicht erst – ein Panel mit dem Passwort aus der
+Beispieldatei wäre schlimmer als eines, das noch nach der Einrichtung fragt. In der
+`.env.example` stehen `ADMIN_PASSWORD` und `JWT_SECRET` deshalb leer.
 
 ---
 
@@ -224,10 +232,15 @@ Alle Werte kommen aus der `.env` (siehe `.env.example`):
 | `HOST_DATA_ROOT` | `./data` | Host-Pfad der Serverdaten |
 | `MC_PORT_MIN` / `MC_PORT_MAX` | `25565` / `25700` | Port-Bereich für neue Server |
 | `PUBLIC_HOST` | `localhost` | Angezeigte Serveradresse |
-| `JWT_SECRET` | – | Secret für Sitzungstokens |
+| `JWT_SECRET` | leer | Secret für Sitzungstokens – leer lassen, dann erzeugt das Panel eines |
 | `CURSEFORGE_API_KEY` | leer | CurseForge-Zugang (auch im Panel unter *Panel → CurseForge* setzbar) |
 | `MC_IMAGE` | `itzg/minecraft-server:latest` | Image für die Serverkontainer |
 | `POSTGRES_*` | `mcpanel` | Datenbankzugang |
+
+`JWT_SECRET` und `ADMIN_PASSWORD` sind bewusst leer vorgegeben: das Sitzungs-Geheimnis
+erzeugt das Panel sonst selbst, und ohne Admin-Passwort führt der Assistent durch die
+Einrichtung. Wer sie setzt, muss eigene Werte nehmen – die alten Beispielwerte erkennt
+das Backend und verweigert den Start.
 
 Der CurseForge-Key lässt sich im laufenden Betrieb unter **Panel → Panel-Einstellungen**
 eintragen; er wird dort direkt gegen die API geprüft und in der Datenbank abgelegt
@@ -378,7 +391,10 @@ Die Icons entstehen aus [gen-icons.mjs](frontend/scripts/gen-icons.mjs)
   | 1.20.5 und neuer | `…:java21` |
 
   Überschreiben geht pro Server über die Umgebungsvariable `MC_IMAGE`
-  (Tab *Einstellungen*) oder global über `MC_IMAGE` in der `.env`.
+  (Tab *Einstellungen*) oder global über `MC_IMAGE` in der `.env`. Setzen darf sie
+  nur ein Administrator: mit einem frei gewählten Abbild lässt sich über das Panel
+  jeder beliebige Container auf dem Host starten – das ist eine andere Größenordnung
+  als „mehr Arbeitsspeicher für meinen Server“.
 
 - Das Container-Limit liegt bewusst über dem Java-Heap: `+50 %`, mindestens 1 GB,
   höchstens 4 GB. Metaspace, Code-Cache, GC-Strukturen, Thread-Stacks und Direct
@@ -408,6 +424,10 @@ Die Icons entstehen aus [gen-icons.mjs](frontend/scripts/gen-icons.mjs)
   Startreihenfolge, und fällt einer aus, endet der Container – den Neustart übernimmt
   Docker beziehungsweise Unraid. Halb laufende Container sind schwerer zu erkennen als
   abgestürzte.
+- `/api/health` fragt auch die Datenbank an, nicht nur den eigenen Prozess. An dieser
+  Antwort hängen der Healthcheck des Abbilds und die Startreihenfolge im Container –
+  ein Backend, das läuft, aber seine Datenbank nicht mehr erreicht, würde sonst als
+  gesund gelten, und es fällt erst auf, wenn jemand das Panel aufruft.
 - Das Backup-Speicherziel steht in der `Setting`-Tabelle, nicht in der Umgebung – es soll
   ohne Neustart des Stacks umstellbar sein. Das Kopieren läuft als Schritt des Backup-Tasks
   (sichtbar als „Zweitkopie wird geschrieben“) und darf scheitern, ohne die Sicherung zu
@@ -442,7 +462,8 @@ Die Icons entstehen aus [gen-icons.mjs](frontend/scripts/gen-icons.mjs)
   und in der nächsten Meldung erwähnt.
 - Der Cron-Auswerter für Automatisierungen ist selbst geschrieben
   ([cron.ts](backend/src/services/cron.ts)) — 5 Felder, `*`, Listen, Bereiche und
-  Schrittweiten, Vixie-Semantik bei Tag/Wochentag. Ein Timer prüft alle 20 Sekunden,
+  Schrittweiten, Vixie-Semantik bei Tag/Wochentag; `7` steht wie `0` für Sonntag, auch
+  am Ende eines Bereichs (`5-7` = Freitag bis Sonntag). Ein Timer prüft alle 20 Sekunden,
   merkt sich die zuletzt ausgeführte Minute pro Regel und feuert deshalb höchstens
   einmal pro Minute. „Nach Absturz“ vergleicht den Containerstatus mit dem letzten
   Durchlauf; ein Stopp über das Panel zählt nicht als Absturz.
@@ -465,6 +486,9 @@ Die Farb- und Schattenwerte stehen zentral in
 
 **Sicherheit**
 - Passwörter mit bcrypt gehasht, Sitzungen über JWT
+- Die Anmeldung ist mengenbegrenzt: nach zu vielen Fehlversuchen in kurzer Folge weist
+  sie weitere Versuche eine Weile ab – ein bcrypt-Hash ist sonst nur so gut wie das
+  Tempo, mit dem jemand raten darf
 - Rechteprüfung serverseitig bei jedem Zugriff, auch auf dem WebSocket
 - Dateimanager mit Schutz gegen Pfad-Traversal, Modpack-Entpacker gegen Zip-Slip
 - Das Backend braucht Zugriff auf den Docker-Socket – das entspricht Root-Rechten
@@ -488,7 +512,55 @@ Container `mcpanel-backend-1`.
 
 Meldet das Panel beim Anmelden „Benutzername oder Passwort falsch“, ist genau das
 gemeint. Steht dort „Sitzung abgelaufen“, war das Token ungültig – dann genügt eine
-neue Anmeldung.
+neue Anmeldung. Beschwert es sich über zu viele Versuche, greift die Mengenbegrenzung
+der Anmeldung; die gibt nach kurzer Wartezeit von selbst wieder frei, das Konto bleibt
+unangetastet.
+
+---
+
+## Die Panel-Datenbank sichern
+
+Die tar.gz-Sicherungen aus dem Tab *Backups* enthalten Welt, Mods und Konfiguration
+eines Servers – **nicht** aber das, was das Panel selbst weiß: Konten und Passwort-Hashes,
+die vergebenen Rechte, RCON-Passwörter, Automatisierungen, Benachrichtigungskanäle und
+die Zugangsdaten der Zweitablage. Das alles steht in PostgreSQL, und zwei Gelegenheiten
+machen dafür eine eigene Sicherung nötig:
+
+- Wechselt die PostgreSQL-Hauptversion, bricht das Startskript des Alles-in-einem-Abbilds
+  ab und verlangt genau das – das vorhandene Datenverzeichnis kommt mit dem neuen Server
+  nicht mehr hoch (siehe [Updates](#updates)).
+- Jeder Start läuft durch `prisma db push`. Das gleicht das Schema ohne Rückfrage an;
+  eine Änderung, die eine Spalte fallen lässt, nimmt deren Inhalt mit.
+
+Dafür gibt es zwei weitere Wartungsbefehle:
+
+```bash
+# Sicherung ins Datenverzeichnis: /data/backups/panel/panel-<Zeitstempel>.dump
+docker exec mcpanel node dist/cli.js sicherung
+
+# oder an einen selbst gewählten Ort
+docker exec mcpanel node dist/cli.js sicherung /data/backups/vor-dem-update.dump
+
+# Zurückspielen – ersetzt den gesamten Inhalt, deshalb nur mit --ja
+docker exec mcpanel node dist/cli.js einspielen /data/backups/vor-dem-update.dump --ja
+```
+
+Die Datei entsteht mit `pg_dump` im Eigenformat. Sie liegt anschließend auf derselben
+Platte wie alles andere und nützt dort bei einem Plattenausfall nichts – also
+mitnehmen, wohin auch die Server-Sicherungen gehen. Weil Passwort-Hashes und
+RCON-Passwörter darin stehen, gehört sie nicht in eine offene Freigabe.
+
+Beim Einspielen sollte das Panel möglichst nichts zu tun haben: laufende Verbindungen
+halten Sperren auf den Tabellen, und der Vorgang wartet dann darauf. Danach den
+Container neu starten, damit nichts mehr auf dem alten Stand weiterarbeitet.
+
+Im Compose-Stack läuft die Datenbank in einem eigenen Container, und im Backend-Abbild
+sind die PostgreSQL-Werkzeuge nicht enthalten. Dort geht es direkt über `db`:
+
+```bash
+docker compose exec -T db pg_dump -U mcpanel -Fc mcpanel > panel.dump
+docker compose exec -T db pg_restore -U mcpanel -d mcpanel --clean --if-exists < panel.dump
+```
 
 ---
 
@@ -527,3 +599,16 @@ Server werden beim nächsten Start mit der neuen Einstellung neu aufgesetzt.
   in der Firewall sind Handarbeit.
 - Kein HTTPS im Stack. Für den Betrieb im Internet einen Reverse-Proxy
   (Caddy, Traefik, nginx) mit Zertifikat davorsetzen.
+- **Ein aus dem Internet erreichbares Panel ist ein Panel am Docker-Socket.** Wer die
+  Anmeldung überwindet, kann Container anlegen und damit auf dem Host tun, was er will –
+  ein Zertifikat schützt die Leitung, nicht die Tür. Für den Zugriff von unterwegs ist
+  ein VPN (WireGuard, Tailscale) einer Portfreigabe im Router deshalb klar vorzuziehen:
+  dann ist das Panel nur für Geräte sichtbar, die schon im eigenen Netz sind, und die
+  Anmeldung ist die zweite Hürde statt der einzigen.
+
+---
+
+## Lizenz
+
+MIT – siehe [LICENSE](LICENSE). Benutzen, ändern und weitergeben ist erlaubt;
+Gewährleistung gibt es keine.

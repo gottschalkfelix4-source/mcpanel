@@ -9,7 +9,33 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Laeuft vor dem Bau: der Docker-Bau prueft zwar die Typen mit, kennt aber
+  # keine Tests - ein Logikfehler kaeme sonst bis nach :latest durch.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+
+      - run: npx prisma generate
+        working-directory: backend
+
+      - run: npx tsc -p tsconfig.json --noEmit
+        working-directory: backend
+
+      - run: npm test
+        working-directory: backend
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,6 +65,7 @@ jobs:
             org.opencontainers.image.title=MCPanel
             org.opencontainers.image.description=Minecraft-Server-Hosting-Panel mit Modpack-Installer
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
 
       - uses: docker/build-push-action@v6
         with:

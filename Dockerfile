@@ -75,6 +75,7 @@ ENV MCPANEL_BUILD_DATE=$BUILD_DATE
 LABEL org.opencontainers.image.title="MCPanel"
 LABEL org.opencontainers.image.description="Minecraft-Server-Hosting-Panel mit Modpack-Installer"
 LABEL org.opencontainers.image.source="https://github.com/gottschalkfelix4-source/mcpanel"
+LABEL org.opencontainers.image.licenses="MIT"
 
 # HOST_DATA_ROOT wird bewusst NICHT gesetzt: das Panel liest den Host-Pfad
 # beim Start aus seinen eigenen Mounts. Ein fester Wert hier würde die
