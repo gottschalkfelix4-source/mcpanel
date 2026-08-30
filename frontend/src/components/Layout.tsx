@@ -159,7 +159,7 @@ export default function Layout() {
         <Outlet />
       </main>
 
-      <footer className="border-t border-stone-875 p-[18px] text-center text-xs text-stone-550">
+      <footer className="border-t border-stone-875 p-[18px] text-center text-xs text-stone-450">
         MCPanel · selbstgehostet · Modpacks von{' '}
         <a href="https://modrinth.com" target="_blank" rel="noreferrer">
           Modrinth

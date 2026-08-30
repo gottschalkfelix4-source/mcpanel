@@ -368,11 +368,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 export function useToast() {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error('useToast benötigt <ToastProvider>');
-  return {
-    success: (m: string) => ctx.push('success', m),
-    error: (m: string) => ctx.push('error', m),
-    info: (m: string) => ctx.push('info', m),
-  };
+  // Muss stabil bleiben: ein frisches Objekt je Aufruf lässt jeden Effekt, der
+  // das Ergebnis als Abhängigkeit führt, nach jedem Render erneut laufen.
+  return useMemo(
+    () => ({
+      success: (m: string) => ctx.push('success', m),
+      error: (m: string) => ctx.push('error', m),
+      info: (m: string) => ctx.push('info', m),
+    }),
+    [ctx],
+  );
 }
 
 // ------------------------------------------------------------- Sonstiges ---
@@ -386,6 +391,23 @@ export function LoadingBlock({ label = 'Lädt …' }: { label?: string }) {
     <div className="flex items-center justify-center gap-3 py-12 text-sm text-stone-400">
       <Spinner />
       {label}
+    </div>
+  );
+}
+
+/** Gegenstück zu LoadingBlock für den Fall, dass die Abfrage fehlgeschlagen ist. */
+export function LoadErrorBlock({ error, onRetry }: { error?: unknown; onRetry?: () => void }) {
+  const message = error instanceof Error ? error.message : 'Die Daten konnten nicht geladen werden.';
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+      <AlertTriangle className="text-redstone" size={22} />
+      <h3 className="heading text-base text-stone-200">Laden fehlgeschlagen</h3>
+      <p className="max-w-md text-sm text-stone-400">{message}</p>
+      {onRetry && (
+        <button onClick={onRetry} className="mc-btn mc-btn-default">
+          Erneut versuchen
+        </button>
+      )}
     </div>
   );
 }

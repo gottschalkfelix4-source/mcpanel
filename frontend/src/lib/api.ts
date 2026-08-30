@@ -10,6 +10,21 @@ export class ApiError extends Error {
   }
 }
 
+export const NETWORK_ERROR_MESSAGE =
+  'Das Panel ist nicht erreichbar – läuft der Server noch? Bitte in einem Moment erneut versuchen.';
+
+/**
+ * Die Anfrage kam gar nicht bis zu einer Antwort: Backend neu gestartet, Netz
+ * weg, Proxy aus. Muss von einer Absage des Servers unterscheidbar bleiben -
+ * sonst sieht ein Container-Update aus wie ein falsches Passwort. Der Status 0
+ * steht wie beim Upload fuer "keine Antwort erhalten".
+ */
+export class NetworkError extends ApiError {
+  constructor(message: string = NETWORK_ERROR_MESSAGE) {
+    super(0, message);
+  }
+}
+
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
   set: (token: string) => localStorage.setItem(TOKEN_KEY, token),
@@ -24,11 +39,16 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new NetworkError();
+  }
 
   if (res.status === 401) {
     // Die Meldung des Servers stehenlassen: bei einer fehlgeschlagenen
@@ -100,7 +120,7 @@ export async function uploadFiles(
         reject(new ApiError(xhr.status, message));
       }
     };
-    xhr.onerror = () => reject(new ApiError(0, 'Netzwerkfehler beim Upload'));
+    xhr.onerror = () => reject(new NetworkError('Netzwerkfehler beim Upload'));
     xhr.send(form);
   });
 }

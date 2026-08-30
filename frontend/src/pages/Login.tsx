@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Boxes, LogIn } from 'lucide-react';
 import { useAuth } from '../lib/auth';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, NETWORK_ERROR_MESSAGE, NetworkError } from '../lib/api';
 import { Button, ErrorNote } from '../components/ui';
 import { BlockIcon, Motes } from '../components/pixel';
 
@@ -32,7 +32,10 @@ export default function LoginPage() {
     try {
       await login(loginName, password);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Anmeldung fehlgeschlagen');
+      // Ein stummes Backend darf nicht als abgelehntes Passwort erscheinen,
+      // sonst zweifelt man an Zugangsdaten, die voellig in Ordnung sind.
+      if (err instanceof NetworkError) setError(NETWORK_ERROR_MESSAGE);
+      else setError(err instanceof ApiError ? err.message : 'Anmeldung fehlgeschlagen');
     } finally {
       setBusy(false);
     }
@@ -95,7 +98,7 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p className="mt-[22px] text-center text-xs text-stone-500">
+        <p className="mt-[22px] text-center text-xs text-stone-450">
           Zugang bekommst du von einem Panel-Administrator.
           {status.data?.build.version && (
             <>

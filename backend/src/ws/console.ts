@@ -120,12 +120,17 @@ export function setupConsoleGateway(io: IOServer) {
         }
 
         socket.join(roomForServer(access.server.id));
+        // Derselbe Socket abonniert zweimal: einmal aus dem Server-Layout, einmal
+        // aus der Konsole. Nur das erste Abo darf den Zähler erhöhen – sonst
+        // haelt jedes weitere den Log-Stream fest, den "unsubscribe" nur einmal
+        // wieder freigibt.
+        const bereitsAbonniert = subscribed.has(access.server.id);
         subscribed.add(access.server.id);
 
         const history = await dockerSvc.tailLogs(access.server, 400);
         socket.emit('console:history', { lines: history.split('\n') });
 
-        await attachStream(io, access.server);
+        if (!bereitsAbonniert) await attachStream(io, access.server);
         startStatusPolling(io, access.server.id);
 
         ack?.({ ok: true, permissions: access.permissions });
@@ -192,13 +197,15 @@ export function setupConsoleGateway(io: IOServer) {
       const server = await prisma.server.findUnique({ where: { id: payload.serverId } });
       if (!server) return;
       const entry = streams.get(payload.serverId);
+      // Zuschauerzahl vor dem Abräumen sichern: der neue Stream muss sie
+      // übernehmen, sonst beendet ihn der erste Abgang für alle anderen mit.
+      const zuschauer = entry?.refs ?? 1;
       if (entry) {
         entry.stop();
         streams.delete(payload.serverId);
-        entry.refs = 0;
       }
       await attachStream(io, server);
-      streams.get(payload.serverId)!.refs = Math.max(1, entry?.refs ?? 1);
+      streams.get(payload.serverId)!.refs = Math.max(1, zuschauer);
     });
 
     socket.on('disconnect', () => {

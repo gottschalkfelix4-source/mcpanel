@@ -11,10 +11,15 @@ export default {
           50: '#f2f2f4',
           100: '#d9d9de',
           200: '#b3b3bb',
-          300: '#8c8c96',
-          350: '#7a7a85',
-          400: '#6b6b75',
-          450: '#5f5f69',
+          // 300–450 tragen Text: auf der Innenfläche stone-800 erreichen sie
+          // 7,4 / 6,4 / 5,6 / 4,9:1 und bleiben damit auch als dunkelste Stufe
+          // über den 4,5:1 der WCAG-Stufe AA.
+          300: '#adadb7',
+          350: '#a1a1ab',
+          400: '#96969f',
+          450: '#8b8b95',
+          // Ab 500 abwärts nur noch Flächen, Ränder und Trennzeichen – hier
+          // gilt kein Textkontrast, deshalb bleiben die Werte dunkel.
           500: '#4f4f58',
           550: '#3f3f47',
           600: '#3b3b43',

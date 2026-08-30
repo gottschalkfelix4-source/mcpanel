@@ -2,7 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from './lib/api';
 import { useAuth } from './lib/auth';
-import { LoadingBlock } from './components/ui';
+import { LoadErrorBlock, LoadingBlock } from './components/ui';
+import { NETWORK_ERROR_MESSAGE } from './lib/api';
 import Layout from './components/Layout';
 
 import LoginPage from './pages/Login';
@@ -26,7 +27,7 @@ import PanelSettingsPage from './pages/admin/PanelSettings';
 import ProfilePage from './pages/Profile';
 
 export default function App() {
-  const { user, loading } = useAuth();
+  const { user, loading, offline, refresh } = useAuth();
 
   // Nur fragen, solange niemand angemeldet ist – im laufenden Betrieb waere
   // das ein ueberfluessiger Aufruf bei jedem Seitenaufbau.
@@ -41,6 +42,20 @@ export default function App() {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <LoadingBlock label="Panel wird geladen …" />
+      </div>
+    );
+  }
+
+  // Die Sitzung besteht, nur das Backend antwortet nicht – etwa waehrend eines
+  // Container-Updates. Die Anmeldemaske waere hier die falsche Auskunft: das
+  // Passwort ist in Ordnung, der Server ist es gerade nicht.
+  if (!user && offline) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <LoadErrorBlock
+          error={new Error(NETWORK_ERROR_MESSAGE)}
+          onRetry={() => void refresh()}
+        />
       </div>
     );
   }

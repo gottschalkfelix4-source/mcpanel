@@ -6,7 +6,7 @@ import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
 import { formatDate } from '../../lib/format';
 import {
-  Badge, Button, ErrorNote, Field, InfoNote, LoadingBlock, Panel, useToast,
+  Badge, Button, ErrorNote, Field, InfoNote, LoadErrorBlock, LoadingBlock, Panel, useToast,
 } from '../../components/ui';
 
 interface PanelInfo {
@@ -58,7 +58,8 @@ export default function PanelSettingsPage() {
   });
 
   if (info.isLoading) return <LoadingBlock />;
-  const data = info.data!;
+  if (!info.data) return <LoadErrorBlock error={info.error} onRetry={() => void info.refetch()} />;
+  const data = info.data;
 
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
@@ -200,7 +201,7 @@ export default function PanelSettingsPage() {
                 <span className="shrink-0 text-xs text-stone-450">
                   {entry.user?.username ?? 'System'}
                 </span>
-                <span className="shrink-0 font-mono text-[11px] text-stone-550">
+                <span className="shrink-0 font-mono text-[11px] text-stone-450">
                   {formatDate(entry.createdAt)}
                 </span>
               </li>

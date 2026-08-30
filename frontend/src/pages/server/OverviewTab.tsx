@@ -216,7 +216,7 @@ export default function OverviewTab() {
                         {task.error ?? task.message}
                       </p>
                     </div>
-                    <span className="shrink-0 font-mono text-[11px] text-stone-550">
+                    <span className="shrink-0 font-mono text-[11px] text-stone-450">
                       {formatDate(task.createdAt)}
                     </span>
                   </li>

@@ -6,7 +6,7 @@ import { api } from '../../lib/api';
 import { formatDate } from '../../lib/format';
 import type { Member } from '../../lib/types';
 import {
-  Badge, Button, ConfirmDialog, EmptyState, InfoNote, LoadingBlock, Modal, Panel, useToast,
+  Badge, Button, ConfirmDialog, EmptyState, InfoNote, LoadErrorBlock, LoadingBlock, Modal, Panel, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
@@ -82,7 +82,8 @@ export default function AccessTab() {
   });
 
   if (data.isLoading) return <LoadingBlock />;
-  const response = data.data!;
+  if (!data.data) return <LoadErrorBlock error={data.error} onRetry={() => void data.refetch()} />;
+  const response = data.data;
   const canManage = response.canManage;
 
   function openAdd() {
