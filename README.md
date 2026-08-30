@@ -189,6 +189,11 @@ Zwei Dinge machen das überhaupt erst zuverlässig:
   `sbom: false`). Sonst legt buildx neben das Abbild ein zweites Manifest
   `unknown/unknown`, und Unraids Digest-Vergleich meldet dauerhaft *update ready*,
   ohne dass sich etwas geändert hätte.
+- Das Manifest liegt in **Docker-Medientypen** (`oci-mediatypes=false`). In den
+  OCI-Typen antwortet die Registry nur Clients, die diese ausdrücklich im
+  `Accept`-Kopf mitschicken – Docker tut das, Unraids Update-Prüfung fragt nur nach
+  den Docker-Typen und bekommt sonst 404. In der Oberfläche steht dann
+  *Update-Status: nicht verfügbar*.
 - Die PostgreSQL-Hauptversion ist im Abbild festgenagelt. Würde ein Update sie
   wechseln, käme das alte Datenverzeichnis nicht mehr hoch – das Startskript prüft
   das und bricht mit einer verständlichen Meldung ab, statt mit
