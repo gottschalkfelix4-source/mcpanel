@@ -122,6 +122,17 @@ Die Minecraft-Server oeffnen ihre Ports selbst auf dem Host (Vorgabe 25565-25700
     Mask="false">25700</Config>
 
   <Config
+    Name="DNS fuer Minecraft-Server"
+    Target="MC_DNS"
+    Default=""
+    Mode=""
+    Description="Kommagetrennte Namensserver fuer die Minecraft-Container, z. B. 1.1.1.1,9.9.9.9. Leer lassen ist der Normalfall. Eintragen, wenn auf dem Server ein filternder DNS laeuft (Pi-hole, AdGuard) und der Installer beim Herunterladen von Mojang haengenbleibt."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false"/>
+
+  <Config
     Name="Zeitzone"
     Target="TZ"
     Default="Europe/Berlin"

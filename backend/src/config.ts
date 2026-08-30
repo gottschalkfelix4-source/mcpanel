@@ -62,6 +62,19 @@ export const config = {
   mcImage: process.env.MC_IMAGE ?? '',
   mcImageRepo: process.env.MC_IMAGE_REPO ?? 'itzg/minecraft-server',
 
+  /**
+   * Namensserver fuer die Minecraft-Container, kommagetrennt.
+   *
+   * Ohne Angabe erben sie den Resolver des Docker-Hosts. Laeuft dort ein
+   * filternder DNS - auf Heimservern haeufig Pi-hole oder AdGuard -, koennen
+   * einzelne Mojang-Endpunkte ins Leere zeigen, und der Installer bleibt beim
+   * Herunterladen der server.jar haengen.
+   */
+  mcDns: (process.env.MC_DNS ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean),
+
   curseforgeApiKey: process.env.CURSEFORGE_API_KEY ?? '',
 
   /**

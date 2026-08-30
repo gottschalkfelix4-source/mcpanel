@@ -40,6 +40,10 @@ services:
       MC_PORT_MAX: ${MC_PORT_MAX:-25700}
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
       DOCKER_NETWORK: mcpanel_mcpanel
+      # Namensserver fuer die Minecraft-Container, kommagetrennt. Leer = der
+      # Resolver des Docker-Hosts. Nur noetig, wenn dort ein filternder DNS
+      # laeuft und Downloads von Mojang haengenbleiben.
+      MC_DNS: ${MC_DNS:-}
       CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
       # Nur fuer einen unbeaufsichtigten Start. Bleibt das Passwort leer,
       # fuehrt das Panel beim ersten Aufruf durch die Einrichtung im Browser.

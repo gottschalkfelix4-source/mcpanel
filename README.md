@@ -467,6 +467,31 @@ Die Farb- und Schattenwerte stehen zentral in
 
 ---
 
+## Wenn ein Server nicht installiert
+
+Bleibt der Installer beim Herunterladen hängen (`SocketTimeoutException`, „Downloading
+minecraft server failed“), liegt es fast immer am Netz des Docker-Hosts, nicht am Panel.
+Zwei Prüfungen grenzen es ein:
+
+```bash
+docker run --rm --network mcpanel_mcpanel alpine sh -c "getent ahostsv4 piston-data.mojang.com; wget -q -T 30 -O /dev/null https://piston-data.mojang.com/v1/objects/59353fb40c36d304f2035d51e7d6e6baa98dc05c/server.jar && echo OK || echo FEHLER"
+```
+
+Kommt `OK`, war die Störung vorübergehend – Server einfach noch einmal starten, der
+Installer läuft dann erneut. Kommt `FEHLER` oder eine unerwartete IP-Adresse, filtert
+vermutlich der Namensserver des Hosts. Auf Heimservern läuft dort oft Pi-hole oder
+AdGuard, und die Container erben diesen Resolver. Abhilfe schafft `MC_DNS`:
+
+```bash
+MC_DNS=1.1.1.1,9.9.9.9
+```
+
+In Unraid steht das Feld unter *Show more settings* als **DNS für Minecraft-Server**.
+Die Angabe gilt nur für die Minecraft-Container, nicht für das Panel selbst; bestehende
+Server werden beim nächsten Start mit der neuen Einstellung neu aufgesetzt.
+
+---
+
 ## Bekannte Grenzen
 
 - Einzelner Host: es gibt keine Verteilung auf mehrere Docker-Knoten.

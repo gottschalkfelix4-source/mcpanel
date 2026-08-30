@@ -166,6 +166,7 @@ export async function createContainer(server: Server): Promise<Container> {
       RestartPolicy: { Name: 'no' },
       Memory: memBytes,
       NetworkMode: config.dockerNetwork,
+      ...(config.mcDns.length > 0 ? { Dns: config.mcDns } : {}),
     },
   });
 }
@@ -180,6 +181,9 @@ async function configMatches(container: Container, server: Server): Promise<bool
 
     if (info.Config.Image !== imageForServer(server)) return false;
     if (info.HostConfig.Memory !== containerMemoryBytes(server.memoryMb)) return false;
+
+    const dns = info.HostConfig.Dns ?? [];
+    if (dns.join(',') !== config.mcDns.join(',')) return false;
     if (info.HostConfig.PortBindings?.['25565/tcp']?.[0]?.HostPort !== String(server.port)) {
       return false;
     }
