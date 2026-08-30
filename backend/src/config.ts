@@ -12,9 +12,28 @@ const dataRoot = process.env.DATA_ROOT ?? path.resolve(process.cwd(), 'data');
  * ueberleben trotzdem einen Neustart - ein bei jedem Start neu gewuerfeltes
  * Geheimnis wuerde alle Anmeldungen ungueltig machen.
  */
+/**
+ * Werte, die frueher als Beispiel in der .env.example standen. Wer sie kopiert
+ * hat, signiert Sitzungstokens mit einem Geheimnis, das oeffentlich im
+ * Repository nachzulesen ist - deshalb gelten sie hier als "nicht gesetzt".
+ */
+const JWT_PLATZHALTER = new Set([
+  'bitte-hier-ein-langes-zufaelliges-secret-eintragen',
+  'changeme',
+  'change-me',
+  'secret',
+]);
+
 function resolveJwtSecret(): string {
   const fromEnv = process.env.JWT_SECRET?.trim();
-  if (fromEnv) return fromEnv;
+  if (fromEnv && JWT_PLATZHALTER.has(fromEnv.toLowerCase())) {
+    console.warn(
+      'JWT_SECRET ist ein bekannter Beispielwert und wird ignoriert – ' +
+        'das Panel benutzt stattdessen sein eigenes Geheimnis aus dem Datenverzeichnis.',
+    );
+  } else if (fromEnv) {
+    return fromEnv;
+  }
 
   const file = path.join(dataRoot, '.jwt-secret');
   try {
