@@ -1,10 +1,12 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
 import { Server as IOServer } from 'socket.io';
 import { ZodError } from 'zod';
 
 import { config } from './config.js';
+import { prisma } from './db.js';
 import { HttpError } from './lib/errors.js';
 import { bootstrap } from './bootstrap.js';
 import { setupConsoleGateway } from './ws/console.js';
@@ -25,12 +27,22 @@ const app = Fastify({
         : { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } },
   },
   bodyLimit: 32 * 1024 * 1024,
+  /**
+   * Vor dem Backend steht immer ein nginx – im Alles-in-einem-Abbild über
+   * 127.0.0.1, bei `docker compose` als eigener Dienst im internen Netz.
+   * Ohne diese Angabe trüge jede Anfrage die Adresse dieses Proxys, und die
+   * Anmeldebremse würde alle Nutzer in denselben Zähler stecken.
+   */
+  trustProxy: 'loopback, uniquelocal',
 });
 
 await app.register(cors, { origin: true, credentials: true });
 await app.register(multipart, {
   limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2 GB für Welten/Modpacks
 });
+// Nur dort bremsen, wo eine Route es ausdrücklich verlangt (config.rateLimit).
+// Konsole, Dateiübertragungen und Statusabfragen bleiben unbegrenzt.
+await app.register(rateLimit, { global: false });
 
 /**
  * Leerer Body mit `Content-Type: application/json` ist bei Aktions-Endpunkten
@@ -64,7 +76,20 @@ app.setErrorHandler((error, _req, reply) => {
   return reply.code(500).send({ error: error.message || 'Interner Fehler' });
 });
 
-app.get('/api/health', async () => ({ ok: true, time: new Date().toISOString() }));
+/**
+ * Ziel des Docker-HEALTHCHECK. Die Datenbank wird wirklich angefasst, sonst
+ * meldet sich ein Container mit toter Verbindung weiter als gesund und wird
+ * nie neu gestartet. `curl -fsS` wertet den 503 als Fehlschlag.
+ */
+app.get('/api/health', async (_req, reply) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (err) {
+    app.log.error({ err }, 'Health: Datenbank nicht erreichbar');
+    return reply.code(503).send({ ok: false, error: 'Datenbank nicht erreichbar' });
+  }
+  return { ok: true, time: new Date().toISOString() };
+});
 
 await app.register(setupRoutes, { prefix: '/api/setup' });
 await app.register(authRoutes, { prefix: '/api/auth' });
