@@ -1,8 +1,8 @@
 import bcrypt from 'bcryptjs';
-import { config } from './config.js';
+import { config, setHostDataRoot } from './config.js';
 import { prisma } from './db.js';
 import { ensureDataDirs, runAutostart } from './services/serverManager.js';
-import { ensureNetwork } from './services/docker.js';
+import { detectHostDataRoot, ensureNetwork } from './services/docker.js';
 import { startWatcher } from './services/notify.js';
 import { applyTarget, getTarget } from './services/backupTarget.js';
 import { startScheduler } from './services/automation.js';
@@ -10,6 +10,16 @@ import { startScheduler } from './services/automation.js';
 /** Legt beim ersten Start Verzeichnisse, Netzwerk und den Admin-Account an. */
 export async function bootstrap(log: (msg: string) => void): Promise<void> {
   await ensureDataDirs();
+
+  // Host-Pfad moeglichst selbst ermitteln; nur wenn er ausdruecklich gesetzt
+  // wurde, hat die Umgebung Vorrang.
+  if (!process.env.HOST_DATA_ROOT) {
+    const detected = await detectHostDataRoot(config.dataRoot);
+    if (detected && detected !== config.hostDataRoot) {
+      setHostDataRoot(detected);
+      log(`Host-Datenpfad automatisch erkannt: ${detected}`);
+    }
+  }
   log(`Datenverzeichnis: ${config.dataRoot} (Host: ${config.hostDataRoot})`);
 
   try {
@@ -21,17 +31,19 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
 
   const userCount = await prisma.user.count();
   if (userCount === 0) {
-    await prisma.user.create({
-      data: {
-        email: config.admin.email.toLowerCase(),
-        username: config.admin.username,
-        role: 'ADMIN',
-        passwordHash: await bcrypt.hash(config.admin.password, 10),
-      },
-    });
-    log(`Administrator "${config.admin.username}" angelegt (Passwort aus der .env).`);
-    if (config.admin.password === 'changeme123') {
-      log('ACHTUNG: Standardpasswort aktiv – bitte nach dem ersten Login ändern!');
+    if (config.admin.password) {
+      // Unbeaufsichtigter Start: Zugangsdaten kamen ueber die Umgebung.
+      await prisma.user.create({
+        data: {
+          email: config.admin.email.toLowerCase(),
+          username: config.admin.username,
+          role: 'ADMIN',
+          passwordHash: await bcrypt.hash(config.admin.password, 10),
+        },
+      });
+      log(`Administrator "${config.admin.username}" aus der Umgebung angelegt.`);
+    } else {
+      log('Noch kein Konto vorhanden – das Panel fuehrt beim Aufruf durch die Ersteinrichtung.');
     }
   }
 

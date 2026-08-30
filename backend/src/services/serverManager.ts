@@ -8,6 +8,7 @@ import { conflict } from '../lib/errors.js';
 import * as dockerSvc from './docker.js';
 import { getDiskUsage, invalidateDiskUsage } from './diskUsage.js';
 import { getPlayerCount } from './playerCount.js';
+import { getPublicHost } from './settings.js';
 
 export interface CreateServerInput {
   name: string;
@@ -138,6 +139,7 @@ export async function updateServerSettings(
 export async function serializeServer(server: Server, extra?: { withStats?: boolean }) {
   const { state, health, startedAt } = await dockerSvc.getState(server);
   const running = state === 'running';
+  const host = await getPublicHost();
   const stats = extra?.withStats && running ? await dockerSvc.getStats(server) : null;
   const players = extra?.withStats ? getPlayerCount(server, running) : null;
 
@@ -150,7 +152,7 @@ export async function serializeServer(server: Server, extra?: { withStats?: bool
     mcVersion: server.mcVersion,
     memoryMb: server.memoryMb,
     port: server.port,
-    address: `${config.publicHost}:${server.port}`,
+    address: `${host}:${server.port}`,
     autoStart: server.autoStart,
     state,
     health,

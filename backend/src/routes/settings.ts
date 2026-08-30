@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import { prisma } from '../db.js';
 import { audit, authenticate, requireAdmin } from '../auth/context.js';
-import { getCurseforgeKey, setSetting } from '../services/settings.js';
+import { getCurseforgeKey, getPublicHost, setSetting } from '../services/settings.js';
 import * as curseforge from '../providers/curseforge.js';
 import * as dockerSvc from '../services/docker.js';
 import {
@@ -19,7 +19,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
 
   /** Panel-Infos, die jeder angemeldete Nutzer sehen darf. */
   app.get('/public', async () => ({
-    publicHost: config.publicHost,
+    publicHost: await getPublicHost(),
     portRange: config.portRange,
     curseforgeAvailable: Boolean(await getCurseforgeKey()),
   }));
@@ -42,7 +42,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
     }
 
     return {
-      publicHost: config.publicHost,
+      publicHost: await getPublicHost(),
       portRange: config.portRange,
       dataRoot: config.dataRoot,
 

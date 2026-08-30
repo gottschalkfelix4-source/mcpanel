@@ -29,7 +29,9 @@ services:
       TZ: ${TZ:-Europe/Berlin}
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER:-mcpanel}:${POSTGRES_PASSWORD:-mcpanel}@db:5432/${POSTGRES_DB:-mcpanel}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt – bitte .env anlegen}
+      # Leer lassen ist in Ordnung: das Panel erzeugt beim ersten Start selbst
+      # eines und legt es unter /data/.jwt-secret ab.
+      JWT_SECRET: ${JWT_SECRET:-}
       # In-Container-Pfad der Daten
       DATA_ROOT: /data
       # Host-Pfad derselben Daten (für Bind-Mounts der MC-Container)
@@ -39,9 +41,11 @@ services:
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
       DOCKER_NETWORK: mcpanel_mcpanel
       CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
+      # Nur fuer einen unbeaufsichtigten Start. Bleibt das Passwort leer,
+      # fuehrt das Panel beim ersten Aufruf durch die Einrichtung im Browser.
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme123}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       # Docker-Socket: das Panel startet/stoppt die Minecraft-Container
       - type: bind

@@ -1,0 +1,154 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>MCPanel</Name>
+  <Repository>ghcr.io/gottschalkfelix4-source/mcpanel:latest</Repository>
+  <Registry>https://github.com/gottschalkfelix4-source/mcpanel/pkgs/container/mcpanel</Registry>
+  <Branch>
+    <Tag>latest</Tag>
+    <TagDescription>Aktueller Stand</TagDescription>
+  </Branch>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/gottschalkfelix4-source/mcpanel/issues</Support>
+  <Project>https://github.com/gottschalkfelix4-source/mcpanel</Project>
+  <Overview>
+Selbst gehostetes Panel fuer Minecraft-Server mit Modpack-Installer.
+
+Jeder Minecraft-Server laeuft als eigener Container (itzg/minecraft-server), den MCPanel ueber den Docker-Socket anlegt und steuert. Die Oberflaeche bringt pro Server Konsole, Dateimanager, Konfiguration, Backups, Spielerverwaltung, Automatisierungen und eine Rechteverwaltung fuer Mitspieler mit.
+
+Modpacks kommen von Modrinth und CurseForge, inklusive Updater; Serverpakete haben dabei Vorrang. Backups lassen sich zusaetzlich auf eine Samba-Freigabe oder nach S3 spiegeln, Benachrichtigungen gehen an Discord oder einen beliebigen Webhook.
+
+Beim ersten Aufruf fuehrt ein Assistent durch die Einrichtung - es ist nichts vorzubereiten.
+
+WICHTIG - zwei Dinge muessen stimmen:
+
+1. Der Docker-Socket muss eingehaengt sein. Ohne ihn kann das Panel keine Server starten. Damit hat der Container root-gleiche Rechte auf dem Host; wer das nicht moechte, sollte MCPanel nicht betreiben.
+
+2. Der Datenpfad wird von den Minecraft-Containern direkt vom Host eingehaengt. Das Panel liest den Host-Pfad selbst aus seinen eigenen Mounts aus, es ist also nichts doppelt einzutragen.
+
+Die Minecraft-Server oeffnen ihre Ports selbst auf dem Host (Vorgabe 25565-25700). Fuer Mitspieler von aussen ist eine Portfreigabe im Router noetig - nicht fuer den Panel-Port.
+  </Overview>
+  <Category>GameServers: Tools:Utilities Network:Web</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/gottschalkfelix4-source/mcpanel/main/unraid/mcpanel.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/gottschalkfelix4-source/mcpanel/main/frontend/public/icons/icon-192.png</Icon>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Docker-Socket (/var/run/docker.sock)</Requires>
+
+  <!--
+    SYS_ADMIN und DAC_READ_SEARCH werden nur gebraucht, wenn Backups auf eine
+    Samba-Freigabe gespiegelt werden sollen - das Panel haengt sie dann selbst
+    per CIFS ein. Wer das nicht nutzt, kann die Zeile leeren. Gemessen am
+    Docker-Socket, der ohnehin root-gleiche Rechte gibt, aendert sie nichts am
+    Risiko.
+  -->
+  <ExtraParams>--cap-add=SYS_ADMIN --cap-add=DAC_READ_SEARCH --security-opt apparmor=unconfined</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>Selbst gehostetes Minecraft-Server-Panel mit Modpack-Installer fuer Modrinth und CurseForge, Backups, Automatisierungen und Rechteverwaltung.</Description>
+
+  <Config
+    Name="Weboberflaeche"
+    Target="8080"
+    Default="8080"
+    Mode="tcp"
+    Description="Port, unter dem das Panel im Browser erreichbar ist."
+    Type="Port"
+    Display="always"
+    Required="true"
+    Mask="false">8080</Config>
+
+  <Config
+    Name="Daten"
+    Target="/data"
+    Default="/mnt/user/appdata/mcpanel"
+    Mode="rw"
+    Description="Serverdaten, Backups und die Datenbank. Die Minecraft-Container haengen ihre Verzeichnisse direkt von hier ein - auf einem Share ohne Cache-Zwang und nicht auf einem Netzlaufwerk ablegen."
+    Type="Path"
+    Display="always"
+    Required="true"
+    Mask="false">/mnt/user/appdata/mcpanel</Config>
+
+  <Config
+    Name="Docker-Socket"
+    Target="/var/run/docker.sock"
+    Default="/var/run/docker.sock"
+    Mode="rw"
+    Description="Damit legt das Panel die Minecraft-Container an und steuert sie. Ohne diesen Mount laeuft nur die Oberflaeche."
+    Type="Path"
+    Display="always"
+    Required="true"
+    Mask="false">/var/run/docker.sock</Config>
+
+  <Config
+    Name="Adresse fuer Spieler"
+    Target="PUBLIC_HOST"
+    Default=""
+    Mode=""
+    Description="Hostname oder IP, die im Panel als Server-Adresse angezeigt wird, z. B. die DynDNS-Adresse. Laesst sich auch im Einrichtungsassistenten setzen."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"/>
+
+  <Config
+    Name="Port-Bereich von"
+    Target="MC_PORT_MIN"
+    Default="25565"
+    Mode=""
+    Description="Erster Port, den neue Minecraft-Server bekommen duerfen."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">25565</Config>
+
+  <Config
+    Name="Port-Bereich bis"
+    Target="MC_PORT_MAX"
+    Default="25700"
+    Mode=""
+    Description="Letzter Port fuer Minecraft-Server. Der Bereich muss im Router freigegeben sein, damit Mitspieler von aussen verbinden koennen."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">25700</Config>
+
+  <Config
+    Name="Zeitzone"
+    Target="TZ"
+    Default="Europe/Berlin"
+    Mode=""
+    Description="Bestimmt, wann zeitgesteuerte Automatisierungen ausloesen."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">Europe/Berlin</Config>
+
+  <Config
+    Name="CurseForge API-Key"
+    Target="CURSEFORGE_API_KEY"
+    Default=""
+    Mode=""
+    Description="Optional. Ohne Key funktioniert nur Modrinth. Laesst sich auch im Assistenten oder spaeter in den Panel-Einstellungen eintragen."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="true"/>
+
+  <Config
+    Name="Admin-Passwort (unbeaufsichtigt)"
+    Target="ADMIN_PASSWORD"
+    Default=""
+    Mode=""
+    Description="Nur fuer die Einrichtung ohne Assistent. Bleibt das Feld leer - der Normalfall -, fragt das Panel beim ersten Aufruf im Browser nach Konto und Passwort."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="true"/>
+</Container>

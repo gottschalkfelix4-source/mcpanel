@@ -1,3 +1,4 @@
+import os from 'node:os';
 import Docker from 'dockerode';
 import type { Container, ContainerInfo } from 'dockerode';
 import type { Server } from '@prisma/client';
@@ -394,4 +395,25 @@ function stripDockerHeaders(buf: Buffer): string {
   }
   if (multiplexed && off === buf.length) return Buffer.concat(out).toString('utf8');
   return buf.toString('utf8');
+}
+
+/**
+ * Liest den Host-Pfad des eigenen Datenverzeichnisses aus den Mounts des
+ * eigenen Containers.
+ *
+ * Sonst muss man ihn doppelt angeben - einmal als Volume, einmal als
+ * HOST_DATA_ROOT - und ein Tippfehler faellt erst auf, wenn der erste
+ * Minecraft-Server mit leerem Verzeichnis startet.
+ */
+export async function detectHostDataRoot(containerPath: string): Promise<string | null> {
+  try {
+    const self = docker.getContainer(os.hostname());
+    const info = await self.inspect();
+    const mount = (info.Mounts ?? []).find((m) => m.Destination === containerPath);
+    return mount?.Source || null;
+  } catch {
+    // Kein Container, kein Docker-Socket oder ein anderer Hostname als die
+    // Container-ID - dann bleibt es beim konfigurierten Wert.
+    return null;
+  }
 }

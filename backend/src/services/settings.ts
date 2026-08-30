@@ -26,3 +26,12 @@ export async function getCurseforgeKey(): Promise<string> {
   const fromDb = await getSetting('curseforge.apiKey', '');
   return fromDb || config.curseforgeApiKey;
 }
+
+/**
+ * Adresse, die den Spielern angezeigt wird. Der Einrichtungsassistent schreibt
+ * sie in die Datenbank; die Umgebungsvariable bleibt als Vorgabe bestehen.
+ */
+export async function getPublicHost(): Promise<string> {
+  const fromDb = await getSetting('panel.publicHost', '');
+  return fromDb || config.publicHost;
+}

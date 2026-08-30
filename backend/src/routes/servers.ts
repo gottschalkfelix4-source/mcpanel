@@ -15,6 +15,7 @@ import {
   updateServerSettings,
 } from '../services/serverManager.js';
 import { assertMemoryAllowed, quotaState } from '../services/quota.js';
+import { getPublicHost } from '../services/settings.js';
 
 import filesRoutes from './files.js';
 import configRoutes from './config.js';
@@ -142,7 +143,7 @@ export default async function serverRoutes(app: FastifyInstance) {
       isOwner: access.isOwner,
       isAdmin: access.isAdmin,
       rcon: access.isOwner || access.isAdmin ? { port: access.server.rconPort } : null,
-      publicHost: config.publicHost,
+      publicHost: await getPublicHost(),
     };
   });
 

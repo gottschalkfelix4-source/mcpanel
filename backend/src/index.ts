@@ -14,6 +14,7 @@ import userRoutes from './routes/users.js';
 import serverRoutes from './routes/servers.js';
 import catalogRoutes from './routes/catalog.js';
 import settingsRoutes from './routes/settings.js';
+import setupRoutes from './routes/setup.js';
 
 const app = Fastify({
   logger: {
@@ -65,6 +66,7 @@ app.setErrorHandler((error, _req, reply) => {
 
 app.get('/api/health', async () => ({ ok: true, time: new Date().toISOString() }));
 
+await app.register(setupRoutes, { prefix: '/api/setup' });
 await app.register(authRoutes, { prefix: '/api/auth' });
 await app.register(userRoutes, { prefix: '/api/users' });
 await app.register(serverRoutes, { prefix: '/api/servers' });

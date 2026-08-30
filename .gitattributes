@@ -1,0 +1,12 @@
+# Alles mit LF ablegen und auschecken.
+#
+# Ohne das macht Git for Windows beim Auschecken CRLF daraus - und ein
+# Shell-Skript mit CRLF laesst den Container mit "bad interpreter: /bin/sh^M"
+# stehen. Betrifft entrypoint.sh, die Dockerfiles und die nginx-Konfiguration.
+* text=auto eol=lf
+
+# Binaerdateien unangetastet lassen
+*.png binary
+*.jpg binary
+*.ico binary
+*.gz binary

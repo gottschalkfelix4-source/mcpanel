@@ -1,9 +1,12 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { api } from './lib/api';
 import { useAuth } from './lib/auth';
 import { LoadingBlock } from './components/ui';
 import Layout from './components/Layout';
 
 import LoginPage from './pages/Login';
+import SetupPage from './pages/Setup';
 import ServersPage from './pages/Servers';
 import CreateServerPage from './pages/CreateServer';
 import ServerLayout from './pages/server/ServerLayout';
@@ -25,11 +28,30 @@ import ProfilePage from './pages/Profile';
 export default function App() {
   const { user, loading } = useAuth();
 
-  if (loading) {
+  // Nur fragen, solange niemand angemeldet ist – im laufenden Betrieb waere
+  // das ein ueberfluessiger Aufruf bei jedem Seitenaufbau.
+  const setup = useQuery({
+    queryKey: ['setup-needed'],
+    queryFn: () => api.get<{ needsSetup: boolean }>('/setup/status'),
+    enabled: !loading && !user,
+    staleTime: 60_000,
+  });
+
+  if (loading || (!user && setup.isLoading)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <LoadingBlock label="Panel wird geladen …" />
       </div>
+    );
+  }
+
+  // Frisches Panel ohne Konto: erst durch die Einrichtung fuehren, nicht
+  // vor eine Anmeldung stellen, bei der es nichts anzumelden gibt.
+  if (!user && setup.data?.needsSetup) {
+    return (
+      <Routes>
+        <Route path="*" element={<SetupPage />} />
+      </Routes>
     );
   }
 

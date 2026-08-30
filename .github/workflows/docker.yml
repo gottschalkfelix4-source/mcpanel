@@ -1,0 +1,49 @@
+name: Abbild bauen
+
+# Baut das Alles-in-einem-Abbild und legt es in der GitHub-Registry ab.
+# Genau dieses Abbild zieht das Unraid-Template.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # amd64 reicht fuer Unraid und die uebliche NAS-Hardware. arm64 waere
+          # per QEMU zwar moeglich, verdreifacht aber die Bauzeit.
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

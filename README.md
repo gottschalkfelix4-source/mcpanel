@@ -21,6 +21,13 @@ das Panel steuert sie über den Docker-Socket.
 
 ## Funktionen
 
+**Ersteinrichtung**
+- Beim ersten Aufruf führt ein Assistent durch Konto, Server-Adresse und Modpack-Quellen
+- Vorher prüft er, ob der Docker-Socket erreichbar ist – sonst fällt das erst beim ersten
+  Serverstart auf
+- Die Einrichtungsroute ist hart daran gebunden, dass noch kein Konto existiert; danach
+  antwortet sie mit 403
+
 **Server**
 - Anlegen von Vanilla-, Paper-, Purpur-, Spigot-, Fabric-, Forge-, NeoForge- und Quilt-Servern
 - Start / Stop / Neustart / Kill, Autostart beim Panel-Start
@@ -104,33 +111,76 @@ das Panel steuert sie über den Docker-Socket.
 
 ## Schnellstart
 
-Voraussetzung: Docker mit Compose-Plugin.
+Voraussetzung: Docker mit Compose-Plugin. Sonst nichts.
 
 ```bash
-cp .env.example .env
+docker compose up -d
 ```
 
-In der `.env` mindestens anpassen:
+Dann **http://localhost:8080** öffnen – ein Assistent fragt nach Konto, Server-Adresse
+und optional dem CurseForge-Schlüssel. Es ist keine `.env` nötig: das Sitzungs-Geheimnis
+erzeugt das Panel beim ersten Start selbst und legt es unter `data/.jwt-secret` ab.
 
-| Variable | Bedeutung |
+### Wenn es woanders liegen soll
+
+Für einen echten Server gehören die Daten meist nicht neben das Projekt. Dafür reicht eine
+`.env` mit einer einzigen Zeile:
+
+```bash
+echo "HOST_DATA_ROOT=/srv/mcpanel" > .env
+docker compose up -d
+```
+
+`.env.example` listet alles Weitere – Port des Panels, Port-Bereich der Server, Zeitzone.
+Nichts davon ist Pflicht.
+
+> `HOST_DATA_ROOT` muss ein **absoluter** Pfad sein. Das Panel reicht ihn beim Anlegen
+> eines Servers als Bind-Mount an den Docker-Daemon weiter – ein relativer Pfad würde
+> dort ins Leere zeigen. Bleibt die Variable leer, liest das Panel den Host-Pfad aus den
+> eigenen Mounts aus.
+
+### Ohne Assistent einrichten
+
+Wer das Panel unbeaufsichtigt ausrollt, setzt `ADMIN_USERNAME`, `ADMIN_EMAIL` und
+`ADMIN_PASSWORD` in der `.env`. Dann wird das Konto direkt beim ersten Start angelegt und
+der Assistent übersprungen.
+
+---
+
+## Unraid
+
+Im Ordner [`unraid/`](unraid/mcpanel.xml) liegt eine Template-Datei. In Unraid unter
+*Docker → Add Container → Template* die URL eintragen:
+
+```
+https://raw.githubusercontent.com/gottschalkfelix4-source/mcpanel/main/unraid/mcpanel.xml
+```
+
+Unraid startet je Anwendung genau einen Container, deshalb gibt es dafür ein eigenes
+Abbild, das PostgreSQL, Backend und Oberfläche zusammenfasst
+([`Dockerfile`](Dockerfile) im Wurzelverzeichnis). Der Compose-Stack bleibt die Variante
+für alle, die die Dienste getrennt betreiben wollen.
+
+Einzustellen sind nur drei Dinge:
+
+| Feld | Wert |
 |---|---|
-| `JWT_SECRET` | Langes zufälliges Secret – **unbedingt ändern** |
-| `HOST_DATA_ROOT` | **Absoluter Host-Pfad** für alle Serverdaten, z. B. `/srv/mcpanel` oder `C:/mcpanel-data` |
-| `PUBLIC_HOST` | Hostname/IP, die den Spielern als Serveradresse angezeigt wird |
-| `ADMIN_*` | Zugangsdaten des ersten Administrators |
-| `CURSEFORGE_API_KEY` | Optional – ohne Key ist nur Modrinth durchsuchbar |
+| Weboberfläche | Port, Vorgabe `8080` |
+| Daten | z. B. `/mnt/user/appdata/mcpanel` – Serverdaten, Backups und Datenbank |
+| Docker-Socket | `/var/run/docker.sock` |
 
-Dann:
+Den Host-Pfad der Daten liest das Panel selbst aus seinen Mounts aus; er ist also nicht
+doppelt einzutragen. Alles Weitere fragt der Assistent beim ersten Aufruf.
+
+Dasselbe Abbild lässt sich auch ohne Unraid einzeln starten:
 
 ```bash
-docker compose up -d --build
+docker run -d --name mcpanel -p 8080:8080   -v /var/run/docker.sock:/var/run/docker.sock   -v /srv/mcpanel:/data   ghcr.io/gottschalkfelix4-source/mcpanel:latest
 ```
 
-Panel öffnen: **http://localhost:8080** – Anmeldung mit `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
-
-> `HOST_DATA_ROOT` muss ein absoluter Pfad sein. Das Panel reicht ihn beim Anlegen eines
-> Servers als Bind-Mount an den Docker-Daemon weiter – ein relativer Pfad würde dort
-> ins Leere zeigen.
+> Der Docker-Socket gibt dem Container root-gleiche Rechte auf dem Host. Ohne ihn kann
+> das Panel keine Minecraft-Server starten – wer das nicht möchte, sollte MCPanel nicht
+> betreiben.
 
 ---
 
@@ -315,6 +365,19 @@ Die Icons entstehen aus [gen-icons.mjs](frontend/scripts/gen-icons.mjs)
   | 16 GB | 20 GB |
 - Lang laufende Aktionen (Modpack-Installation, Backups) laufen als Task mit
   Fortschritt und Protokoll, live per WebSocket.
+- Das Sitzungs-Geheimnis kommt aus der Umgebung, sonst aus `data/.jwt-secret`, sonst wird
+  eines erzeugt und dort abgelegt. So läuft `docker compose up` ohne Vorbereitung, und die
+  Anmeldungen überleben trotzdem einen Neustart – ein bei jedem Start neu gewürfeltes
+  Geheimnis würde alle Sitzungen ungültig machen.
+- Den Host-Pfad des Datenverzeichnisses liest das Panel beim Start aus den Mounts seines
+  **eigenen** Containers (`docker inspect` auf sich selbst). Sonst müsste man ihn doppelt
+  angeben – einmal als Volume, einmal als `HOST_DATA_ROOT` – und ein Tippfehler fällt erst
+  auf, wenn der erste Minecraft-Server mit leerem Verzeichnis startet. Eine gesetzte
+  Umgebungsvariable hat weiterhin Vorrang.
+- Das Alles-in-einem-Abbild kommt ohne Prozess-Supervisor aus: drei Dienste, feste
+  Startreihenfolge, und fällt einer aus, endet der Container – den Neustart übernimmt
+  Docker beziehungsweise Unraid. Halb laufende Container sind schwerer zu erkennen als
+  abgestürzte.
 - Das Backup-Speicherziel steht in der `Setting`-Tabelle, nicht in der Umgebung – es soll
   ohne Neustart des Stacks umstellbar sein. Das Kopieren läuft als Schritt des Backup-Tasks
   (sichtbar als „Zweitkopie wird geschrieben“) und darf scheitern, ohne die Sicherung zu

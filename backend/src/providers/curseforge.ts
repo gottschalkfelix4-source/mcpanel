@@ -28,6 +28,21 @@ export async function isConfigured(): Promise<boolean> {
   return Boolean(await getCurseforgeKey());
 }
 
+/**
+ * Prueft einen Schluessel, ohne ihn zu speichern - fuer den
+ * Einrichtungsassistenten, der ihn erst nach erfolgreicher Probe uebernimmt.
+ */
+export async function verifyKey(apiKey: string): Promise<void> {
+  const res = await fetch(`${API}/v1/mods/search?gameId=${GAME_ID}&classId=${CLASS_MODPACKS}&pageSize=1`, {
+    headers: { 'x-api-key': apiKey, Accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(
+      res.status === 403 ? 'Schluessel abgelehnt (403)' : `CurseForge antwortete mit HTTP ${res.status}`,
+    );
+  }
+}
+
 const MOD_LOADER_IDS: Record<string, number> = {
   forge: 1,
   fabric: 4,
