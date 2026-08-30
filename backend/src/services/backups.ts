@@ -40,8 +40,11 @@ async function resolveArchive(
   return fetchBackup(serverId, filename);
 }
 
+/** Ausweichordner, in den die Wiederherstellung den alten Stand beiseitelegt. */
+const RESTORE_OLD = '.restore-old';
+
 /** Ordner, die nie in ein Backup wandern. */
-const EXCLUDE = new Set(['cache', 'logs', 'crash-reports', '.cache', 'libraries']);
+const EXCLUDE = new Set(['cache', 'logs', 'crash-reports', '.cache', 'libraries', RESTORE_OLD]);
 
 export async function createBackup(server: Server, options: CreateBackupOptions = {}) {
   const { task } = options;
@@ -142,6 +145,46 @@ Zweitkopie fehlgeschlagen: ${mirrorError}` : backup.name,
   return { ...backup, mirrored };
 }
 
+/**
+ * Laeuft das Archiv einmal durch, ohne etwas zu schreiben. `strict` laesst auch
+ * Warnungen (abgeschnittenes Archiv) als Fehler durchschlagen.
+ */
+async function assertArchiveIntact(archive: string) {
+  let entries = 0;
+  try {
+    await tar.list({
+      file: archive,
+      strict: true,
+      onReadEntry: () => {
+        entries += 1;
+      },
+    });
+  } catch {
+    throw badRequest('Das Backup-Archiv ist beschädigt oder unvollständig – es wurde nichts verändert.');
+  }
+  if (entries === 0) {
+    throw badRequest('Das Backup-Archiv ist leer – es wurde nichts verändert.');
+  }
+}
+
+/**
+ * Holt den beiseitegelegten Stand zurück: alles, was seit dem Beiseitelegen im
+ * Serververzeichnis entstanden ist, stammt aus einem halben Entpackvorgang und
+ * fliegt raus. Wird sowohl beim Fehlschlag als auch beim Aufräumen eines
+ * abgebrochenen früheren Laufs benutzt – nach einem Neustart mitten in der
+ * Wiederherstellung ist der Ausweichordner die einzige vollständige Kopie.
+ */
+async function rollbackStash(dir: string, stash: string) {
+  for (const entry of await fs.readdir(dir)) {
+    if (EXCLUDE.has(entry)) continue;
+    await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+  }
+  for (const entry of await fs.readdir(stash)) {
+    await fs.rename(path.join(stash, entry), path.join(dir, entry));
+  }
+  await fs.rm(stash, { recursive: true, force: true });
+}
+
 export async function restoreBackup(server: Server, backupId: string, task?: TaskHandle) {
   const backup = await prisma.backup.findFirst({ where: { id: backupId, serverId: server.id } });
   if (!backup) throw notFound('Backup nicht gefunden');
@@ -150,26 +193,53 @@ export async function restoreBackup(server: Server, backupId: string, task?: Tas
   if (!source) throw notFound('Backup-Datei fehlt – weder in der Haupt- noch in der Zweitablage');
   const archive = source.path;
 
-  await task?.update(5, 'Server wird gestoppt …');
-  await dockerSvc.stop(server);
+  try {
+    // Vor dem Stoppen pruefen: ein kaputtes Archiv soll den laufenden Server
+    // gar nicht erst unterbrechen.
+    await task?.update(5, 'Backup-Archiv wird geprüft …');
+    await assertArchiveIntact(archive);
 
-  const dir = serverDir(server.id);
-  await task?.update(25, 'Alte Daten werden entfernt …');
-  const entries = await fs.readdir(dir).catch(() => [] as string[]);
-  for (const entry of entries) {
-    if (EXCLUDE.has(entry)) continue;
-    await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+    await task?.update(20, 'Server wird gestoppt …');
+    await dockerSvc.stop(server);
+
+    const dir = serverDir(server.id);
+    await fs.mkdir(dir, { recursive: true });
+
+    await task?.update(35, 'Alter Stand wird beiseitegelegt …');
+    const stash = path.join(dir, RESTORE_OLD);
+    // Ein Lauf davor wurde abgebrochen – erst dessen Stand zurueckholen,
+    // sonst waere gleich die einzige vollstaendige Kopie geloescht.
+    if (await fs.stat(stash).then(() => true, () => false)) {
+      await task?.log('Abgebrochene Wiederherstellung gefunden – alter Stand wird zurückgeholt.');
+      await rollbackStash(dir, stash);
+    }
+
+    await fs.mkdir(stash);
+    for (const entry of await fs.readdir(dir)) {
+      if (EXCLUDE.has(entry)) continue;
+      // Geschwisterordner, also nie ueber eine Dateisystemgrenze hinweg.
+      await fs.rename(path.join(dir, entry), path.join(stash, entry));
+    }
+
+    await task?.update(50, 'Backup wird entpackt …');
+    try {
+      await tar.extract({ file: archive, cwd: dir });
+    } catch (err) {
+      await rollbackStash(dir, stash);
+      const grund = err instanceof Error ? err.message : String(err);
+      throw badRequest(`Backup konnte nicht entpackt werden – der alte Stand ist wieder da: ${grund}`);
+    }
+
+    await task?.update(85, 'Alter Stand wird entfernt …');
+    await fs.rm(stash, { recursive: true, force: true });
+
+    await task?.update(90, 'Container wird neu aufgesetzt …');
+    await dockerSvc.recreateContainer(server);
+    invalidateDiskUsage(server.id);
+    await task?.update(100, 'Backup wiederhergestellt');
+  } finally {
+    await source.cleanup();
   }
-
-  await task?.update(45, 'Backup wird entpackt …');
-  await fs.mkdir(dir, { recursive: true });
-  await tar.extract({ file: archive, cwd: dir });
-
-  await task?.update(90, 'Container wird neu aufgesetzt …');
-  await dockerSvc.recreateContainer(server);
-  invalidateDiskUsage(server.id);
-  await source.cleanup();
-  await task?.update(100, 'Backup wiederhergestellt');
 }
 
 export async function deleteBackup(server: Server, backupId: string) {

@@ -1,4 +1,5 @@
 import { prisma } from '../db.js';
+import { conflict } from '../lib/errors.js';
 import { emitToServer } from '../ws/io.js';
 
 export interface TaskHandle {
@@ -72,20 +73,61 @@ export async function createTask(
 }
 
 /** Führt eine lange Aktion im Hintergrund aus und protokolliert sie als Task. */
+/**
+ * Laufende Aufgabe je Server. Sicherung, Wiederherstellung und
+ * Modpack-Installation schreiben alle in dasselbe Verzeichnis: liefe die
+ * naechtliche Sicherung waehrend eines Modpack-Updates, entstuende ein Archiv
+ * des halb geleerten `mods/`-Ordners, das wie eine gueltige Sicherung aussieht.
+ */
+const laufendeAufgabe = new Map<string, string>();
+
+const AUFGABEN_NAMEN: Record<string, string> = {
+  'backup.create': 'Eine Sicherung',
+  'backup.restore': 'Eine Wiederherstellung',
+  'modpack.install': 'Eine Modpack-Installation',
+  'modpack.update': 'Ein Modpack-Update',
+};
+
+const aufgabenName = (type: string) => AUFGABEN_NAMEN[type] ?? `Die Aufgabe "${type}"`;
+
 export function runTask(
   serverId: string | null,
   type: string,
   fn: (task: TaskHandle) => Promise<void>,
 ): Promise<string> {
-  return createTask(serverId, type).then((task) => {
-    void (async () => {
-      try {
-        await fn(task);
-        await task.done();
-      } catch (err) {
-        await task.fail(err);
-      }
-    })();
-    return task.id;
-  });
+  // Synchron pruefen und belegen, damit zwei gleichzeitig eintreffende
+  // Anfragen nicht beide an createTask vorbeikommen.
+  if (serverId !== null) {
+    const laufend = laufendeAufgabe.get(serverId);
+    if (laufend) {
+      return Promise.reject(
+        conflict(`${aufgabenName(laufend)} läuft für diesen Server bereits. Bitte abwarten.`),
+      );
+    }
+    laufendeAufgabe.set(serverId, type);
+  }
+
+  const freigeben = () => {
+    if (serverId !== null) laufendeAufgabe.delete(serverId);
+  };
+
+  return createTask(serverId, type).then(
+    (task) => {
+      void (async () => {
+        try {
+          await fn(task);
+          await task.done();
+        } catch (err) {
+          await task.fail(err);
+        } finally {
+          freigeben();
+        }
+      })();
+      return task.id;
+    },
+    (err) => {
+      freigeben();
+      throw err;
+    },
+  );
 }

@@ -4,7 +4,8 @@
  *   Minute Stunde Tag-im-Monat Monat Wochentag
  *   *      *      *            *     *
  *
- * Unterstützt `*`, `5`, `1,15`, `1-5`, `*\/10` und Kombinationen davon.
+ * Unterstützt `*`, `5`, `1,15`, `1-5`, `*\/10`, `5\/10` und Kombinationen davon.
+ * Wie bei Vixie-Cron ist `5\/10` dabei die Kurzform von `5-59\/10`.
  * Wochentag: 0 = Sonntag … 6 = Samstag (7 wird als Sonntag gelesen).
  *
  * Bewusst ohne Fremdbibliothek: der Funktionsumfang ist überschaubar und
@@ -28,8 +29,13 @@ const RANGES: [number, number][] = [
 ];
 
 /** Ein einzelnes Feld auflösen, z. B. "*\/15" oder "1-5". */
-function parseField(field: string, min: number, max: number): Set<number> {
+export function parseField(field: string, min: number, max: number): Set<number> {
   const values = new Set<number>();
+
+  // Im Wochentagsfeld ist 7 ein zweiter Name für Sonntag: als Bereichsgrenze
+  // erlaubt, in der Menge landet er aber als 0.
+  const isWeekday = min === 0 && max === 6;
+  const upper = isWeekday ? 7 : max;
 
   for (const part of field.split(',')) {
     const chunk = part.trim();
@@ -58,20 +64,15 @@ function parseField(field: string, min: number, max: number): Set<number> {
       const value = Number(spec);
       if (!Number.isInteger(value)) throw new Error(`Ungültiger Wert "${spec}"`);
       from = value;
-      to = value;
+      // Vixie-Cron: "5/10" meint "5-59/10", also ab dem Startwert bis zum Feldende.
+      to = stepRaw === undefined ? value : upper;
     }
 
-    // Wochentag 7 ist ebenfalls Sonntag
-    if (max === 6) {
-      if (from === 7) from = 0;
-      if (to === 7) to = 0;
-    }
-
-    if (from < min || to > max || from > to) {
+    if (from < min || to > upper || from > to) {
       throw new Error(`Wert außerhalb des gültigen Bereichs (${min}–${max}): "${chunk}"`);
     }
 
-    for (let v = from; v <= to; v += step) values.add(v);
+    for (let v = from; v <= to; v += step) values.add(v === 7 && isWeekday ? 0 : v);
   }
 
   return values;
@@ -187,7 +188,8 @@ export function describeCron(expression: string): string {
   const times = [...fields.hours]
     .sort((a, b) => a - b)
     .flatMap((h) => [...fields.minutes].sort((a, b) => a - b).map((m) => `${pad(h)}:${pad(m)}`));
-  const timeText = times.length <= 4 ? times.join(', ') : `${times.length}× täglich`;
+  // Enthält die Präposition, damit auch die Kurzform bei vielen Zeiten in den Satz passt
+  const timeText = times.length <= 4 ? `um ${times.join(', ')}` : `zu ${times.length} Uhrzeiten`;
 
   // Wöchentlich an bestimmten Tagen
   if (dowField !== '*' && domField === '*') {
@@ -196,16 +198,16 @@ export function describeCron(expression: string): string {
       days.length === 1
         ? days[0] + 's'
         : days.length === 7
-          ? 'täglich'
+          ? 'Täglich'
           : days.join(', ');
-    return `${dayText} um ${timeText}`;
+    return `${dayText} ${timeText}`;
   }
 
   // Monatlich an bestimmten Tagen
   if (domField !== '*') {
     const days = [...fields.daysOfMonth].sort((a, b) => a - b).join('., ');
-    return `Am ${days}. des Monats um ${timeText}`;
+    return `Am ${days}. des Monats ${timeText}`;
   }
 
-  return `Täglich um ${timeText}`;
+  return `Täglich ${timeText}`;
 }
