@@ -472,6 +472,26 @@ Die Farb- und Schattenwerte stehen zentral in
 
 ---
 
+## Wenn niemand mehr hineinkommt
+
+Die Anmeldung ist die einzige Tür, und ein Passwort lässt sich nur im Panel ändern.
+Für den Fall gibt es Wartungsbefehle direkt im Container:
+
+```bash
+docker exec mcpanel node dist/cli.js benutzer
+docker exec mcpanel node dist/cli.js passwort felix neuespasswort
+```
+
+Weiter gibt es `admin <Konto>` (macht ein Konto zum Administrator) und
+`aktivieren <Konto>` (hebt eine Deaktivierung auf). Im Compose-Stack heißt der
+Container `mcpanel-backend-1`.
+
+Meldet das Panel beim Anmelden „Benutzername oder Passwort falsch“, ist genau das
+gemeint. Steht dort „Sitzung abgelaufen“, war das Token ungültig – dann genügt eine
+neue Anmeldung.
+
+---
+
 ## Wenn ein Server nicht installiert
 
 Bleibt der Installer beim Herunterladen hängen (`SocketTimeoutException`, „Downloading

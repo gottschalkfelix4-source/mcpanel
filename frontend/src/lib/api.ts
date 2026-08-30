@@ -31,9 +31,18 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   });
 
   if (res.status === 401) {
-    tokenStore.clear();
-    if (!location.pathname.startsWith('/login')) location.href = '/login';
-    throw new ApiError(401, 'Sitzung abgelaufen');
+    // Die Meldung des Servers stehenlassen: bei einer fehlgeschlagenen
+    // Anmeldung ist "Benutzername oder Passwort falsch" die Auskunft, die
+    // weiterhilft - "Sitzung abgelaufen" schickt einen auf die falsche Faehrte.
+    const data = (await res.json().catch(() => null)) as { error?: string } | null;
+
+    // Nur eine bestehende Sitzung verwerfen. Ohne mitgesendetes Token gab es
+    // keine, die ablaufen konnte - dann ist es ein Anmeldeversuch.
+    if (token) {
+      tokenStore.clear();
+      if (!location.pathname.startsWith('/login')) location.href = '/login';
+    }
+    throw new ApiError(401, data?.error || 'Nicht angemeldet');
   }
 
   if (res.status === 204) return undefined as T;
