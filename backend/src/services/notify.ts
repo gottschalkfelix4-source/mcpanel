@@ -9,7 +9,10 @@
  * jemand im Panel zuschaut – sonst bliebe ein nächtlicher Absturz stumm.
  */
 import type { NotificationChannel } from '@prisma/client';
+import fs from 'node:fs/promises';
 import { prisma } from '../db.js';
+import { contentDir } from './content.js';
+import { analyseCrash } from './crashAnalysis.js';
 import * as dockerSvc from './docker.js';
 import { getSetting, setSetting } from './settings.js';
 
@@ -464,17 +467,35 @@ async function checkStates(): Promise<void> {
     }
 
     if (wasUp && state === 'error' && !wasPlanned(server.id)) {
-      const log = await dockerSvc.tailLogs(server, 15).catch(() => '');
+      // Ausfuehrlicher lesen als frueher: der Stacktrace, der die schuldige
+      // Mod nennt, steht oft weit mehr als 15 Zeilen ueber dem Ende.
+      const log = await dockerSvc.tailLogs(server, 200).catch(() => '');
       const tail = cleanLog(log).trim().slice(-1200);
+
+      const inhaltsOrdner = contentDir(server);
+      const diagnose = inhaltsOrdner
+        ? analyseCrash(log, await fs.readdir(inhaltsOrdner).catch(() => [] as string[]))
+        : null;
+      const schuld = diagnose?.suspect
+        ? [
+            `**${diagnose.headline}**`,
+            `Verdächtig: \`${diagnose.suspect.filename ?? diagnose.suspect.reference}\``,
+            diagnose.reason,
+            'Im Panel lässt sie sich mit einem Schalter abschalten.',
+            '',
+          ].join('\n')
+        : '';
+
       await notify('server.crashed', {
         serverId: server.id,
         serverName: server.name,
         title: `${server.name} ist abgestürzt`,
-        message: tail
-          ? ['Letzte Zeilen aus dem Protokoll:', '```', tail, '```'].join('\n')
-          : 'Der Container hat sich unerwartet beendet.',
+        message:
+          schuld +
+          (tail
+            ? ['Letzte Zeilen aus dem Protokoll:', '```', tail, '```'].join('\n')
+            : 'Der Container hat sich unerwartet beendet.'),
       });
-      continue;
     }
 
     if (wasUp && !isUp) {

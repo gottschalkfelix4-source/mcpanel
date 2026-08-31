@@ -12,6 +12,7 @@ import { CONTENT_KIND_BY_TYPE } from '../../lib/types';
 import type { ContainerStats, PowerState, ServerDetail } from '../../lib/types';
 import { Button, ConfirmDialog, ErrorNote, LoadingBlock, StateBadge, useToast } from '../../components/ui';
 import { BlockIcon } from '../../components/pixel';
+import { CrashDialog } from '../../components/CrashDialog';
 import { TYPE_LOOK } from '../../components/ServerCard';
 
 export interface ServerContext {
@@ -266,6 +267,13 @@ export default function ServerLayout() {
       </div>
 
       <Outlet context={context} />
+
+      <CrashDialog
+        serverId={server.id}
+        state={state}
+        canManage={can('modpack.manage')}
+        onRestart={() => power.mutate('start')}
+      />
 
       <ConfirmDialog
         open={confirmStop}

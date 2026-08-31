@@ -279,3 +279,17 @@ export interface NotifyListResponse {
   defaults: string[];
   canManage: boolean;
 }
+
+/** Auswertung des Protokolls nach einem Absturz – siehe CrashDialog. */
+export interface CrashSuspect {
+  filename: string | null;
+  reference: string;
+  enabled: boolean;
+}
+
+export interface CrashDiagnosis {
+  headline: string;
+  reason: string;
+  suspect: CrashSuspect | null;
+  excerpt: string[];
+}

@@ -10,6 +10,8 @@ import { downloadToFile } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
 import * as curseforge from '../providers/curseforge.js';
 import { contentDir, contentDirName, contentKindFor } from '../services/content.js';
+import { analyseCrash } from '../services/crashAnalysis.js';
+import * as dockerSvc from '../services/docker.js';
 
 /**
  * Einzelne Mods bzw. Plugins eines Servers. Beides ist derselbe Vorgang - eine
@@ -116,5 +118,20 @@ export default async function contentRoutes(app: FastifyInstance) {
       body.filenames.join(', ').slice(0, 200),
     );
     return { ok: true };
+  });
+
+  /**
+   * Warum sich der Server beendet hat. Liefert `null`, wenn sich im Protokoll
+   * keine einzelne Datei benennen laesst - lieber nichts sagen als die falsche
+   * Mod beschuldigen.
+   */
+  app.get('/diagnose', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.CONSOLE_READ);
+    const dir = contentDir(access.server);
+    if (!dir) return { diagnosis: null };
+
+    const log = await dockerSvc.tailLogs(access.server, 200).catch(() => '');
+    const dateien = await fs.readdir(dir).catch(() => [] as string[]);
+    return { diagnosis: analyseCrash(log, dateien) };
   });
 }
