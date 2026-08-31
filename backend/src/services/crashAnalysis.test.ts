@@ -126,3 +126,49 @@ describe('analyseCrash – weitere Fehlerbilder', () => {
     expect(analyseCrash('   ', ['foo.jar'])).toBeNull();
   });
 });
+
+/**
+ * Zweiter echter Fall, ebenfalls woertlich vom Testserver: Fabric bricht mit
+ * einer Abhaengigkeitsmeldung ab. Der Stacktrace enthaelt dann NUR
+ * Loader-Klassen - die Mod steht ausschliesslich im Fliesstext.
+ */
+const ECHTE_ABHAENGIGKEIT = `
+[08:15:23] [main/INFO]: Immediate reason: [HARD_DEP_NO_CANDIDATE missingmodschecker 1.0.1 {depends txnilib @ [*]}]
+[08:15:23] [main/ERROR]: Incompatible mods found!
+net.fabricmc.loader.impl.FormattedException: Some of your mods are incompatible with the game or each other!
+A potential solution has been determined, this may resolve your problem:
+	 - Install txnilib, any version.
+	 - Install fabric-api, version 0.83.0 or later.
+More details:
+	 - Mod 'Missing Mods Checker' (missingmodschecker) 1.0.1 requires any version of txnilib, which is missing!
+	 - Mod 'Missing Mods Checker' (missingmodschecker) 1.0.1 requires any version of fabric-api, which is missing!
+	at net.fabricmc.loader.impl.FormattedException.ofLocalized(FormattedException.java:51) ~[fabric-loader-0.19.3.jar:?]
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23) ~[fabric-loader-0.19.3.jar:?]
+`;
+
+describe('analyseCrash - fehlende Abhaengigkeit (Fabric)', () => {
+  const dateien = ['missingmodschecker-fabric-1.0.1-1.20.1.jar', 'sonstwas-1.0.jar'];
+  const d = analyseCrash(ECHTE_ABHAENGIGKEIT, dateien)!;
+
+  it('findet die Datei ueber die Mod-ID trotz Versionsanhang', () => {
+    expect(d.suspect?.filename).toBe('missingmodschecker-fabric-1.0.1-1.20.1.jar');
+  });
+
+  it('nennt die Mod beim Anzeigenamen', () => {
+    expect(d.headline).toContain('Missing Mods Checker');
+  });
+
+  it('sagt, was fehlt', () => {
+    expect(d.reason).toContain('txnilib');
+    expect(d.reason).toContain('fabric-api');
+  });
+
+  it('laesst sich nicht vom Loader im Stacktrace ablenken', () => {
+    expect(d.suspect?.reference).not.toMatch(/fabric-loader/);
+  });
+
+  it('zeigt die erklaerenden Zeilen, nicht den Stacktrace', () => {
+    expect(d.excerpt.join(' ')).toContain('requires');
+    expect(d.excerpt.join(' ')).not.toContain('KnotServer');
+  });
+});

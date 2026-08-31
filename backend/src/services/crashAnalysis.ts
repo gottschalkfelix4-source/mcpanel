@@ -106,6 +106,26 @@ function findeDatei(referenz: string, dateien: string[]): string | null {
   );
 }
 
+/**
+ * Fabrics Abhaengigkeitsfehler nennt die Mod im Klartext:
+ *   - Mod 'Missing Mods Checker' (missingmodschecker) 1.0.1 requires any
+ *     version of txnilib, which is missing!
+ * Das ist der haeufigste Startfehler ueberhaupt und praeziser als jeder
+ * Stacktrace - dort stehen bei diesem Fall nur Loader-Klassen.
+ */
+function fabricAbhaengigkeit(log: string): { modId: string; name: string; fehlt: string[] } | null {
+  const re = /Mod '([^']+)' \(([A-Za-z0-9_.-]+)\).*? requires .*?(?:version of |version )([A-Za-z0-9_.-]+), which is missing/g;
+  const treffer = [...log.matchAll(re)];
+  if (treffer.length === 0) return null;
+
+  // Mehrere Zeilen betreffen meist dieselbe Mod mit mehreren Luecken.
+  const erste = treffer[0];
+  const fehlt = [
+    ...new Set(treffer.filter((t) => t[2] === erste[2]).map((t) => t[3])),
+  ];
+  return { modId: erste[2], name: erste[1], fehlt };
+}
+
 /** Alle Jar-Herkünfte einer Stacktrace-Zeile, von oben nach unten. */
 function jarsAusStacktrace(zeilen: string[]): string[] {
   const treffer: string[] = [];
@@ -126,6 +146,26 @@ function jarsAusStacktrace(zeilen: string[]): string[] {
 export function analyseCrash(log: string, dateien: string[]): CrashDiagnosis | null {
   if (!log.trim()) return null;
   const zeilen = log.split(/\r?\n/);
+
+  const dep = fabricAbhaengigkeit(log);
+  if (dep) {
+    const datei = findeDatei(dep.modId, dateien);
+    return {
+      headline: `"${dep.name}" fehlt eine Abhängigkeit.`,
+      reason:
+        `Die Mod verlangt ${dep.fehlt.join(' und ')} – das liegt nicht im Ordner. ` +
+        'Entweder die fehlende Mod nachinstallieren oder diese hier abschalten.',
+      suspect: {
+        filename: datei,
+        reference: datei ?? dep.modId,
+        enabled: datei ? !datei.endsWith('.disabled') : false,
+      },
+      excerpt: zeilen
+        .filter((z) => /requires|Incompatible mods|Install /.test(z))
+        .slice(0, 8)
+        .map((z) => z.replace(/\s+$/, '')),
+    };
+  }
 
   const muster = MUSTER.find((m) => m.test.test(log));
 
