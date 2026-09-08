@@ -189,6 +189,38 @@ veröffentlicht hat, steht auf der Docker-Seite *update ready*, und ein Klick au
 Datenbank liegen im `/data`-Volume und bleiben davon unberührt; das Schema wird beim
 Start automatisch abgeglichen.
 
+#### Eigene Template-Einstellungen erhalten
+
+Ein Image-Update muss den **bestehenden Container mit seiner gespeicherten
+Benutzervorlage** aktualisieren. Nicht über „Add Container“ die Standardvorlage
+neu importieren und nicht die lokale `my-*.xml` durch die Datei aus GitHub ersetzen.
+Die Werte im veröffentlichten Template sind ausschließlich Vorgaben für Neuinstallationen.
+Insbesondere der bereits konfigurierte Hostpfad für `/data` muss unverändert bleiben.
+
+Im Projekt ist `<TemplateURL/>` absichtlich leer. Das verhindert bei Unraid-Versionen
+mit automatischem Template-Abgleich das erneute Übernehmen von Template-Vorgaben.
+Die Image-Update-Erkennung über Repository/Registry bleibt davon unabhängig.
+Im aktuellen [Unraid-Quellcode](https://github.com/unraid/webgui/blob/master/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php)
+ist `updateUserTemplate()` ohnehin deaktiviert; ein beobachteter Reset kann deshalb
+auch eine andere Ursache haben. Ohne Prüfung der installierten Unraid-Version und
+Benutzervorlage ist die Ursache nicht abschließend geklärt.
+
+**Bereits installierte Container:** Ein neuer Image-Build verändert die gespeicherte
+Unraid-Vorlage nicht. Die eigene MCPanel-Datei unter
+`/boot/config/plugins/dockerMan/templates-user/` (üblicherweise `my-MCPanel.xml`)
+einmal sichern und ausschließlich den Inhalt von `<TemplateURL>…</TemplateURL>`
+leeren, sodass `<TemplateURL/>` stehen bleibt. Alle `Config`-Werte, Pfade, Ports,
+Netzwerke und zusätzlichen Parameter unverändert lassen. Das ist eine Änderung
+an Unraids gespeicherter Vorlage, nicht am Datenverzeichnis des Panels.
+
+Falls Werte schon zurückgesetzt wurden, zuerst den tatsächlich verwendeten alten
+Datenpfad aus einer gesicherten Benutzervorlage bzw. der bisherigen Mount-Konfiguration
+wieder eintragen. Ein neuer leerer Datenordner wirkt sonst wie eine Neuinstallation;
+das Panel kann den alten Hostpfad aus einem falsch gemounteten Ordner nicht rekonstruieren.
+Vor dem nächsten Update die gespeicherten Werte mit dem danach verwendeten Container
+vergleichen. Bei weiterhin auftretenden Resets Unraid-Version, Update-Weg und die
+betroffenen Feldnamen prüfen; keine Kennwörter oder vollständigen Vorlagen öffentlich posten.
+
 Welcher Stand gerade läuft, steht im Panel unter *Einstellungen → Systemkonfiguration*
 als **Panel-Fassung** (Kurz-Commit und Baudatum).
 

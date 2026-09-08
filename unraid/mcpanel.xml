@@ -22,7 +22,7 @@ Modpacks kommen von Modrinth und CurseForge, inklusive Updater; Serverpakete hab
 
 Beim ersten Aufruf fuehrt ein Assistent durch die Einrichtung - es ist nichts vorzubereiten.
 
-Updates meldet Unraid von selbst: erscheint auf der Docker-Seite "update ready", genuegt ein Klick auf "Apply Update". Serverdaten, Welten und Datenbank liegen im Datenverzeichnis und bleiben dabei unberuehrt. Welche Fassung laeuft, steht im Panel unter Einstellungen - Systemkonfiguration.
+Updates meldet Unraid von selbst: erscheint auf der Docker-Seite "update ready", genuegt ein Klick auf "Apply Update". Dabei die gespeicherte Benutzervorlage verwenden, nicht die Standardvorlage erneut importieren. Eigene Pfade, Ports und Variablen muessen erhalten bleiben. Serverdaten, Welten und Datenbank liegen im eingetragenen Datenverzeichnis. Welche Fassung laeuft, steht im Panel unter Einstellungen - Systemkonfiguration.
 
 WICHTIG - zwei Dinge muessen stimmen:
 
@@ -34,7 +34,14 @@ Die Minecraft-Server oeffnen ihre Ports selbst auf dem Host (Vorgabe 25565-25700
   </Overview>
   <Category>GameServers: Tools:Utilities Network:Web</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/gottschalkfelix4-source/mcpanel/main/unraid/mcpanel.xml</TemplateURL>
+  <!--
+    Absichtlich leer: gespeicherte Benutzervorlagen duerfen nicht automatisch
+    aus der Standardvorlage ergaenzt/geaendert werden. Image-Updates verwenden
+    Repository/Registry und bleiben davon unabhaengig moeglich.
+    Bestehende Installationen: TemplateURL einmal in der lokalen my-*.xml leeren;
+    niemals diese Standardvorlage ueber eine konfigurierte Benutzervorlage kopieren.
+  -->
+  <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/gottschalkfelix4-source/mcpanel/main/frontend/public/icons/icon-192.png</Icon>
   <DonateText/>
   <DonateLink/>
