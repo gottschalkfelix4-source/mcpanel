@@ -156,6 +156,26 @@ Beispieldatei wäre schlimmer als eines, das noch nach der Einrichtung fragt. In
 
 ---
 
+### Große Modpacks und HDD-Speicher
+
+Downloads haben keine feste Gesamtlaufzeitgrenze. Der Server muss innerhalb von
+30 Sekunden Antwort-Header liefern; danach werden Transfers erst nach fünf Minuten
+ohne Fortschritt abgebrochen. Aktive Downloads großer Archive dürfen länger laufen.
+Bei einem fehlgeschlagenen Versuch wird erneut heruntergeladen; eine Fortsetzung
+per HTTP-Range ist derzeit nicht implementiert. Bestehende Zieldateien werden erst
+nach einem vollständig erfolgreichen Download atomar ersetzt.
+
+Bei Modpack-Updates werden alte Mods und ersetzte Scripts nicht unnötig in den
+Arbeitsordner kopiert. Für die übrigen Dateien wird eine platzsparende Reflink-Kopie
+versucht, wenn das Dateisystem sie unterstützt; andernfalls wird normal kopiert.
+Der getrennte Arbeitsstand für sichere Rücknahme bleibt erhalten und kann auf HDDs
+weiterhin Zeit und zusätzlichen Platz benötigen, insbesondere bei großen Welten.
+
+Einzelne Mods laden ohne Speicherkontingent mit bis zu vier gleichzeitigen Transfers.
+Mit Kontingent erfolgen sie nacheinander und mit fortgeschriebenem Restplatzbudget,
+ohne vor jeder Mod den vollständigen Dateibaum erneut zu zählen. Der Archivfortschritt
+wird höchstens alle zwei Sekunden in der Datenbank aktualisiert.
+
 ## Unraid
 
 Im Ordner [`unraid/`](unraid/mcpanel.xml) liegt eine Template-Datei. In Unraid unter

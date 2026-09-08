@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { byteLimit } from './byteLimit.js';
 
@@ -10,6 +10,10 @@ export interface DownloadOptions {
   onProgress?: (received: number, total: number | null) => void;
   retries?: number;
   maxBytes?: number;
+  /** Timeout for response headers, independent of the size of the download. */
+  headersTimeoutMs?: number;
+  /** Maximum time without pipeline progress; active transfers have no total deadline. */
+  stallTimeoutMs?: number;
 }
 
 /** Lädt eine URL in eine Datei. Legt fehlende Ordner an, räumt bei Fehlern auf. */
@@ -24,33 +28,50 @@ export async function downloadToFile(
   const temporary = path.join(tempDir, 'content');
   let lastError: unknown;
   try {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(120_000) });
-      if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status} bei ${url}`);
-      }
-      const total = Number(res.headers.get('content-length')) || null;
-      let received = 0;
-
-      const source = Readable.fromWeb(res.body as never);
-      source.on('data', (chunk: Buffer) => {
-        received += chunk.length;
-        onProgress?.(received, total);
-      });
-
-      await pipeline(source, byteLimit(options.maxBytes), fs.createWriteStream(temporary));
-      await fsp.rename(temporary, destination);
-      return received;
-    } catch (err) {
-      lastError = err;
-      await fsp.rm(temporary, { force: true }).catch(() => {});
-      if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, 500 * attempt));
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const arm = (ms: number, message: string) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => controller.abort(new Error(message)), ms);
+        timer.unref();
+      };
+      try {
+        arm(options.headersTimeoutMs ?? 30_000, 'Download-Server antwortet nicht rechtzeitig');
+        const res = await fetch(url, { headers, redirect: 'follow', signal: controller.signal });
+        if (!res.ok || !res.body) {
+          await res.body?.cancel();
+          throw new Error(`HTTP ${res.status} bei ${url}`);
+        }
+        const total = Number(res.headers.get('content-length')) || null;
+        let received = 0;
+        const progress = () => arm(options.stallTimeoutMs ?? 300_000, 'Download ohne Fortschritt: Netzwerk oder Datenträger antwortet nicht');
+        progress();
+        const meter = new Transform({ transform(chunk: Buffer, _encoding, callback) {
+          received += chunk.length;
+          progress();
+          onProgress?.(received, total);
+          callback(null, chunk);
+        } });
+        await pipeline(
+          Readable.fromWeb(res.body as never), byteLimit(options.maxBytes), meter,
+          fs.createWriteStream(temporary, { highWaterMark: 1024 * 1024 }),
+          { signal: controller.signal },
+        );
+        clearTimeout(timer);
+        await fsp.rename(temporary, destination);
+        return received;
+      } catch (err) {
+        lastError = controller.signal.aborted ? controller.signal.reason : err;
+        await fsp.rm(temporary, { force: true }).catch(() => {});
+        if ((err as { statusCode?: number }).statusCode === 400) throw err;
+        if (attempt < retries) await new Promise(r => setTimeout(r, 500 * attempt));
+      } finally {
+        clearTimeout(timer);
+        controller.abort();
       }
     }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true });
   }

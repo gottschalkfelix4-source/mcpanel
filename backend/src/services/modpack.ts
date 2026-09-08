@@ -4,6 +4,7 @@ import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths, 
 import { parseProperties } from './properties.js';
 import { withServerOperation } from './operations.js';
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import type { Server } from '@prisma/client';
@@ -200,8 +201,8 @@ async function installModpackImpl(
       headers: request.provider === 'modrinth' ? modrinth.modrinthHeaders() : undefined,
       onProgress: throttle((received, total) => {
         const pct = total ? (received / total) * 100 : 0;
-        void task.update(10 + pct * 0.1, `Modpack wird geladen … ${formatBytes(received)}`);
-      }),
+        void task.update(10 + pct * 0.1, `Modpack wird geladen … ${formatBytes(received)}${total ? ` / ${formatBytes(total)}` : ''}`).catch(() => {});
+      }, 2000),
     });
     await task.log(`Archiv geladen: ${archiveSource.filename}`);
   }
@@ -227,7 +228,14 @@ async function installModpackImpl(
   const original = serverDir(serverId);
   const { stage: dir } = restorePaths(serverId);
   await fs.mkdir(original, { recursive: true });
-  await fs.cp(original, dir, { recursive: true });
+  await task.update(23, 'Vorhandene Daten werden für die sichere Installation vorbereitet …');
+  // Reflink where supported; otherwise copy. Hardlinks would compromise rollback.
+  // Old mods/scripts are discarded on updates, so never copy them just to delete them.
+  const replaced = new Set(['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']);
+  await fs.cp(original, dir, {
+    recursive: true, mode: fsConstants.COPYFILE_FICLONE,
+    filter: source => !isUpdate || !replaced.has(path.relative(original, source).split(path.sep).join('/')),
+  });
   const rawProperties = await fs.readFile(safePath(original, 'server.properties'), 'utf8').catch(() => '');
   const worldName = parseProperties(rawProperties)['level-name'] || 'world';
   const protectedPath = (relative: string) => isProtectedPackPath(relative, worldName, request.keepConfig ?? false);
@@ -258,7 +266,11 @@ async function installModpackImpl(
   // --- 5. Mods herunterladen ----------------------------------------------
   const total = plan.downloads.length;
   let completed = 0;
-  const concurrency = 1; // A shared disk budget must include each completed file before the next download.
+  // With a quota, count once and update the budget after each atomic replacement.
+  // Without a quota, a small worker pool overlaps CDN latency without flooding HDDs.
+  const limited = server.quotaDiskMb > 0;
+  const concurrency = limited ? 1 : 4;
+  let remaining = limited ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity;
   const queue = [...plan.downloads];
   const failures: string[] = [];
 
@@ -273,8 +285,10 @@ async function installModpackImpl(
       for (const candidate of item.urls) {
         try {
           const previous = await fs.stat(target).catch(() => null);
-          const budget = server.quotaDiskMb > 0 ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) + (previous?.size ?? 0) : Infinity;
-          await downloadToFile(candidate, target, { retries: 2, maxBytes: budget });
+          const oldSize = previous?.size ?? 0;
+          const budget = remaining + oldSize;
+          const size = await downloadToFile(candidate, target, { retries: 2, maxBytes: budget });
+          if (limited) remaining -= size - oldSize;
           ok = true;
           break;
         } catch {

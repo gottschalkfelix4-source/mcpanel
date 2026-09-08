@@ -84,3 +84,33 @@ it('BUG-09: rejects installation while another request owns the server', async (
   finally { release(); await active; }
   expect(m.stop).not.toHaveBeenCalled();
 });
+
+it('downloads independent mods concurrently without a quota', async () => {
+  archive(Array.from({ length: 8 }, (_, i) => ({ path: `mods/new-${i}.jar`, downloads: [`https://fixture.test/mod-${i}`] })));
+  const download = m.download.getMockImplementation()!;
+  let active = 0, peak = 0;
+  m.download.mockImplementation(async (...args) => {
+    if (String(args[0]).endsWith('/archive')) return download(...args);
+    active++; peak = Math.max(peak, active);
+    try { await new Promise(resolve => setTimeout(resolve, 10)); return await download(...args); }
+    finally { active--; }
+  });
+  await installModpack('a', request, task());
+  expect(peak).toBeGreaterThan(1);
+  expect(peak).toBeLessThanOrEqual(4);
+  expect(await fs.readFile(path.join(dir(), 'mods/new-7.jar'), 'utf8')).toBe('new mod');
+});
+
+it('keeps quota accounting incremental instead of scanning the tree per mod', async () => {
+  m.row.quotaDiskMb = 1;
+  archive(Array.from({ length: 12 }, (_, i) => ({ path: `mods/new-${i}.jar`, downloads: [`https://fixture.test/mod-${i}`] })));
+  const reads = vi.spyOn(fs, 'readdir');
+  try {
+    await installModpack('a', request, task());
+    const stageScans = reads.mock.calls.filter(([file]) => String(file) === dir() + '.restore-stage');
+    expect(stageScans.length).toBeLessThanOrEqual(3);
+    const budgets = m.download.mock.calls.filter(([url]) => !String(url).endsWith('/archive')).map(args => args[2].maxBytes);
+    expect(budgets).toHaveLength(12);
+    for (let i = 1; i < budgets.length; i++) expect(budgets[i]).toBe(budgets[i - 1] - 7);
+  } finally { reads.mockRestore(); }
+});
