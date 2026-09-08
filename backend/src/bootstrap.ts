@@ -1,8 +1,11 @@
+import { hasInterruptedRestore, recoverInterruptedRestore } from './services/restoreRecovery.js';
+import { reconcileProxy } from './services/proxy.js';
 import bcrypt from 'bcryptjs';
+import path from 'node:path';
 import { config, setHostDataRoot } from './config.js';
 import { prisma } from './db.js';
 import { ensureDataDirs, runAutostart } from './services/serverManager.js';
-import { detectHostDataRoot, ensureNetwork } from './services/docker.js';
+import { detectHostDataRoot, ensureNetwork, stop, recreateContainer } from './services/docker.js';
 import { startWatcher } from './services/notify.js';
 import { applyTarget, getTarget } from './services/backupTarget.js';
 import { startScheduler } from './services/automation.js';
@@ -50,6 +53,7 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
       log(`Host-Datenpfad automatisch erkannt: ${detected}`);
     }
   }
+  if (!path.isAbsolute(config.hostDataRoot) && !path.win32.isAbsolute(config.hostDataRoot)) throw new Error('HOST_DATA_ROOT muss ein absoluter Pfad auf dem Docker-Host sein (oder leer für automatische Erkennung).');
   log(`Datenverzeichnis: ${config.dataRoot} (Host: ${config.hostDataRoot})`);
 
   try {
@@ -97,7 +101,14 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
     data: { status: 'FAILED', error: 'Panel wurde neu gestartet' },
   });
 
+  for (const server of await prisma.server.findMany()) {
+    const interrupted = await hasInterruptedRestore(server.id);
+    if (interrupted) await stop(server);
+    await recoverInterruptedRestore(server.id);
+    if (interrupted) await recreateContainer(await prisma.server.findUniqueOrThrow({ where: { id: server.id } }));
+  }
   void runAutostart();
+  await reconcileProxy().catch(err => log(`Proxy: ${err.message}`));
 
   // Eine eingerichtete Samba-Freigabe muss nach jedem Neustart wieder
   // eingehaengt werden – der Mount lebt nur im Container.

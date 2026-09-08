@@ -62,9 +62,10 @@ stop() {
   [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null || true
   nginx -s quit 2>/dev/null || true
   su-exec postgres pg_ctl -D "$PGDATA" -m fast -w -t 30 stop 2>/dev/null || true
-  exit 0
+  exit "${1:-0}"
 }
-trap stop TERM INT
+NODE_PID=''
+trap 'stop 0' TERM INT
 
 # --- Backend ---------------------------------------------------------------
 log "Schema wird abgeglichen ..."
@@ -83,7 +84,7 @@ while [ $i -lt 60 ]; do
   # Ist der Node-Prozess weg, hat der Start nicht geklappt.
   if ! kill -0 "$NODE_PID" 2>/dev/null; then
     log "Backend konnte nicht starten"
-    exit 1
+    stop 1
   fi
   i=$((i + 1))
   sleep 1
@@ -91,7 +92,14 @@ done
 
 # --- Weboberflaeche --------------------------------------------------------
 log "Weboberflaeche auf Port 8080"
-nginx
+nginx -g 'daemon off;' &
+NGINX_PID=$!
+POSTGRES_PID=$(head -n 1 "$PGDATA/postmaster.pid")
 
-# Solange das Backend laeuft, laeuft der Container.
-wait "$NODE_PID"
+# Every critical process must stay alive; Docker health alone does not restart it.
+while kill -0 "$NODE_PID" 2>/dev/null && kill -0 "$NGINX_PID" 2>/dev/null && kill -0 "$POSTGRES_PID" 2>/dev/null; do
+  sleep 2 &
+  wait $! || true
+done
+log "Ein kritischer Dienst wurde beendet"
+stop 1

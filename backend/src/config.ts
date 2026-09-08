@@ -67,7 +67,7 @@ export const config = {
    * Minecraft-Container). Wird beim Start ueberschrieben, wenn er sich aus
    * den eigenen Mounts ablesen laesst - siehe detectHostDataRoot().
    */
-  hostDataRoot: process.env.HOST_DATA_ROOT ?? process.env.DATA_ROOT ?? path.resolve(process.cwd(), 'data'),
+  hostDataRoot: process.env.HOST_DATA_ROOT?.trim() || process.env.DATA_ROOT || path.resolve(process.cwd(), 'data'),
 
   portRange: {
     min: Number(process.env.MC_PORT_MIN ?? 25565),

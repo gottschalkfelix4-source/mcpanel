@@ -37,6 +37,7 @@ model User {
   email        String   @unique
   username     String   @unique
   passwordHash String
+  sessionVersion Int @default(0)
   role         Role     @default(USER)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
@@ -58,6 +59,8 @@ model Server {
   containerId String?
   containerName String   @unique
   port        Int        @unique
+  directConnect Boolean @default(true)
+  hostnames ServerHostname[]
   rconPort    Int
   rconPassword String
   memoryMb    Int        @default(4096)
@@ -108,6 +111,14 @@ model ServerMember {
   @@unique([serverId, userId])
 }
 
+model ServerHostname {
+  hostname String @id
+  serverId String
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  position Int @default(0)
+  @@index([serverId])
+}
+
 model Backup {
   id          String   @id @default(cuid())
   serverId    String
@@ -116,6 +127,8 @@ model Backup {
   filename    String
   /// Liegt zusaetzlich in der Zweitablage
   mirrored    Boolean  @default(false)
+  targetId String?
+  target BackupTargetVersion? @relation(fields: [targetId], references: [id])
   sizeBytes   BigInt   @default(0)
   note        String   @default("")
   createdById String?
@@ -123,6 +136,12 @@ model Backup {
   createdAt   DateTime @default(now())
 
   @@index([serverId])
+}
+
+model BackupTargetVersion {
+  id String @id
+  config Json
+  backups Backup[]
 }
 
 model Task {

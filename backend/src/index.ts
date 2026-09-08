@@ -68,6 +68,7 @@ app.setErrorHandler((error, _req, reply) => {
   if (error instanceof HttpError) {
     return reply.code(error.statusCode).send({ error: error.message });
   }
+  if ((error as { code?: string }).code === 'P2002') return reply.code(409).send({ error: 'Name, Subdomain oder Port ist bereits vergeben' });
   if ((error as { statusCode?: number }).statusCode === 413) {
     return reply.code(413).send({ error: 'Datei ist zu groß' });
   }

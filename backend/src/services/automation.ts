@@ -1,3 +1,4 @@
+import { withServerOperation } from './operations.js';
 import type { Automation, Server } from '@prisma/client';
 import { prisma } from '../db.js';
 import { audit } from '../auth/context.js';
@@ -57,7 +58,7 @@ export async function runAutomation(
       return finish(automation, 'UEBERSPRUNGEN', 'Server läuft nicht – Aktion ausgelassen');
     }
 
-    const message = await execute(automation.action as ActionType, server, config, running);
+    const message = await withServerOperation(server.id, 'Automatisierung', () => execute(automation.action as ActionType, server, config, running));
     await audit(automation.createdById, server.id, `automation.${automation.action.toLowerCase()}`,
       `${automation.name} (${origin})`);
 
@@ -158,8 +159,8 @@ async function execute(
           },
           task,
         );
-      });
-      return `Update auf ${info.latest.name} gestartet`;
+      }, true);
+      return `Update auf ${info.latest.name} abgeschlossen`;
     }
 
     default:
@@ -253,7 +254,7 @@ async function tick(log: (msg: string) => void): Promise<void> {
     if (!server) continue;
     const { state } = await dockerSvc.getState(server);
     const isRunning = state === 'running' || state === 'starting';
-    if (wasRunning.get(serverId) && state === 'error') crashed.add(serverId);
+    if (wasRunning.get(serverId) && state === 'error' && !dockerSvc.wasPlannedStop(serverId)) crashed.add(serverId);
     wasRunning.set(serverId, isRunning);
   }
 

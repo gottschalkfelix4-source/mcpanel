@@ -17,6 +17,8 @@ import {
 } from '../services/serverManager.js';
 import { assertMemoryAllowed, quotaState } from '../services/quota.js';
 import { getPublicHost } from '../services/settings.js';
+import { getProxyConfig, normalizeHostnames, syncProxyRoutes } from '../services/proxy.js';
+import { withServerOperation, withQueuedOperation } from '../services/operations.js';
 
 import filesRoutes from './files.js';
 import configRoutes from './config.js';
@@ -52,6 +54,7 @@ const quotaSchema = z.object({
 });
 
 const updateSchema = z.object({
+  port: z.number().int().min(1024).max(65535).optional(),
   name: z.string().min(2).max(48).optional(),
   description: z.string().max(280).optional(),
   type: z.enum(SERVER_TYPES).optional(),
@@ -82,7 +85,7 @@ const powerSchema = z.object({
 });
 
 const commandSchema = z.object({
-  command: z.string().min(1).max(1000),
+  command: z.string().min(1).max(1000).regex(/^[^\r\n\0]+$/, 'Ungültiger Befehl'),
 });
 
 export default async function serverRoutes(app: FastifyInstance) {
@@ -169,6 +172,11 @@ export default async function serverRoutes(app: FastifyInstance) {
     const access = await requireServer(req, PERMISSIONS.SETTINGS_EDIT);
     const data = updateSchema.parse(req.body);
     const quota = quotaSchema.parse(req.body);
+    if (data.port !== undefined && !access.isAdmin) throw forbidden('Ports ändern nur Administratoren');
+    if (data.port !== undefined) {
+      const proxy = await getProxyConfig();
+      if (proxy.enabled && data.port === proxy.port) throw badRequest('Dieser Port ist für den Minecraft-Proxy reserviert');
+    }
 
     const wantsQuota = Object.values(quota).some((v) => v !== undefined);
     if (wantsQuota && !access.isAdmin) {
@@ -194,8 +202,43 @@ export default async function serverRoutes(app: FastifyInstance) {
     if (!access.isOwner && !access.isAdmin) throw forbidden('Nur der Besitzer kann den Server löschen');
     const deleteFiles = (req.query as { files?: string }).files !== 'keep';
     await deleteServer(access.server, deleteFiles);
+    await syncProxyRoutes();
     await audit(req.user!.id, null, 'server.delete', access.server.name);
     return { ok: true };
+  });
+
+  app.put('/:id/proxy', async (req) => {
+    const access = await requireServer(req);
+    if (!access.isAdmin) throw forbidden('Subdomains verwalten nur Administratoren');
+    const body = z.object({ hostnames: z.array(z.string()), directConnect: z.boolean() }).parse(req.body);
+    const hostnames = normalizeHostnames(body.hostnames);
+    return withServerOperation(access.server.id, 'Subdomains ändern', () => withQueuedOperation('panel-proxy', 'Proxy-Konfiguration', async () => {
+      const previous = await prisma.serverHostname.findMany({ where: { serverId: access.server.id } });
+      await prisma.$transaction(async tx => {
+        await tx.serverHostname.deleteMany({ where: { serverId: access.server.id } });
+        await tx.serverHostname.createMany({ data: hostnames.map((hostname, position) => ({ hostname, position, serverId: access.server.id })) });
+      });
+      let changedServer: Server | null = null;
+      try {
+        const proxy = await getProxyConfig();
+        if (proxy.enabled && body.directConnect && access.server.port === proxy.port) throw badRequest('Direktport kollidiert mit dem Proxy-Port');
+        const { server } = await updateServerSettings(access.server, { directConnect: body.directConnect });
+        changedServer = server;
+        await syncProxyRoutes();
+        await audit(req.user!.id, server.id, 'proxy.hostnames', hostnames.join(', '));
+        return serializeServer(server);
+      } catch (err) {
+        await prisma.$transaction(async tx => {
+          await tx.serverHostname.deleteMany({ where: { serverId: access.server.id } });
+          await tx.serverHostname.createMany({ data: previous });
+        });
+        if (changedServer && changedServer.directConnect !== access.server.directConnect) {
+          await updateServerSettings(changedServer, { directConnect: access.server.directConnect });
+        }
+        await syncProxyRoutes().catch(() => {});
+        throw err;
+      }
+    }));
   });
 
   // --- Power -------------------------------------------------------------
@@ -235,6 +278,7 @@ export default async function serverRoutes(app: FastifyInstance) {
     const { command } = commandSchema.parse(req.body);
     const server = access.server;
 
+    return withServerOperation(server.id, 'Konsolenbefehl', async () => {
     const { state } = await dockerSvc.getState(server);
     if (state !== 'running') throw badRequest('Server läuft nicht');
 
@@ -248,6 +292,7 @@ export default async function serverRoutes(app: FastifyInstance) {
       await dockerSvc.writeStdin(server, clean);
       return { ok: true, via: 'stdin', response: '' };
     }
+    });
   });
 
   // --- Spieler & Stats ---------------------------------------------------

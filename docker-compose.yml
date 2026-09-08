@@ -35,7 +35,8 @@ services:
       # In-Container-Pfad der Daten
       DATA_ROOT: /data
       # Host-Pfad derselben Daten (für Bind-Mounts der MC-Container)
-      HOST_DATA_ROOT: ${HOST_DATA_ROOT:-./data}
+      HOST_DATA_ROOT: ${HOST_DATA_ROOT:-}
+      MC_IMAGE: ${MC_IMAGE:-}
       MC_PORT_MIN: ${MC_PORT_MIN:-25565}
       MC_PORT_MAX: ${MC_PORT_MAX:-25700}
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}

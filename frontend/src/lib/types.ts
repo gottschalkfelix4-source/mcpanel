@@ -40,6 +40,9 @@ export interface ServerSummary {
   memoryMb: number;
   port: number;
   address: string;
+  directAddress: string;
+  directConnect: boolean;
+  proxy: { enabled: boolean; port: number; hostnames: string[] };
   autoStart: boolean;
   state: PowerState;
   /** Docker-Healthcheck: healthy | starting | unhealthy | null */

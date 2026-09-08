@@ -63,22 +63,24 @@ export default function ConsoleTab() {
   useEffect(() => {
     const socket = getSocket();
 
-    const onHistory = (payload: { lines: string[] }) => {
+    const onHistory = (payload: { serverId?: string; lines: string[] }) => {
+      if (payload.serverId && payload.serverId !== server.id) return;
       setLines(payload.lines.map(cleanLine).filter((l) => l.length > 0).slice(-MAX_LINES));
     };
-    const onConsole = (payload: { lines: string[] }) => append(payload.lines);
-    const onConnect = () => setConnected(true);
+    const onConsole = (payload: { serverId?: string; lines: string[] }) => {
+      if (!payload.serverId || payload.serverId === server.id) append(payload.lines);
+    };
+    const onConnect = () => socket.emit('subscribe', { serverId: server.id }, (res: { ok: boolean; error?: string }) => {
+      setConnected(Boolean(res?.ok));
+      if (res?.error) toast.error(res.error);
+    });
     const onDisconnect = () => setConnected(false);
 
     socket.on('console:history', onHistory);
     socket.on('console', onConsole);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
-    setConnected(socket.connected);
-
-    socket.emit('subscribe', { serverId: server.id }, (res: { ok: boolean; error?: string }) => {
-      if (!res?.ok && res?.error) toast.error(res.error);
-    });
+    if (socket.connected) onConnect();
 
     return () => {
       socket.off('console:history', onHistory);

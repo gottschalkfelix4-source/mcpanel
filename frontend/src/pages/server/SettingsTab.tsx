@@ -8,6 +8,7 @@ import {
   Button, ConfirmDialog, Field, InfoNote, Panel, Toggle, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
+import ServerRouting from '../../components/ServerRouting';
 
 const SERVER_TYPES: ServerType[] = [
   'VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT', 'MODPACK',
@@ -69,7 +70,7 @@ export default function SettingsTab() {
         mcVersion,
         memoryMb,
         autoStart,
-        extraEnv: Object.fromEntries(env.filter(([k]) => k.trim())),
+        ...(environment.isSuccess ? { extraEnv: Object.fromEntries(env.filter(([k]) => k.trim())) } : {}),
         ...(server.isAdmin
           ? {
               quotaDiskMb: quotaDiskGb.trim() ? Math.round(Number(quotaDiskGb) * 1024) : 0,
@@ -180,6 +181,7 @@ export default function SettingsTab() {
       </Panel>
 
       {/* Kontingent */}
+      {server.isAdmin && <ServerRouting key={server.id} />}
       <Panel
         title="Kontingent"
         icon={<Gauge size={16} />}

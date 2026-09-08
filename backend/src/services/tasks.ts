@@ -1,5 +1,5 @@
 import { prisma } from '../db.js';
-import { conflict } from '../lib/errors.js';
+import { withServerOperation } from './operations.js';
 import { emitToServer } from '../ws/io.js';
 
 export interface TaskHandle {
@@ -79,7 +79,7 @@ export async function createTask(
  * naechtliche Sicherung waehrend eines Modpack-Updates, entstuende ein Archiv
  * des halb geleerten `mods/`-Ordners, das wie eine gueltige Sicherung aussieht.
  */
-const laufendeAufgabe = new Map<string, string>();
+
 
 const AUFGABEN_NAMEN: Record<string, string> = {
   'backup.create': 'Eine Sicherung',
@@ -94,40 +94,22 @@ export function runTask(
   serverId: string | null,
   type: string,
   fn: (task: TaskHandle) => Promise<void>,
+  waitForCompletion = false,
 ): Promise<string> {
-  // Synchron pruefen und belegen, damit zwei gleichzeitig eintreffende
-  // Anfragen nicht beide an createTask vorbeikommen.
-  if (serverId !== null) {
-    const laufend = laufendeAufgabe.get(serverId);
-    if (laufend) {
-      return Promise.reject(
-        conflict(`${aufgabenName(laufend)} läuft für diesen Server bereits. Bitte abwarten.`),
-      );
-    }
-    laufendeAufgabe.set(serverId, type);
-  }
-
-  const freigeben = () => {
-    if (serverId !== null) laufendeAufgabe.delete(serverId);
-  };
-
-  return createTask(serverId, type).then(
-    (task) => {
-      void (async () => {
-        try {
-          await fn(task);
-          await task.done();
-        } catch (err) {
-          await task.fail(err);
-        } finally {
-          freigeben();
-        }
-      })();
-      return task.id;
-    },
-    (err) => {
-      freigeben();
-      throw err;
-    },
-  );
+  return new Promise<string>((resolve, reject) => {
+    const execute = async () => {
+      const task = await createTask(serverId, type);
+      if (!waitForCompletion) resolve(task.id);
+      try {
+        await fn(task);
+        await task.done();
+        if (waitForCompletion) resolve(task.id);
+      } catch (err) {
+        await task.fail(err);
+        if (waitForCompletion) reject(err);
+      }
+    };
+    const running = serverId === null ? execute() : withServerOperation(serverId, aufgabenName(type), execute);
+    void running.catch(reject);
+  });
 }

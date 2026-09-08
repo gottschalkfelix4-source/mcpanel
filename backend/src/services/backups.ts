@@ -1,3 +1,10 @@
+import fsSync from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { byteLimit } from '../lib/byteLimit.js';
+import { dirSize } from './files.js';
+import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths } from './restoreRecovery.js';
+import { archivePath } from '../lib/safePath.js';
+import { withServerOperation } from './operations.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import * as tar from 'tar';
@@ -9,8 +16,8 @@ import * as dockerSvc from './docker.js';
 import { rconCommand } from './rcon.js';
 import { invalidateDiskUsage } from './diskUsage.js';
 import { notify } from './notify.js';
-import { fetchBackup, getTarget, isEnabled, putBackup, removeBackup } from './backupTarget.js';
-import { assertDiskAvailable, pruneToBackupLimit } from './quota.js';
+import { fetchBackup, getTarget, isEnabled, putBackup, removeBackup, registerTarget } from './backupTarget.js';
+import { assertDiskAvailable, pruneToBackupLimit, remainingDiskBytes } from './quota.js';
 import type { TaskHandle } from './tasks.js';
 
 export interface CreateBackupOptions {
@@ -32,12 +39,13 @@ const primaryPath = (serverId: string, filename: string) =>
 async function resolveArchive(
   serverId: string,
   filename: string,
+  targetId?: string | null,
 ): Promise<{ path: string; cleanup: () => Promise<void> } | null> {
   const primary = primaryPath(serverId, filename);
   if (await fs.stat(primary).catch(() => null)) {
     return { path: primary, cleanup: async () => {} };
   }
-  return fetchBackup(serverId, filename);
+  return fetchBackup(serverId, filename, targetId);
 }
 
 /** Ausweichordner, in den die Wiederherstellung den alten Stand beiseitelegt. */
@@ -46,7 +54,7 @@ const RESTORE_OLD = '.restore-old';
 /** Ordner, die nie in ein Backup wandern. */
 const EXCLUDE = new Set(['cache', 'logs', 'crash-reports', '.cache', 'libraries', RESTORE_OLD]);
 
-export async function createBackup(server: Server, options: CreateBackupOptions = {}) {
+async function createBackupUnlocked(server: Server, options: CreateBackupOptions = {}) {
   const { task } = options;
   const dir = serverDir(server.id);
   await fs.mkdir(dir, { recursive: true });
@@ -70,15 +78,22 @@ export async function createBackup(server: Server, options: CreateBackupOptions 
     try {
       await rconCommand(server, 'save-off');
       await rconCommand(server, 'save-all flush');
-    } catch {
-      /* RCON evtl. noch nicht bereit – Backup trotzdem versuchen */
+    } catch (err) {
+      await rconCommand(server, 'save-on').catch(() => {});
+      throw badRequest('Welt konnte nicht konsistent gespeichert werden; Backup wurde abgebrochen');
     }
   }
 
   try {
     await task?.update(25, 'Archiv wird erstellt …');
     const entries = (await fs.readdir(dir)).filter((e) => !EXCLUDE.has(e));
-    await tar.create({ gzip: true, file: target, cwd: dir, portable: true }, entries);
+    const budget = await remainingDiskBytes(server);
+    try {
+      await pipeline(tar.create({ gzip: true, cwd: dir, portable: true }, entries), byteLimit(budget), fsSync.createWriteStream(target));
+    } catch (err) {
+      await fs.rm(target, { force: true });
+      throw err;
+    }
   } finally {
     if (running) {
       await rconCommand(server, 'save-on').catch(() => {});
@@ -88,9 +103,13 @@ export async function createBackup(server: Server, options: CreateBackupOptions 
   const stat = await fs.stat(target);
   await task?.update(90, 'Backup wird registriert …');
 
+  const store = await getTarget();
+  const targetActive = isEnabled(store);
+  const targetId = targetActive ? await registerTarget(store) : null;
   const backup = await prisma.backup.create({
     data: {
       serverId: server.id,
+      targetId,
       name: options.name || `Backup ${new Date().toLocaleString('de-DE')}`,
       note: options.note ?? '',
       filename,
@@ -105,8 +124,6 @@ export async function createBackup(server: Server, options: CreateBackupOptions 
 
   // Zweitablage: fehlschlagen darf das, ohne die Sicherung zu entwerten –
   // die Hauptkopie liegt bereits vollstaendig auf der Platte.
-  const store = await getTarget();
-  const targetActive = isEnabled(store);
   let mirrored = false;
   let mirrorError: string | null = null;
   if (targetActive) {
@@ -114,7 +131,7 @@ export async function createBackup(server: Server, options: CreateBackupOptions 
     try {
       await putBackup(server.id, filename, primaryPath(server.id, filename), (percent) => {
         void task?.update(95 + Math.round(percent * 0.04), `Zweitkopie … ${percent} %`);
-      });
+      }, targetId);
       mirrored = true;
       await prisma.backup.update({ where: { id: backup.id }, data: { mirrored: true } });
     } catch (err) {
@@ -174,22 +191,11 @@ async function assertArchiveIntact(archive: string) {
  * abgebrochenen früheren Laufs benutzt – nach einem Neustart mitten in der
  * Wiederherstellung ist der Ausweichordner die einzige vollständige Kopie.
  */
-async function rollbackStash(dir: string, stash: string) {
-  for (const entry of await fs.readdir(dir)) {
-    if (EXCLUDE.has(entry)) continue;
-    await fs.rm(path.join(dir, entry), { recursive: true, force: true });
-  }
-  for (const entry of await fs.readdir(stash)) {
-    await fs.rename(path.join(stash, entry), path.join(dir, entry));
-  }
-  await fs.rm(stash, { recursive: true, force: true });
-}
-
-export async function restoreBackup(server: Server, backupId: string, task?: TaskHandle) {
+async function restoreBackupUnlocked(server: Server, backupId: string, task?: TaskHandle) {
   const backup = await prisma.backup.findFirst({ where: { id: backupId, serverId: server.id } });
   if (!backup) throw notFound('Backup nicht gefunden');
 
-  const source = await resolveArchive(server.id, backup.filename);
+  const source = await resolveArchive(server.id, backup.filename, backup.targetId);
   if (!source) throw notFound('Backup-Datei fehlt – weder in der Haupt- noch in der Zweitablage');
   const archive = source.path;
 
@@ -202,39 +208,33 @@ export async function restoreBackup(server: Server, backupId: string, task?: Tas
     await task?.update(20, 'Server wird gestoppt …');
     await dockerSvc.stop(server);
 
-    const dir = serverDir(server.id);
+    await recoverInterruptedRestore(server.id);
+    const { dir, old, stage } = restorePaths(server.id);
     await fs.mkdir(dir, { recursive: true });
-
-    await task?.update(35, 'Alter Stand wird beiseitegelegt …');
-    const stash = path.join(dir, RESTORE_OLD);
-    // Ein Lauf davor wurde abgebrochen – erst dessen Stand zurueckholen,
-    // sonst waere gleich die einzige vollstaendige Kopie geloescht.
-    if (await fs.stat(stash).then(() => true, () => false)) {
-      await task?.log('Abgebrochene Wiederherstellung gefunden – alter Stand wird zurückgeholt.');
-      await rollbackStash(dir, stash);
-    }
-
-    await fs.mkdir(stash);
-    for (const entry of await fs.readdir(dir)) {
-      if (EXCLUDE.has(entry)) continue;
-      // Geschwisterordner, also nie ueber eine Dateisystemgrenze hinweg.
-      await fs.rename(path.join(dir, entry), path.join(stash, entry));
-    }
-
-    await task?.update(50, 'Backup wird entpackt …');
+    await fs.mkdir(stage);
     try {
-      await tar.extract({ file: archive, cwd: dir });
+      await task?.update(35, 'Backup wird in einen separaten Ordner entpackt …');
+      await tar.extract({ file: archive, cwd: stage, strict: true, filter: (name, entry) => {
+        archivePath(stage, name);
+        if ('type' in entry && ['SymbolicLink', 'Link'].includes(entry.type)) throw badRequest('Links sind in Sicherungen nicht erlaubt');
+        return !EXCLUDE.has(name.split('/')[0]);
+      } });
+      for (const name of EXCLUDE) {
+        if (name === RESTORE_OLD) continue;
+        const source = path.join(dir, name);
+        if (await fs.stat(source).catch(() => null)) await fs.cp(source, path.join(stage, name), { recursive: true });
+      }
+      if (server.quotaDiskMb > 0 && await dirSize(stage) + await dirSize(serverBackupDir(server.id)) > server.quotaDiskMb * 1024 * 1024) throw badRequest('Wiederherstellung überschreitet das Speicherkontingent');
+      await task?.update(80, 'Geprüfter Stand wird übernommen …');
+      await commitRestore(server.id);
+      await dockerSvc.recreateContainer(server);
+      await finishRestore(server.id);
     } catch (err) {
-      await rollbackStash(dir, stash);
-      const grund = err instanceof Error ? err.message : String(err);
-      throw badRequest(`Backup konnte nicht entpackt werden – der alte Stand ist wieder da: ${grund}`);
+      await recoverInterruptedRestore(server.id);
+      throw err;
+    } finally {
+      await fs.rm(stage, { recursive: true, force: true });
     }
-
-    await task?.update(85, 'Alter Stand wird entfernt …');
-    await fs.rm(stash, { recursive: true, force: true });
-
-    await task?.update(90, 'Container wird neu aufgesetzt …');
-    await dockerSvc.recreateContainer(server);
     invalidateDiskUsage(server.id);
     await task?.update(100, 'Backup wiederhergestellt');
   } finally {
@@ -242,11 +242,11 @@ export async function restoreBackup(server: Server, backupId: string, task?: Tas
   }
 }
 
-export async function deleteBackup(server: Server, backupId: string) {
+async function deleteBackupUnlocked(server: Server, backupId: string) {
   const backup = await prisma.backup.findFirst({ where: { id: backupId, serverId: server.id } });
   if (!backup) throw notFound('Backup nicht gefunden');
   await fs.rm(path.join(serverBackupDir(server.id), backup.filename), { force: true });
-  await removeBackup(server.id, backup.filename);
+  await removeBackup(server.id, backup.filename, backup.targetId);
   await prisma.backup.delete({ where: { id: backup.id } });
   invalidateDiskUsage(server.id);
 }
@@ -257,7 +257,7 @@ export async function backupFilePath(
 ): Promise<{ path: string; filename: string; cleanup: () => Promise<void> }> {
   const backup = await prisma.backup.findFirst({ where: { id: backupId, serverId: server.id } });
   if (!backup) throw notFound('Backup nicht gefunden');
-  const source = await resolveArchive(server.id, backup.filename);
+  const source = await resolveArchive(server.id, backup.filename, backup.targetId);
   if (!source) throw badRequest('Backup-Datei fehlt');
   return { ...source, filename: `${slug(backup.name)}.tar.gz` };
 }
@@ -265,3 +265,9 @@ export async function backupFilePath(
 function slug(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'backup';
 }
+
+export const createBackup = (...args: Parameters<typeof createBackupUnlocked>) => withServerOperation(args[0].id, "createBackup", () => createBackupUnlocked(...args));
+
+export const restoreBackup = (...args: Parameters<typeof restoreBackupUnlocked>) => withServerOperation(args[0].id, "restoreBackup", () => restoreBackupUnlocked(...args));
+
+export const deleteBackup = (...args: Parameters<typeof deleteBackupUnlocked>) => withServerOperation(args[0].id, "deleteBackup", () => deleteBackupUnlocked(...args));

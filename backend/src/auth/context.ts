@@ -22,6 +22,10 @@ function extractToken(req: FastifyRequest): string | null {
 export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
   const token = extractToken(req);
   if (!token) throw unauthorized();
+  req.user = await authenticateToken(token);
+}
+
+export async function authenticateToken(token: string): Promise<User> {
   let payload;
   try {
     payload = verifyToken(token);
@@ -30,7 +34,8 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
   }
   const user = await prisma.user.findUnique({ where: { id: payload.sub } });
   if (!user || !user.active) throw unauthorized('Konto deaktiviert');
-  req.user = user;
+  if ((payload.sessionVersion ?? 0) !== user.sessionVersion) throw unauthorized('Sitzung widerrufen');
+  return user;
 }
 
 export async function requireAdmin(req: FastifyRequest, _reply: FastifyReply) {

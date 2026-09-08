@@ -7,11 +7,13 @@ import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import * as files from '../services/files.js';
-import { assertDiskAvailable } from '../services/quota.js';
+import { assertDiskAvailable, remainingDiskBytes } from '../services/quota.js';
+import { guardMutations } from './mutationGuard.js';
 
 const pathQuery = z.object({ path: z.string().default('/') });
 
 export default async function fileRoutes(app: FastifyInstance) {
+  guardMutations(app);
   // Verzeichnis auflisten
   app.get('/', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
@@ -30,6 +32,8 @@ export default async function fileRoutes(app: FastifyInstance) {
   app.put('/content', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_WRITE);
     const body = z.object({ path: z.string().min(1), content: z.string() }).parse(req.body);
+    const old = await fsp.stat(files.resolveSafe(access.server.id, body.path)).catch(() => null);
+    await assertDiskAvailable(access.server, Math.max(0, Buffer.byteLength(body.content) - (old?.size ?? 0)));
     await files.writeFile(access.server.id, body.path, body.content);
     await audit(req.user!.id, access.server.id, 'files.write', body.path);
     return { ok: true };
@@ -63,7 +67,7 @@ export default async function fileRoutes(app: FastifyInstance) {
     const body = z
       .object({ path: z.string().min(1), target: z.string().default('/') })
       .parse(req.body);
-    await files.unzip(access.server.id, body.path, body.target);
+    await files.unzip(access.server.id, body.path, body.target, await remainingDiskBytes(access.server));
     return { ok: true };
   });
 
@@ -95,7 +99,9 @@ export default async function fileRoutes(app: FastifyInstance) {
     const saved: string[] = [];
     for await (const part of parts) {
       if (part.type !== 'file') continue;
-      await files.saveUpload(access.server.id, dir, part.filename, part.file);
+      const safeName = path.basename(part.filename).replace(/[\\/:*?"<>|]/g, '_');
+      const old = await fsp.stat(files.resolveSafe(access.server.id, path.join(dir, safeName))).catch(() => null);
+      await files.saveUpload(access.server.id, dir, part.filename, part.file, await remainingDiskBytes(access.server) + (old?.size ?? 0));
       saved.push(part.filename);
     }
     if (saved.length === 0) throw badRequest('Keine Datei empfangen');

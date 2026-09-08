@@ -11,7 +11,11 @@
  * Zugangsdaten liegen in der Setting-Tabelle und verlassen den Server nie:
  * die Oberfläche bekommt nur eine maskierte Fassung.
  */
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
+import { prisma } from '../db.js';
+import { withQueuedOperation } from './operations.js';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -24,7 +28,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { getSetting, setSetting } from './settings.js';
 import { badRequest } from '../lib/errors.js';
 
-const run = promisify(exec);
+const run = promisify(execFile);
 
 const SETTING_KEY = 'backup.target';
 /** Einhängepunkt der Freigabe im Backend-Container. */
@@ -111,10 +115,21 @@ export async function getTarget(): Promise<TargetConfig> {
   return cached;
 }
 
-export async function saveTarget(next: TargetConfig): Promise<void> {
-  cached = next;
-  await setSetting(SETTING_KEY, JSON.stringify(next));
-  await applyTarget();
+async function saveTargetUnlocked(next: TargetConfig): Promise<void> {
+  const previous = await getTarget();
+  if (previous.kind !== 'NONE') {
+    const targetId = await registerTarget(previous);
+    await prisma.backup.updateMany({ where: { mirrored: true, targetId: null }, data: { targetId } });
+  }
+  if (next.kind === 'SMB') await mountSmb(next.smb);
+  else await unmountSmb();
+  try {
+    await setSetting(SETTING_KEY, JSON.stringify(next));
+    cached = next;
+  } catch (err) {
+    if (previous.kind === 'SMB') await mountSmb(previous.smb);
+    throw err;
+  }
 }
 
 /** Für die Oberfläche: ohne Kennwörter, mit maskiertem Schlüssel. */
@@ -190,7 +205,7 @@ async function unmountSmb(at: string = SMB_MOUNT): Promise<void> {
   // Mehrfach, falls sich frueher schon etwas gestapelt hat.
   for (let round = 0; round < 5 && (await isMounted(at)); round++) {
     // Erst sauber aushaengen; erst wenn das scheitert, verzoegert.
-    await run(`umount ${at}`).catch(() => run(`umount -l ${at}`).catch(() => {}));
+    await run('umount', [at]).catch(() => run('umount', ['-l', at]).catch(() => {}));
     for (let i = 0; i < 15 && (await isMounted(at)); i++) await delay(200);
   }
 }
@@ -233,23 +248,19 @@ async function mountSmb(smb: SmbConfig, at: string = SMB_MOUNT): Promise<void> {
   await unmountSmb(at);
   await fsp.mkdir(at, { recursive: true });
 
-  const options = [
-    `username=${smb.username || 'guest'}`,
-    `password=${smb.password}`,
-    smb.domain ? `domain=${smb.domain}` : '',
-    `vers=${smb.version || '3.0'}`,
-    'uid=0',
-    'gid=0',
-    'file_mode=0644',
-    'dir_mode=0755',
-    smb.username ? '' : 'guest',
-  ]
-    .filter(Boolean)
-    .join(',');
+  for (const value of [smb.username, smb.password, smb.domain]) {
+    if (/[\r\n\0]/.test(value)) throw badRequest('SMB-Zugangsdaten dürfen keine Zeilenumbrüche enthalten');
+  }
+  if (!/^(default|1\.0|2\.0|2\.1|3\.0|3\.02|3\.1\.1)$/.test(smb.version || '3.0')) throw badRequest('Ungültige SMB-Version');
+  const credentialsDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcpanel-cifs-'));
+  const credentials = path.join(credentialsDir, 'credentials');
+  await fsp.writeFile(credentials, `username=${smb.username || 'guest'}\npassword=${smb.password}\ndomain=${smb.domain}\n`, { mode: 0o600 });
+  const options = [`credentials=${credentials}`, `vers=${smb.version || '3.0'}`, 'uid=0', 'gid=0', 'file_mode=0644', 'dir_mode=0755', ...(smb.username ? [] : ['guest'])].join(',');
 
   const source = `//${smb.host}/${smb.share}`;
   try {
-    await run(`mount -t cifs '${source}' ${at} -o '${options}'`);
+    await run('mount', ['-t', 'cifs', source, at, '-o', options], { timeout: 30_000 });
+    if (!(await isMounted(at))) throw new Error('Mount wurde nicht aktiv');
     if (at === SMB_MOUNT) mountedSignature = sig;
   } catch (err) {
     if (at === SMB_MOUNT) mountedSignature = null;
@@ -260,16 +271,20 @@ async function mountSmb(smb: SmbConfig, at: string = SMB_MOUNT): Promise<void> {
       'password=***',
     );
     throw new Error(describeMountError(raw));
+  } finally {
+    await fsp.rm(credentialsDir, { recursive: true, force: true });
   }
 }
 
 /** Zielordner innerhalb der Freigabe. */
 function smbDir(config: TargetConfig, serverId: string): string {
-  return path.posix.join(SMB_MOUNT, config.smb.path || '', serverId);
+  const relative = config.smb.path.replace(/\\/g, '/');
+  if (relative.split('/').includes('..')) throw badRequest('Ungültiger SMB-Unterordner');
+  return path.posix.join(SMB_MOUNT, relative, serverId);
 }
 
 /** Setzt den aktuellen Stand um – beim Start und nach jedem Speichern. */
-export async function applyTarget(): Promise<void> {
+async function applyTargetUnlocked(): Promise<void> {
   const config = await getTarget();
   if (config.kind === 'SMB') {
     await mountSmb(config.smb);
@@ -301,18 +316,24 @@ function s3Key(config: TargetConfig, serverId: string, filename: string): string
 // ---------------------------------------------------------------------------
 
 /** Legt eine fertige Sicherung in der Zweitablage ab. */
-export async function putBackup(
+async function putBackupUnlocked(
   serverId: string,
   filename: string,
   localPath: string,
   onProgress?: (percent: number) => void,
+  targetId?: string | null,
 ): Promise<void> {
-  const config = await getTarget();
+  const config = await targetForBackup(targetId);
 
   if (config.kind === 'SMB') {
+    await mountSmb(config.smb);
     const dir = smbDir(config, serverId);
     await fsp.mkdir(dir, { recursive: true });
-    await fsp.copyFile(localPath, path.posix.join(dir, filename));
+    const temp = path.posix.join(dir, `.partial-${crypto.randomUUID()}`);
+    try {
+      await fsp.copyFile(localPath, temp);
+      await fsp.rename(temp, path.posix.join(dir, filename));
+    } finally { await fsp.rm(temp, { force: true }); }
     onProgress?.(100);
     return;
   }
@@ -347,45 +368,54 @@ export async function putBackup(
  * Holt eine Sicherung zurück. Bei SMB ist das ein Pfad im Mount, bei S3 wird
  * die Datei in eine temporäre Kopie geladen; `cleanup` räumt sie wieder weg.
  */
-export async function fetchBackup(
+async function fetchBackupUnlocked(
   serverId: string,
   filename: string,
+  targetId?: string | null,
 ): Promise<{ path: string; cleanup: () => Promise<void> } | null> {
-  const config = await getTarget();
+  const config = await targetForBackup(targetId);
 
   if (config.kind === 'SMB') {
-    const file = path.posix.join(smbDir(config, serverId), filename);
-    if (!(await fsp.stat(file).catch(() => null))) return null;
-    return { path: file, cleanup: async () => {} };
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcpanel-backup-'));
+    const temp = path.join(tempDir, 'archive.tar.gz');
+    try {
+      await mountSmb(config.smb, SMB_PROBE);
+      const relative = config.smb.path.replace(/\\/g, '/');
+      if (relative.split('/').includes('..')) throw badRequest('Ungültiger SMB-Unterordner');
+      await fsp.copyFile(path.posix.join(SMB_PROBE, relative, serverId, filename), temp);
+      return { path: temp, cleanup: () => fsp.rm(tempDir, { recursive: true, force: true }) };
+    } catch (err) {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    } finally { await unmountSmb(SMB_PROBE); }
   }
 
   if (config.kind === 'S3') {
     const client = s3Client(config.s3);
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcpanel-backup-'));
+    const tmp = path.join(dir, 'archive.tar.gz');
     try {
-      const res = await client.send(
-        new GetObjectCommand({ Bucket: config.s3.bucket, Key: s3Key(config, serverId, filename) }),
-      );
-      if (!res.Body) return null;
-
-      const tmp = path.join(os.tmpdir(), `mcpanel-${Date.now()}-${filename}`);
-      await new Promise<void>((resolve, reject) => {
-        const out = fs.createWriteStream(tmp);
-        (res.Body as NodeJS.ReadableStream).pipe(out).on('finish', resolve).on('error', reject);
-      });
-      return { path: tmp, cleanup: () => fsp.rm(tmp, { force: true }) };
-    } catch {
-      return null;
-    }
+      const res = await client.send(new GetObjectCommand({ Bucket: config.s3.bucket, Key: s3Key(config, serverId, filename) }), { abortSignal: AbortSignal.timeout(120_000) });
+      if (!res.Body) throw new Error('S3 lieferte keinen Dateiinhalt');
+      await pipeline(res.Body as NodeJS.ReadableStream, fs.createWriteStream(tmp), { signal: AbortSignal.timeout(120_000) });
+      return { path: tmp, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
+    } catch (err) {
+      await fsp.rm(dir, { recursive: true, force: true });
+      if ((err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return null;
+      throw err;
+    } finally { client.destroy(); }
   }
 
   return null;
 }
 
 /** Entfernt eine Sicherung aus der Zweitablage. Fehler bleiben hier stehen. */
-export async function removeBackup(serverId: string, filename: string): Promise<void> {
-  const config = await getTarget();
+async function removeBackupUnlocked(serverId: string, filename: string, targetId?: string | null): Promise<void> {
+  const config = await targetForBackup(targetId);
 
   if (config.kind === 'SMB') {
+    await mountSmb(config.smb);
     await fsp.rm(path.posix.join(smbDir(config, serverId), filename), { force: true }).catch(() => {});
     return;
   }
@@ -410,7 +440,7 @@ export interface TargetStatus {
 }
 
 /** Prüft die Erreichbarkeit – für den Testknopf und die Statusanzeige. */
-export async function testTarget(config?: TargetConfig): Promise<TargetStatus> {
+async function testTargetUnlocked(config?: TargetConfig): Promise<TargetStatus> {
   const target = config ?? (await getTarget());
 
   if (target.kind === 'NONE') {
@@ -494,3 +524,28 @@ export function assertComplete(config: TargetConfig): void {
     if (!config.s3.secretAccessKey.trim()) throw badRequest('Der geheime Schlüssel fehlt');
   }
 }
+
+export async function registerTarget(target: TargetConfig): Promise<string> {
+  const serialized = JSON.stringify(target);
+  const id = crypto.createHash('sha256').update(serialized).digest('hex');
+  await prisma.backupTargetVersion.upsert({ where: { id }, create: { id, config: JSON.parse(serialized) }, update: {} });
+  return id;
+}
+
+async function targetForBackup(id?: string | null): Promise<TargetConfig> {
+  if (!id) return getTarget();
+  const row = await prisma.backupTargetVersion.findUniqueOrThrow({ where: { id } });
+  return row.config as unknown as TargetConfig;
+}
+
+export const saveTarget = (...args: Parameters<typeof saveTargetUnlocked>) => withQueuedOperation("backup-target", "Backup-Zweitablage", () => saveTargetUnlocked(...args));
+
+export const testTarget = (...args: Parameters<typeof testTargetUnlocked>) => withQueuedOperation("backup-target", "Backup-Zweitablage", () => testTargetUnlocked(...args));
+
+export const putBackup = (...args: Parameters<typeof putBackupUnlocked>) => withQueuedOperation("backup-target", "Backup-Zweitablage", () => putBackupUnlocked(...args));
+
+export const fetchBackup = (...args: Parameters<typeof fetchBackupUnlocked>) => withQueuedOperation("backup-target", "Backup-Zweitablage", () => fetchBackupUnlocked(...args));
+
+export const removeBackup = (...args: Parameters<typeof removeBackupUnlocked>) => withQueuedOperation("backup-target", "Backup-Zweitablage", () => removeBackupUnlocked(...args));
+
+export const applyTarget = (...args: Parameters<typeof applyTargetUnlocked>) => withQueuedOperation("backup-target", "Backup-Zweitablage", () => applyTargetUnlocked(...args));

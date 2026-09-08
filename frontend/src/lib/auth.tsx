@@ -2,6 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 import { api, ApiError, NetworkError, tokenStore } from './api';
 import type { Me } from './types';
+import { useQueryClient } from '@tanstack/react-query';
+import { resetSocket } from './socket';
 
 interface AuthContextValue {
   user: Me | null;
@@ -16,6 +18,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
@@ -36,13 +39,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // deswegen nicht ungueltig und muss den Neustart ueberleben.
       if (err instanceof ApiError && err.status === 401) {
         tokenStore.clear();
+        resetSocket();
+        queryClient.clear();
       }
       setOffline(err instanceof NetworkError);
       setUser(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     void refresh();
@@ -54,14 +59,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password,
     });
     tokenStore.set(res.token);
+    resetSocket();
+    queryClient.clear();
     setUser(await api.get<Me>('/auth/me'));
-  }, []);
+  }, [queryClient]);
 
   const logout = useCallback(() => {
+    resetSocket();
+    queryClient.clear();
     tokenStore.clear();
     setUser(null);
     setOffline(false);
-  }, []);
+  }, [queryClient]);
 
   const value = useMemo(
     () => ({ user, loading, offline, login, logout, refresh }),

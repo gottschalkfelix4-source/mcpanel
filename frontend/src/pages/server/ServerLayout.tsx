@@ -66,6 +66,9 @@ export default function ServerLayout() {
   useEffect(() => {
     if (!id) return;
     const socket = getSocket();
+    const clearLive = () => { setLiveState(null); setLiveHealth(null); setLiveStats(null); setPlayers(null); };
+    clearLive();
+    const subscribe = () => socket.emit('subscribe', { serverId: id }, () => {});
 
     const onStatus = (payload: {
       serverId: string;
@@ -82,13 +85,25 @@ export default function ServerLayout() {
     };
 
     socket.on('status', onStatus);
-    socket.emit('subscribe', { serverId: id }, () => {});
+    socket.on('connect', subscribe);
+    socket.on('disconnect', clearLive);
+    if (socket.connected) subscribe();
 
     return () => {
       socket.off('status', onStatus);
+      socket.off('connect', subscribe);
+      socket.off('disconnect', clearLive);
       socket.emit('unsubscribe', { serverId: id });
     };
   }, [id]);
+
+  // Fresh HTTP snapshots remain authoritative when a live stream stalls.
+  useEffect(() => {
+    if (!server) return;
+    setLiveState(server.state);
+    setLiveHealth(server.health ?? null);
+    setLiveStats(server.stats);
+  }, [server]);
 
   const power = useMutation({
     mutationFn: (action: 'start' | 'stop' | 'restart' | 'kill') =>
@@ -126,8 +141,8 @@ export default function ServerLayout() {
     server,
     can,
     liveState: state,
-    liveHealth: liveHealth ?? server.health ?? null,
-    liveStats: liveStats ?? server.stats,
+    liveHealth: liveState !== null ? liveHealth : server.health ?? null,
+    liveStats: liveState !== null ? liveStats : server.stats,
     players,
     refresh: () => void refetch(),
   };
@@ -184,11 +199,12 @@ export default function ServerLayout() {
                   </span>
                   <button
                     onClick={copyAddress}
+                    disabled={!server.address}
                     className="inline-flex items-center gap-[7px] font-mono transition hover:text-grass-light"
                     title="Adresse kopieren"
                   >
                     {copied ? <Check size={12} className="text-emerald" /> : <Copy size={12} />}
-                    {server.address}
+                    {server.address || 'Kein öffentlicher Zugang'}
                   </button>
                   <span>
                     {server.modpack?.name ?? server.type} · MC {server.mcVersion}

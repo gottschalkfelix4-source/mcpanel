@@ -5,6 +5,7 @@ export interface TokenPayload {
   sub: string;
   username: string;
   role: 'ADMIN' | 'USER';
+  sessionVersion?: number;
 }
 
 export function signToken(payload: TokenPayload): string {

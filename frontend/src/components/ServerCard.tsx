@@ -135,11 +135,12 @@ export function ServerCard({ server }: { server: ServerSummary }) {
 
             <button
               onClick={copyAddress}
+                    disabled={!server.address}
               className="mt-2 inline-flex items-center gap-[7px] font-mono text-xs text-stone-300 transition hover:text-grass-light"
               title="Adresse kopieren"
             >
               {copied ? <Check size={12} className="text-emerald" /> : <Copy size={12} />}
-              {server.address}
+              {server.address || 'Kein öffentlicher Zugang'}
             </button>
           </div>
         </div>

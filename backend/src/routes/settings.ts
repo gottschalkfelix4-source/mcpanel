@@ -11,9 +11,23 @@ import {
   type TargetConfig,
 } from '../services/backupTarget.js';
 import { globalNotificationRoutes } from './notifications.js';
+import { configureProxy, proxyStatus } from '../services/proxy.js';
 
 export default async function settingsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
+
+  app.get('/proxy', { preHandler: requireAdmin }, proxyStatus);
+  app.put('/proxy', { preHandler: requireAdmin }, async (req) => {
+    const next = z.object({ enabled: z.boolean(), port: z.number().int().min(1024).max(65535) }).parse(req.body);
+    await configureProxy(next);
+    await audit(req.user!.id, null, 'proxy.configure', JSON.stringify(next));
+    return proxyStatus();
+  });
+  app.put('/public-host', { preHandler: requireAdmin }, async (req) => {
+    const { host } = z.object({ host: z.string().trim().min(1).max(253).regex(/^[a-zA-Z0-9.:\[\]-]+$/) }).parse(req.body);
+    await setSetting('panel.publicHost', host);
+    return { publicHost: host };
+  });
 
   await app.register(globalNotificationRoutes, { prefix: '/notifications' });
 

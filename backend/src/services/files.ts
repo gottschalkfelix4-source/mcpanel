@@ -1,9 +1,13 @@
+import { withServerOperation } from './operations.js';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import { serverDir } from '../config.js';
 import { badRequest, notFound } from '../lib/errors.js';
+import { archivePath, safePath } from '../lib/safePath.js';
+import { pipeline } from 'node:stream/promises';
+import { byteLimit } from '../lib/byteLimit.js';
 
 export interface FileEntry {
   name: string;
@@ -26,11 +30,7 @@ const MAX_EDIT_SIZE = 4 * 1024 * 1024; // 4 MB
 export function resolveSafe(serverId: string, relative: string): string {
   const root = path.resolve(serverDir(serverId));
   const cleaned = (relative ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
-  const target = path.resolve(root, cleaned);
-  if (target !== root && !target.startsWith(root + path.sep)) {
-    throw badRequest('Ungültiger Pfad');
-  }
-  return target;
+  return safePath(root, cleaned);
 }
 
 export function toRelative(serverId: string, absolute: string): string {
@@ -58,6 +58,7 @@ export async function listDir(serverId: string, relative: string): Promise<FileE
 
   const out: FileEntry[] = [];
   for (const e of entries) {
+    if (e.isSymbolicLink()) continue;
     const abs = path.join(dir, e.name);
     let stat;
     try {
@@ -90,17 +91,17 @@ export async function readFile(serverId: string, relative: string): Promise<stri
   return fs.readFile(abs, 'utf8');
 }
 
-export async function writeFile(serverId: string, relative: string, content: string): Promise<void> {
+async function writeFileUnlocked(serverId: string, relative: string, content: string): Promise<void> {
   const abs = resolveSafe(serverId, relative);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content, 'utf8');
 }
 
-export async function createDir(serverId: string, relative: string): Promise<void> {
+async function createDirUnlocked(serverId: string, relative: string): Promise<void> {
   await fs.mkdir(resolveSafe(serverId, relative), { recursive: true });
 }
 
-export async function remove(serverId: string, relatives: string[]): Promise<void> {
+async function removeUnlocked(serverId: string, relatives: string[]): Promise<void> {
   for (const rel of relatives) {
     const abs = resolveSafe(serverId, rel);
     if (abs === path.resolve(serverDir(serverId))) throw badRequest('Das Serververzeichnis kann nicht gelöscht werden');
@@ -108,30 +109,33 @@ export async function remove(serverId: string, relatives: string[]): Promise<voi
   }
 }
 
-export async function rename(serverId: string, from: string, to: string): Promise<void> {
+async function renameUnlocked(serverId: string, from: string, to: string): Promise<void> {
   const src = resolveSafe(serverId, from);
   const dst = resolveSafe(serverId, to);
+  if ([src, dst].includes(path.resolve(serverDir(serverId)))) throw badRequest('Das Serververzeichnis kann nicht umbenannt werden');
   await fs.mkdir(path.dirname(dst), { recursive: true });
   await fs.rename(src, dst);
 }
 
-export async function saveUpload(
+async function saveUploadUnlocked(
   serverId: string,
   relativeDir: string,
   filename: string,
   stream: NodeJS.ReadableStream,
+  maxBytes = Infinity,
 ): Promise<void> {
   const safeName = path.basename(filename).replace(/[\\/:*?"<>|]/g, '_');
   const dir = resolveSafe(serverId, relativeDir);
   await fs.mkdir(dir, { recursive: true });
   const abs = resolveSafe(serverId, path.join(relativeDir, safeName));
-  await new Promise<void>((resolve, reject) => {
-    const out = fsSync.createWriteStream(abs);
-    stream.pipe(out);
-    out.on('finish', () => resolve());
-    out.on('error', reject);
-    stream.on('error', reject);
-  });
+  const tempDir = await fs.mkdtemp(path.join(dir, '.upload-'));
+  const temporary = path.join(tempDir, 'content');
+  try {
+    await pipeline(stream, byteLimit(maxBytes), fsSync.createWriteStream(temporary));
+    if ((stream as { truncated?: boolean }).truncated) throw badRequest('Upload wurde abgeschnitten');
+    resolveSafe(serverId, path.join(relativeDir, safeName));
+    await fs.rename(temporary, abs);
+  } finally { await fs.rm(tempDir, { recursive: true, force: true }); }
 }
 
 export function downloadPath(serverId: string, relative: string): string {
@@ -139,14 +143,22 @@ export function downloadPath(serverId: string, relative: string): string {
 }
 
 /** ZIP-Archiv innerhalb des Serververzeichnisses entpacken. */
-export async function unzip(serverId: string, relative: string, targetDir: string): Promise<void> {
+async function unzipUnlocked(serverId: string, relative: string, targetDir: string, maxGrowth = Infinity): Promise<void> {
   const abs = resolveSafe(serverId, relative);
   const dest = resolveSafe(serverId, targetDir);
   await fs.mkdir(dest, { recursive: true });
   const zip = new AdmZip(abs);
+  // Validate the entire archive before writing even its first entry.
+  let growth = 0;
   for (const entry of zip.getEntries()) {
-    const outPath = path.resolve(dest, entry.entryName);
-    if (!outPath.startsWith(path.resolve(dest))) continue; // Zip-Slip verhindern
+    const output = archivePath(dest, entry.entryName);
+    if (entry.isDirectory) continue;
+    const previous = await fs.stat(output).catch(() => null);
+    growth += Math.max(0, entry.header.size - (previous?.size ?? 0));
+    if (growth > maxGrowth) throw badRequest('Speicherkontingent reicht zum Entpacken nicht aus');
+  }
+  for (const entry of zip.getEntries()) {
+    const outPath = archivePath(dest, entry.entryName);
     if (entry.isDirectory) {
       await fs.mkdir(outPath, { recursive: true });
     } else {
@@ -179,3 +191,15 @@ export async function dirSize(dir: string): Promise<number> {
   }
   return total;
 }
+
+export const writeFile = (...args: Parameters<typeof writeFileUnlocked>) => withServerOperation(args[0], "writeFile", () => writeFileUnlocked(...args));
+
+export const createDir = (...args: Parameters<typeof createDirUnlocked>) => withServerOperation(args[0], "createDir", () => createDirUnlocked(...args));
+
+export const remove = (...args: Parameters<typeof removeUnlocked>) => withServerOperation(args[0], "remove", () => removeUnlocked(...args));
+
+export const rename = (...args: Parameters<typeof renameUnlocked>) => withServerOperation(args[0], "rename", () => renameUnlocked(...args));
+
+export const saveUpload = (...args: Parameters<typeof saveUploadUnlocked>) => withServerOperation(args[0], "saveUpload", () => saveUploadUnlocked(...args));
+
+export const unzip = (...args: Parameters<typeof unzipUnlocked>) => withServerOperation(args[0], "unzip", () => unzipUnlocked(...args));

@@ -186,7 +186,7 @@ switch (command) {
     const user = await finde(kennung);
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: await bcrypt.hash(passwort, 10) },
+      data: { passwordHash: await bcrypt.hash(passwort, 10), sessionVersion: { increment: 1 } },
     });
     console.log(`Passwort für "${user.username}" gesetzt.`);
     break;

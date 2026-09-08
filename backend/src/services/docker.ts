@@ -1,4 +1,6 @@
+import { withServerOperation } from './operations.js';
 import os from 'node:os';
+import { conflict } from '../lib/errors.js';
 import Docker from 'dockerode';
 import type { Container, ContainerInfo } from 'dockerode';
 import type { Server } from '@prisma/client';
@@ -20,12 +22,17 @@ export const LABEL_SERVER = 'mcpanel.server';
  * muss (sonst entstünde ein Ringschluss mit notify.ts).
  */
 let plannedStopHook: ((serverId: string) => void) | null = null;
+const plannedStops = new Map<string, number>();
+export function wasPlannedStop(id: string): boolean {
+  return Date.now() - (plannedStops.get(id) ?? 0) < 180_000;
+}
 
 export function onPlannedStop(fn: (serverId: string) => void): void {
   plannedStopHook = fn;
 }
 
 function announcePlannedStop(serverId: string): void {
+  plannedStops.set(serverId, Date.now());
   plannedStopHook?.(serverId);
 }
 
@@ -66,6 +73,13 @@ export const PROTECTED_ENV_KEYS = [
   'EXTRA_ARGS',
   'UID',
   'GID',
+  'MEMORY',
+  'MAX_MEMORY',
+  'INIT_MEMORY',
+  'SERVER_PORT',
+  'RCON_PORT',
+  'RCON_PASSWORD',
+  'ENABLE_RCON',
 ] as const;
 
 /** Image eines Servers: explizite Vorgabe schlägt automatische Wahl. */
@@ -106,8 +120,9 @@ export async function findContainer(server: Server): Promise<Container | null> {
     const c = docker.getContainer(server.containerName);
     await c.inspect();
     return c;
-  } catch {
-    return null;
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 404) return null;
+    throw err;
   }
 }
 
@@ -178,8 +193,10 @@ export async function createContainer(server: Server): Promise<Container> {
     HostConfig: {
       Binds: [`${serverHostDir(server.id)}:/data`],
       PortBindings: {
-        '25565/tcp': [{ HostPort: String(server.port) }],
-        '25565/udp': [{ HostPort: String(server.port) }],
+        ...(server.directConnect !== false ? {
+          '25565/tcp': [{ HostPort: String(server.port) }],
+          '25565/udp': [{ HostPort: String(server.port) }],
+        } : {}),
       },
       RestartPolicy: { Name: 'no' },
       Memory: memBytes,
@@ -202,7 +219,7 @@ async function configMatches(container: Container, server: Server): Promise<bool
 
     const dns = info.HostConfig.Dns ?? [];
     if (dns.join(',') !== config.mcDns.join(',')) return false;
-    if (info.HostConfig.PortBindings?.['25565/tcp']?.[0]?.HostPort !== String(server.port)) {
+    if (info.HostConfig.PortBindings?.['25565/tcp']?.[0]?.HostPort !== (server.directConnect !== false ? String(server.port) : undefined)) {
       return false;
     }
 
@@ -238,19 +255,19 @@ export async function ensureContainer(server: Server): Promise<Container> {
   return createContainer(server);
 }
 
-export async function removeContainer(server: Server): Promise<void> {
+async function removeContainerUnlocked(server: Server): Promise<void> {
   const c = await findContainer(server);
   if (!c) return;
   announcePlannedStop(server.id);
   try {
     await c.remove({ force: true, v: false });
-  } catch {
-    /* bereits weg */
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode !== 404) throw err;
   }
 }
 
 /** Container löschen und mit den aktuellen Einstellungen neu anlegen. */
-export async function recreateContainer(server: Server): Promise<Container> {
+async function recreateContainerUnlocked(server: Server): Promise<Container> {
   await removeContainer(server);
   await ensureImage(imageForServer(server));
   return createContainer(server);
@@ -277,18 +294,28 @@ export async function getState(server: Server): Promise<{
       state = 'error';
     }
     return { state, health, startedAt: info.State.StartedAt ?? null };
-  } catch {
-    return { state: 'missing', health: null, startedAt: null };
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 404) return { state: 'missing', health: null, startedAt: null };
+    throw err;
   }
 }
 
-export async function start(server: Server): Promise<void> {
+async function startUnlocked(server: Server): Promise<void> {
+  plannedStops.delete(server.id);
   const c = await ensureContainer(server);
   const info = await c.inspect();
-  if (!info.State.Running) await c.start();
+  if (!info.State.Running) {
+    try { await c.start(); }
+    catch (err) {
+      if (/port is already allocated|address already in use|failed to bind host port/i.test(err instanceof Error ? err.message : String(err))) {
+        throw conflict(`Hostport ${server.port} ist durch einen anderen Dienst belegt. Bitte den Direktport ändern.`);
+      }
+      throw err;
+    }
+  }
 }
 
-export async function stop(server: Server, timeout = 60): Promise<void> {
+async function stopUnlocked(server: Server, timeout = 60): Promise<void> {
   const c = await findContainer(server);
   if (!c) return;
   announcePlannedStop(server.id);
@@ -300,18 +327,18 @@ export async function stop(server: Server, timeout = 60): Promise<void> {
   }
 }
 
-export async function kill(server: Server): Promise<void> {
+async function killUnlocked(server: Server): Promise<void> {
   const c = await findContainer(server);
   if (!c) return;
   announcePlannedStop(server.id);
   try {
     await c.kill();
-  } catch {
-    /* schon gestoppt */
+  } catch (err) {
+    if (![304, 409].includes((err as { statusCode: number }).statusCode)) throw err;
   }
 }
 
-export async function restart(server: Server): Promise<void> {
+async function restartUnlocked(server: Server): Promise<void> {
   await stop(server);
   await start(server);
 }
@@ -439,3 +466,15 @@ export async function detectHostDataRoot(containerPath: string): Promise<string 
     return null;
   }
 }
+
+export const start = (...args: Parameters<typeof startUnlocked>) => withServerOperation(args[0].id, "start", () => startUnlocked(...args));
+
+export const stop = (...args: Parameters<typeof stopUnlocked>) => withServerOperation(args[0].id, "stop", () => stopUnlocked(...args));
+
+export const kill = (...args: Parameters<typeof killUnlocked>) => withServerOperation(args[0].id, "kill", () => killUnlocked(...args));
+
+export const restart = (...args: Parameters<typeof restartUnlocked>) => withServerOperation(args[0].id, "restart", () => restartUnlocked(...args));
+
+export const removeContainer = (...args: Parameters<typeof removeContainerUnlocked>) => withServerOperation(args[0].id, "removeContainer", () => removeContainerUnlocked(...args));
+
+export const recreateContainer = (...args: Parameters<typeof recreateContainerUnlocked>) => withServerOperation(args[0].id, "recreateContainer", () => recreateContainerUnlocked(...args));

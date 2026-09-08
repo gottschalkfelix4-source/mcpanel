@@ -1,12 +1,13 @@
+import { withServerOperation } from '../services/operations.js';
 import type { Server as IOServer, Socket } from 'socket.io';
 import type { Server } from '@prisma/client';
 import { prisma } from '../db.js';
-import { verifyToken } from '../auth/jwt.js';
-import { getServerAccess } from '../auth/context.js';
+
+import { authenticateToken, getServerAccess } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import * as dockerSvc from '../services/docker.js';
 import { listPlayers, rconCommand } from '../services/rcon.js';
-import { roomForServer, setIO } from './io.js';
+import { emitToServer, roomForServer, setIO } from './io.js';
 
 interface StreamEntry {
   stop: () => void;
@@ -30,14 +31,20 @@ async function attachStream(io: IOServer, server: Server) {
   const room = roomForServer(server.id);
   let buffer = '';
 
+  try {
   const stop = await dockerSvc.followLogs(server, (chunk) => {
     buffer += chunk;
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
-    if (lines.length > 0) io.to(room).emit('console', { lines });
+    if (lines.length > 0) emitToServer(server.id, 'console', { serverId: server.id, lines });
   });
 
-  entry.stop = stop;
+  if (streams.get(server.id) !== entry || entry.refs <= 0) stop();
+  else entry.stop = stop;
+  } catch (err) {
+    if (streams.get(server.id) === entry) streams.delete(server.id);
+    throw err;
+  }
 }
 
 function detachStream(serverId: string) {
@@ -55,6 +62,7 @@ function startStatusPolling(io: IOServer, serverId: string) {
   if (statusTimers.has(serverId)) return;
 
   const timer = setInterval(async () => {
+    try {
     const room = io.sockets.adapter.rooms.get(roomForServer(serverId));
     if (!room || room.size === 0) {
       clearInterval(timer);
@@ -73,7 +81,7 @@ function startStatusPolling(io: IOServer, serverId: string) {
       players = await listPlayers(server).catch(() => null);
     }
 
-    io.to(roomForServer(serverId)).emit('status', {
+    emitToServer(serverId, 'status', {
       serverId,
       state,
       health,
@@ -82,6 +90,7 @@ function startStatusPolling(io: IOServer, serverId: string) {
       players,
       memoryLimitMb: server.memoryMb,
     });
+    } catch { /* A transient database/Docker failure is retried next tick. */ }
   }, 3000);
 
   statusTimers.set(serverId, timer);
@@ -97,9 +106,8 @@ export function setupConsoleGateway(io: IOServer) {
         (socket.handshake.query.token as string | undefined);
       if (!token) return next(new Error('Nicht angemeldet'));
 
-      const payload = verifyToken(token);
-      const user = await prisma.user.findUnique({ where: { id: payload.sub } });
-      if (!user || !user.active) return next(new Error('Konto deaktiviert'));
+      const user = await authenticateToken(token);
+      socket.data.token = token;
 
       socket.data.user = user;
       next();
@@ -113,7 +121,7 @@ export function setupConsoleGateway(io: IOServer) {
 
     socket.on('subscribe', async (payload: { serverId: string }, ack?: (r: unknown) => void) => {
       try {
-        const access = await getServerAccess(socket.data.user, payload.serverId);
+        const access = await getServerAccess(await authenticateToken(socket.data.token), payload.serverId);
         if (!access.can(PERMISSIONS.CONSOLE_READ)) {
           ack?.({ ok: false, error: 'Keine Berechtigung für die Konsole' });
           return;
@@ -128,7 +136,10 @@ export function setupConsoleGateway(io: IOServer) {
         subscribed.add(access.server.id);
 
         const history = await dockerSvc.tailLogs(access.server, 400);
-        socket.emit('console:history', { lines: history.split('\n') });
+        if (!socket.connected || !subscribed.has(access.server.id)) return;
+        const currentAccess = await getServerAccess(await authenticateToken(socket.data.token), access.server.id);
+        if (!currentAccess.can(PERMISSIONS.CONSOLE_READ)) throw new Error('Konsolenrecht wurde entzogen');
+        socket.emit('console:history', { serverId: access.server.id, lines: history.split('\n') });
 
         if (!bereitsAbonniert) await attachStream(io, access.server);
         startStatusPolling(io, access.server.id);
@@ -140,7 +151,7 @@ export function setupConsoleGateway(io: IOServer) {
     });
 
     socket.on('unsubscribe', (payload: { serverId: string }) => {
-      if (!subscribed.has(payload.serverId)) return;
+      if (!payload || !subscribed.has(payload.serverId)) return;
       socket.leave(roomForServer(payload.serverId));
       subscribed.delete(payload.serverId);
       detachStream(payload.serverId);
@@ -150,16 +161,18 @@ export function setupConsoleGateway(io: IOServer) {
       'command',
       async (payload: { serverId: string; command: string }, ack?: (r: unknown) => void) => {
         try {
-          const access = await getServerAccess(socket.data.user, payload.serverId);
+          const access = await getServerAccess(await authenticateToken(socket.data.token), payload.serverId);
           if (!access.can(PERMISSIONS.CONSOLE_COMMAND)) {
             ack?.({ ok: false, error: 'Keine Berechtigung zum Senden von Befehlen' });
             return;
           }
 
+          if (typeof payload.command !== 'string' || payload.command.length > 1000 || /[\r\n]/.test(payload.command)) throw new Error('Ungültiger Befehl');
           const command = payload.command.trim().replace(/^\//, '');
           if (!command) return;
 
-          io.to(roomForServer(payload.serverId)).emit('console', {
+          await withServerOperation(access.server.id, 'Konsolenbefehl', async () => {
+          emitToServer(payload.serverId, 'console', {
             lines: [`> ${command}   [${socket.data.user.username}]`],
             local: true,
           });
@@ -185,6 +198,7 @@ export function setupConsoleGateway(io: IOServer) {
               },
             })
             .catch(() => {});
+          });
         } catch (err) {
           ack?.({ ok: false, error: err instanceof Error ? err.message : 'Fehler' });
         }
@@ -193,9 +207,11 @@ export function setupConsoleGateway(io: IOServer) {
 
     /** Container wurde neu gestartet – Log-Stream neu aufsetzen. */
     socket.on('reattach', async (payload: { serverId: string }) => {
-      if (!subscribed.has(payload.serverId)) return;
-      const server = await prisma.server.findUnique({ where: { id: payload.serverId } });
-      if (!server) return;
+      if (!payload || !subscribed.has(payload.serverId)) return;
+      try {
+      const access = await getServerAccess(await authenticateToken(socket.data.token), payload.serverId);
+      if (!access.can(PERMISSIONS.CONSOLE_READ)) return;
+      const server = access.server;
       const entry = streams.get(payload.serverId);
       // Zuschauerzahl vor dem Abräumen sichern: der neue Stream muss sie
       // übernehmen, sonst beendet ihn der erste Abgang für alle anderen mit.
@@ -205,7 +221,9 @@ export function setupConsoleGateway(io: IOServer) {
         streams.delete(payload.serverId);
       }
       await attachStream(io, server);
-      streams.get(payload.serverId)!.refs = Math.max(1, zuschauer);
+      const replacement = streams.get(payload.serverId);
+      if (replacement) replacement.refs = Math.max(1, zuschauer);
+      } catch { /* Disconnects and revoked access cannot reattach a stream. */ }
     });
 
     socket.on('disconnect', () => {

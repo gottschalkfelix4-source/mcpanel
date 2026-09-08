@@ -1,6 +1,9 @@
+import { withServerOperation } from './operations.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { serverDir } from '../config.js';
+import { badRequest } from '../lib/errors.js';
+import { safePath } from '../lib/safePath.js';
 
 export type FieldType = 'string' | 'boolean' | 'number' | 'select';
 
@@ -62,7 +65,7 @@ const MANAGED_KEYS = new Set([
   'query.port',
 ]);
 
-const propsPath = (serverId: string) => path.join(serverDir(serverId), 'server.properties');
+const propsPath = (serverId: string) => safePath(serverDir(serverId), 'server.properties');
 
 export function parseProperties(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -115,10 +118,15 @@ export async function readProperties(serverId: string) {
   for (const [k, v] of Object.entries(values)) {
     if (!known.has(k) && !MANAGED_KEYS.has(k)) extra[k] = v;
   }
-  return { exists: true, values, extra };
+  return { exists: true, values: Object.fromEntries(Object.entries(values).filter(([k]) => !MANAGED_KEYS.has(k))), extra };
 }
 
-export async function saveProperties(serverId: string, changes: Record<string, string>) {
+async function savePropertiesUnlocked(serverId: string, changes: Record<string, string>, maxGrowth = Infinity) {
+  for (const [key, value] of Object.entries(changes)) {
+    if (!/^[a-zA-Z0-9_.-]+$/.test(key) || /[\r\n\0]/.test(value) || value.endsWith('\\')) {
+      throw badRequest('Ungültiger Property-Schlüssel oder Wert (Zeilenumbrüche sind nicht erlaubt)');
+    }
+  }
   const filtered = Object.fromEntries(
     Object.entries(changes).filter(([k]) => !MANAGED_KEYS.has(k)),
   );
@@ -128,7 +136,9 @@ export async function saveProperties(serverId: string, changes: Record<string, s
   } catch {
     raw = '#Minecraft server properties\n';
   }
-  await fs.writeFile(propsPath(serverId), mergeProperties(raw, filtered), 'utf8');
+  const merged = mergeProperties(raw, filtered);
+  if (Buffer.byteLength(merged) - Buffer.byteLength(raw) > maxGrowth) throw badRequest('Speicherkontingent reicht für diese Änderung nicht aus');
+  await fs.writeFile(propsPath(serverId), merged, 'utf8');
 }
 
 /** Liest eine JSON-Liste wie ops.json / whitelist.json / banned-players.json. */
@@ -137,10 +147,12 @@ export async function readJsonList<T = Record<string, unknown>>(
   file: string,
 ): Promise<T[]> {
   try {
-    const raw = await fs.readFile(path.join(serverDir(serverId), file), 'utf8');
+    const raw = await fs.readFile(safePath(serverDir(serverId), file), 'utf8');
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
+
+export const saveProperties = (...args: Parameters<typeof savePropertiesUnlocked>) => withServerOperation(args[0], "saveProperties", () => savePropertiesUnlocked(...args));

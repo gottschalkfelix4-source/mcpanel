@@ -1,3 +1,5 @@
+import { guardMutations } from './mutationGuard.js';
+import { remainingDiskBytes } from '../services/quota.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { audit, requireServer } from '../auth/context.js';
@@ -12,6 +14,7 @@ import { rconCommand } from '../services/rcon.js';
 import * as dockerSvc from '../services/docker.js';
 
 export default async function configRoutes(app: FastifyInstance) {
+  guardMutations(app);
   /** server.properties inkl. Feldbeschreibung für die UI. */
   app.get('/properties', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
@@ -22,7 +25,7 @@ export default async function configRoutes(app: FastifyInstance) {
   app.put('/properties', async (req) => {
     const access = await requireServer(req, PERMISSIONS.CONFIG_EDIT);
     const body = z.object({ values: z.record(z.string()) }).parse(req.body);
-    await saveProperties(access.server.id, body.values);
+    await saveProperties(access.server.id, body.values, await remainingDiskBytes(access.server));
     await audit(req.user!.id, access.server.id, 'config.properties', Object.keys(body.values).join(','));
     const { state } = await dockerSvc.getState(access.server);
     return { ok: true, restartRequired: state === 'running' };

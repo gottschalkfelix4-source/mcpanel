@@ -1,8 +1,13 @@
+import { dirSize } from './files.js';
+import { archivePath as archiveEntryPath, safePath } from '../lib/safePath.js';
+import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths, saveRestoreMetadata } from './restoreRecovery.js';
+import { parseProperties } from './properties.js';
+import { withServerOperation } from './operations.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import type { Server } from '@prisma/client';
-import { cacheDir, serverDir } from '../config.js';
+import { cacheDir, serverDir, serverBackupDir } from '../config.js';
 import { prisma } from '../db.js';
 import { downloadToFile } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
@@ -94,7 +99,7 @@ export async function checkForUpdate(server: Server) {
  * Installiert (oder aktualisiert) ein Modpack auf einem Server.
  * Läuft als Hintergrund-Task und meldet Fortschritt über den TaskHandle.
  */
-export async function installModpack(
+async function installModpackImpl(
   serverId: string,
   request: InstallRequest,
   task: TaskHandle,
@@ -219,8 +224,22 @@ export async function installModpack(
   );
 
   // --- 3. Alte Mods entfernen ---------------------------------------------
-  const dir = serverDir(serverId);
-  await fs.mkdir(dir, { recursive: true });
+  const original = serverDir(serverId);
+  const { stage: dir } = restorePaths(serverId);
+  await fs.mkdir(original, { recursive: true });
+  await fs.cp(original, dir, { recursive: true });
+  const rawProperties = await fs.readFile(safePath(original, 'server.properties'), 'utf8').catch(() => '');
+  const worldName = parseProperties(rawProperties)['level-name'] || 'world';
+  const protectedPath = (relative: string) => isProtectedPackPath(relative, worldName, request.keepConfig ?? false);
+  // Validate all paths before removing/replacing anything, even in staging.
+  for (const item of plan.downloads) archiveEntryPath(dir, item.path);
+  for (const prefixDir of plan.overrideDirs) {
+    const prefix = prefixDir === '.' ? '' : prefixDir.replace(/\/+$/, '') + '/';
+    for (const entry of plan.zip.getEntries()) {
+      const name = entry.entryName.replace(/\\/g, '/');
+      if (!prefix || name.startsWith(prefix)) archiveEntryPath(dir, prefix ? name.slice(prefix.length) : name);
+    }
+  }
   if (isUpdate) {
     await task.update(24, 'Alte Mods werden entfernt …');
     for (const sub of ['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']) {
@@ -231,7 +250,7 @@ export async function installModpack(
 
   // --- 4. Archivinhalt entpacken ------------------------------------------
   await task.update(26, 'Modpack-Dateien werden entpackt …');
-  const extracted = await extractOverrides(plan, dir, { keepConfig: request.keepConfig ?? false });
+  const extracted = await extractOverrides(plan, dir, { keepConfig: request.keepConfig ?? false, worldName, maxGrowth: server.quotaDiskMb > 0 ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity });
   if (plan.isServerPack) {
     await task.log(`${extracted} Dateien aus dem Serverpaket entpackt.`);
   }
@@ -239,7 +258,7 @@ export async function installModpack(
   // --- 5. Mods herunterladen ----------------------------------------------
   const total = plan.downloads.length;
   let completed = 0;
-  const concurrency = 8;
+  const concurrency = 1; // A shared disk budget must include each completed file before the next download.
   const queue = [...plan.downloads];
   const failures: string[] = [];
 
@@ -247,13 +266,15 @@ export async function installModpack(
     for (;;) {
       const item = queue.shift();
       if (!item) return;
-      const target = path.resolve(dir, item.path);
-      if (!target.startsWith(path.resolve(dir))) continue;
+      const target = archiveEntryPath(dir, item.path);
+      if (protectedPath(path.relative(dir, target))) continue;
 
       let ok = false;
       for (const candidate of item.urls) {
         try {
-          await downloadToFile(candidate, target, { retries: 2 });
+          const previous = await fs.stat(target).catch(() => null);
+          const budget = server.quotaDiskMb > 0 ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) + (previous?.size ?? 0) : Infinity;
+          await downloadToFile(candidate, target, { retries: 2, maxBytes: budget });
           ok = true;
           break;
         } catch {
@@ -277,7 +298,7 @@ export async function installModpack(
   await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, total)) }, worker));
 
   if (failures.length > 0) {
-    await task.log(`${failures.length} Datei(en) fehlgeschlagen. Server startet evtl. nicht sauber.`);
+    throw new Error(`${failures.length} Pflichtdatei(en) konnten nicht geladen werden: ${failures.join(', ')}`);
   }
 
   // --- 6. Client-Mods aussortieren ----------------------------------------
@@ -336,6 +357,13 @@ export async function installModpack(
     if (plan.loader === 'QUILT') extraEnv.QUILT_LOADER_VERSION = plan.loaderVersion;
   }
 
+  if (server.quotaDiskMb > 0 && await dirSize(dir) + await dirSize(serverBackupDir(serverId)) > server.quotaDiskMb * 1024 * 1024) throw new Error('Modpack überschreitet das Speicherkontingent');
+  await saveRestoreMetadata(serverId, {
+    type: server.type, mcVersion: server.mcVersion, extraEnv: server.extraEnv,
+    modpackProvider: server.modpackProvider, modpackProjectId: server.modpackProjectId,
+    modpackVersionId: server.modpackVersionId, modpackName: server.modpackName,
+    modpackVersionName: server.modpackVersionName, modpackIconUrl: server.modpackIconUrl,
+  });
   const updated = await prisma.server.update({
     where: { id: serverId },
     data: {
@@ -355,6 +383,7 @@ export async function installModpack(
 
   // --- 8. Container neu aufsetzen -----------------------------------------
   await task.update(97, 'Container wird neu aufgesetzt …');
+  await commitRestore(serverId);
   await dockerSvc.recreateContainer(updated);
   invalidateDiskUsage(serverId);
 
@@ -365,10 +394,9 @@ export async function installModpack(
 
   await task.update(
     100,
-    failures.length > 0
-      ? `Installiert – ${failures.length} Datei(en) fehlgeschlagen`
-      : `${project.name} ${version.name} installiert`,
+    `${project.name} ${version.name} installiert`,
   );
+  await finishRestore(serverId);
 }
 
 // ---------------------------------------------------------------------------
@@ -513,8 +541,7 @@ async function planFromCurseforge(
   for (const wanted of manifest.files) {
     const file = byId.get(wanted.fileID);
     if (!file) {
-      await task.log(`Datei ${wanted.fileID} nicht gefunden – wird übersprungen`);
-      continue;
+      throw new Error(`Pflichtdatei ${wanted.fileID} fehlt im Katalog`);
     }
     const urls: string[] = [];
     if (file.downloadUrl) urls.push(file.downloadUrl);
@@ -525,8 +552,7 @@ async function planFromCurseforge(
     );
     if (fallback && !urls.includes(fallback)) urls.push(fallback);
     if (urls.length === 0) {
-      await task.log(`Kein Download für ${file.fileName} verfügbar`);
-      continue;
+      throw new Error(`Kein Download für Pflichtdatei ${file.fileName} verfügbar`);
     }
     downloads.push({ path: `mods/${file.fileName}`, urls, size: file.fileLength });
   }
@@ -867,7 +893,7 @@ const SERVERPACK_SKIP = [
 async function extractOverrides(
   plan: PackPlan,
   targetDir: string,
-  opts: { keepConfig: boolean },
+  opts: { keepConfig: boolean; worldName: string; maxGrowth: number },
 ): Promise<number> {
   const root = path.resolve(targetDir);
   let written = 0;
@@ -884,14 +910,16 @@ async function extractOverrides(
       if (!relative) continue;
       if (relative === 'manifest.json' || relative === 'modrinth.index.json') continue;
       if (relative === 'modlist.html') continue;
-      if (PROTECTED.includes(relative)) continue;
-      if (opts.keepConfig && relative.startsWith('config/')) continue;
+      const normalized = path.relative(root, archiveEntryPath(root, relative));
+      if (isProtectedPackPath(normalized, opts.worldName, opts.keepConfig)) continue;
       // Rein clientseitige Ordner haben auf einem Server nichts verloren
       if (/^(shaderpacks|screenshots|saves)\//.test(relative)) continue;
       if (plan.isServerPack && SERVERPACK_SKIP.some((r) => r.test(relative))) continue;
 
-      const out = path.resolve(root, relative);
-      if (!out.startsWith(root)) continue; // Zip-Slip
+      const out = archiveEntryPath(root, relative);
+      const previous = await fs.stat(out).catch(() => null);
+      opts.maxGrowth -= Math.max(0, entry.header.size - (previous?.size ?? 0));
+      if (opts.maxGrowth < 0) throw new Error('Speicherkontingent reicht für das Modpack nicht aus');
       await fs.mkdir(path.dirname(out), { recursive: true });
       await fs.writeFile(out, entry.getData());
       written++;
@@ -938,4 +966,30 @@ function throttle<A extends unknown[]>(fn: (...args: A) => void, ms = 400): (...
     last = now;
     fn(...args);
   };
+}
+
+export const installModpack = (...args: Parameters<typeof installModpackUnlocked>) => withServerOperation(args[0], "installModpack", () => installModpackUnlocked(...args));
+
+export function isProtectedPackPath(relative: string, worldName: string, keepConfig: boolean): boolean {
+  const name = relative.replace(/\\/g, '/');
+  const first = name.split('/')[0];
+  return PROTECTED.includes(name) || ['world', 'world_nether', 'world_the_end', worldName, `${worldName}_nether`, `${worldName}_the_end`].includes(first)
+    || name === worldName || name.startsWith(worldName + '/')
+    || (keepConfig && (name === 'config' || name.startsWith('config/')));
+}
+
+async function installModpackUnlocked(serverId: string, request: InstallRequest, task: TaskHandle): Promise<void> {
+  await recoverInterruptedRestore(serverId);
+  const server = await prisma.server.findUniqueOrThrow({ where: { id: serverId } });
+  const { state } = await dockerSvc.getState(server);
+  try {
+    await installModpackImpl(serverId, request, task);
+  } catch (err) {
+    await dockerSvc.stop(await prisma.server.findUniqueOrThrow({ where: { id: serverId } }));
+    await recoverInterruptedRestore(serverId);
+    const recovered = await prisma.server.findUniqueOrThrow({ where: { id: serverId } });
+    await dockerSvc.recreateContainer(recovered);
+    if (state === 'running' || state === 'starting') await dockerSvc.start(recovered);
+    throw err;
+  }
 }

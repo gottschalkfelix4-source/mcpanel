@@ -89,7 +89,7 @@ export default async function userRoutes(app: FastifyInstance) {
         ...(data.username ? { username: data.username } : {}),
         ...(data.role ? { role: data.role } : {}),
         ...(data.active !== undefined ? { active: data.active } : {}),
-        ...(data.password ? { passwordHash: await bcrypt.hash(data.password, 10) } : {}),
+        ...(data.password ? { passwordHash: await bcrypt.hash(data.password, 10), sessionVersion: { increment: 1 } } : {}),
       },
       select: publicUser,
     });

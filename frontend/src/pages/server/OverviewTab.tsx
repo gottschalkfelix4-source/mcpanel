@@ -142,7 +142,7 @@ export default function OverviewTab() {
           {/* Serverdetails */}
           <Panel title="Serverdetails" icon={<Wifi size={16} />}>
             <dl className="grid gap-x-6 gap-y-3.5 sm:grid-cols-2">
-              <Detail label="Adresse" value={server.address} />
+              <Detail label="Adresse" value={server.address || 'Kein öffentlicher Zugang'} />
               <Detail label="Port" value={String(server.port)} />
               <Detail label="Typ" value={server.type} />
               <Detail label="Minecraft-Version" value={server.mcVersion} />

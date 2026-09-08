@@ -28,6 +28,10 @@ export interface QuotaState {
 }
 
 const MB = 1024 * 1024;
+export async function remainingDiskBytes(server: Server): Promise<number> {
+  if (server.quotaDiskMb <= 0) return Infinity;
+  return Math.max(0, server.quotaDiskMb * MB - (await computeDiskUsage(server.id)).total);
+}
 
 /** Zustand für die Anzeige – blockiert nicht, nutzt zwischengespeicherte Werte. */
 export async function quotaState(server: Server): Promise<QuotaState> {

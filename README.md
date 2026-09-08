@@ -32,6 +32,7 @@ das Panel steuert sie über den Docker-Socket.
 - Anlegen von Vanilla-, Paper-, Purpur-, Spigot-, Fabric-, Forge-, NeoForge- und Quilt-Servern
 - Start / Stop / Neustart / Kill, Autostart beim Panel-Start
 - Automatische Port-Vergabe aus einem konfigurierbaren Bereich
+- Optionaler Minecraft-Proxy: mehrere Server über eigene Subdomains und einen gemeinsamen TCP-Port; [Einrichtung und Migration](docs/MINECRAFT_PROXY.md)
 - Live-Werte für CPU, RAM, Speicherplatz und Spielerzahl
 
 **Dashboard mit Tabs** (Klick auf einen Server)
@@ -229,12 +230,12 @@ Alle Werte kommen aus der `.env` (siehe `.env.example`):
 | Variable | Standard | Zweck |
 |---|---|---|
 | `PANEL_PORT` | `8080` | Port des Web-Panels |
-| `HOST_DATA_ROOT` | `./data` | Host-Pfad der Serverdaten |
+| `HOST_DATA_ROOT` | leer / automatisch | Absoluter Host-Pfad; Compose bindet standardmäßig `./data` ein |
 | `MC_PORT_MIN` / `MC_PORT_MAX` | `25565` / `25700` | Port-Bereich für neue Server |
 | `PUBLIC_HOST` | `localhost` | Angezeigte Serveradresse |
 | `JWT_SECRET` | leer | Secret für Sitzungstokens – leer lassen, dann erzeugt das Panel eines |
 | `CURSEFORGE_API_KEY` | leer | CurseForge-Zugang (auch im Panel unter *Panel → CurseForge* setzbar) |
-| `MC_IMAGE` | `itzg/minecraft-server:latest` | Image für die Serverkontainer |
+| `MC_IMAGE` | leer / automatisch | Optionales Image-Override; sonst passende Java-Version je Minecraft-Version |
 | `POSTGRES_*` | `mcpanel` | Datenbankzugang |
 
 `JWT_SECRET` und `ADMIN_PASSWORD` sind bewusst leer vorgegeben: das Sitzungs-Geheimnis

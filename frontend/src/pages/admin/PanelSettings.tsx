@@ -4,6 +4,7 @@ import { Boxes, Container, ExternalLink, Key, ScrollText, Server } from 'lucide-
 import { api } from '../../lib/api';
 import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
+import ProxySettings from '../../components/ProxySettings';
 import { formatDate } from '../../lib/format';
 import {
   Badge, Button, ErrorNote, Field, InfoNote, LoadErrorBlock, LoadingBlock, Panel, useToast,
@@ -134,6 +135,7 @@ export default function PanelSettingsPage() {
       </Panel>
 
       <BackupTarget />
+      <ProxySettings publicHost={data.publicHost} />
 
       {/* Benachrichtigungen fuer alle Server */}
       <NotificationChannels
@@ -175,7 +177,7 @@ export default function PanelSettingsPage() {
 
         <div className="mt-4">
           <InfoNote>
-            Diese Werte kommen aus der <code>.env</code> bzw. dem Compose-Stack. Nach einer Änderung
+            Den öffentlichen Host kannst du oben ändern. Die übrigen Werte kommen aus der <code>.env</code> bzw. dem Compose-Stack. Nach einer Änderung
             ist ein Neustart des Backends nötig.
           </InfoNote>
         </div>

@@ -10,6 +10,7 @@ import { downloadToFile } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
 import * as curseforge from '../providers/curseforge.js';
 import { checkForUpdate, installModpack, listVersions } from '../services/modpack.js';
+import { withServerOperation } from '../services/operations.js';
 import { runTask } from '../services/tasks.js';
 
 const installSchema = z.object({
@@ -116,6 +117,7 @@ export default async function modpackRoutes(app: FastifyInstance) {
   app.delete('/', async (req) => {
     const access = await requireServer(req, PERMISSIONS.MODPACK_MANAGE);
     const { prisma } = await import('../db.js');
+    return withServerOperation(access.server.id, 'Modpack-Bindung lösen', async () => {
     await prisma.server.update({
       where: { id: access.server.id },
       data: {
@@ -128,5 +130,6 @@ export default async function modpackRoutes(app: FastifyInstance) {
       },
     });
     return { ok: true };
+    });
   });
 }

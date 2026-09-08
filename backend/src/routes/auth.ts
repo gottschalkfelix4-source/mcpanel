@@ -54,7 +54,7 @@ export default async function authRoutes(app: FastifyInstance) {
 
       await audit(user.id, null, 'auth.login', `von ${req.ip}`);
 
-      const token = signToken({ sub: user.id, username: user.username, role: user.role });
+      const token = signToken({ sub: user.id, username: user.username, role: user.role, sessionVersion: user.sessionVersion });
       return {
         token,
         user: { id: user.id, email: user.email, username: user.username, role: user.role },
@@ -84,10 +84,10 @@ export default async function authRoutes(app: FastifyInstance) {
     if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
       throw badRequest('Aktuelles Passwort ist falsch');
     }
-    await prisma.user.update({
+    const updated = await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+      data: { passwordHash: await bcrypt.hash(newPassword, 10), sessionVersion: { increment: 1 } },
     });
-    return { ok: true };
+    return { ok: true, token: signToken({ sub: updated.id, username: updated.username, role: updated.role, sessionVersion: updated.sessionVersion }) };
   });
 }

@@ -101,3 +101,16 @@ describe('runTask – Sperre je Server', () => {
     laufend.fertig();
   });
 });
+
+it('BUG-17: completion mode waits and propagates a late failure', async () => {
+  const gate = steuerbar();
+  let settled = false;
+  const result = runTask('completion', 'modpack.update', () => gate.versprechen, true);
+  const checked = expect(result).rejects.toThrow('late install failure');
+  void result.then(() => { settled = true; }, () => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(settled).toBe(false);
+  gate.scheitert(new Error('late install failure'));
+  await checked;
+  expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }));
+});

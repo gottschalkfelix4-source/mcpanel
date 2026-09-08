@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { KeyRound, Shield, User } from 'lucide-react';
-import { api } from '../lib/api';
+import { api, tokenStore } from '../lib/api';
+import { resetSocket } from '../lib/socket';
 import { useAuth } from '../lib/auth';
 import { formatDate } from '../lib/format';
 import { Badge, Button, ErrorNote, Field, Panel, useToast } from '../components/ui';
@@ -16,8 +17,10 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
 
   const change = useMutation({
-    mutationFn: () => api.post('/auth/password', { currentPassword, newPassword }),
-    onSuccess: () => {
+    mutationFn: () => api.post<{ token: string }>('/auth/password', { currentPassword, newPassword }),
+    onSuccess: (res) => {
+      tokenStore.set(res.token);
+      resetSocket();
       toast.success('Passwort geändert.');
       setCurrentPassword('');
       setNewPassword('');

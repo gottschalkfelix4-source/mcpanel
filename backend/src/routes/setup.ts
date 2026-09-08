@@ -88,21 +88,19 @@ export default async function setupRoutes(app: FastifyInstance) {
     if (!(await isFresh())) throw forbidden('Die Einrichtung ist bereits abgeschlossen');
     const body = setupSchema.parse(req.body);
 
-    const user = await prisma.user.create({
-      data: {
-        email: body.email.toLowerCase(),
-        username: body.username,
-        role: 'ADMIN',
-        passwordHash: await bcrypt.hash(body.password, 10),
-      },
+    const passwordHash = await bcrypt.hash(body.password, 10);
+    const user = await prisma.$transaction(async (tx) => {
+      // Shared database lock: concurrent processes cannot both finish setup.
+      await tx.$executeRaw`LOCK TABLE "User" IN EXCLUSIVE MODE`;
+      if (await tx.user.count()) throw forbidden('Die Einrichtung ist bereits abgeschlossen');
+      const created = await tx.user.create({ data: {
+        email: body.email.toLowerCase(), username: body.username, role: 'ADMIN', passwordHash,
+      } });
+      for (const [key, value] of [['panel.publicHost', body.publicHost], ['curseforge.apiKey', body.curseforgeApiKey]]) {
+        if (value?.trim()) await tx.setting.upsert({ where: { key: key! }, create: { key: key!, value: value.trim() }, update: { value: value.trim() } });
+      }
+      return created;
     });
-
-    if (body.publicHost?.trim()) {
-      await setSetting('panel.publicHost', body.publicHost.trim());
-    }
-    if (body.curseforgeApiKey?.trim()) {
-      await setSetting('curseforge.apiKey', body.curseforgeApiKey.trim());
-    }
 
     await prisma.auditLog
       .create({ data: { userId: user.id, action: 'setup.complete', detail: user.username } })

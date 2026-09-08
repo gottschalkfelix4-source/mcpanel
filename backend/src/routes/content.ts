@@ -12,6 +12,9 @@ import * as curseforge from '../providers/curseforge.js';
 import { contentDir, contentDirName, contentKindFor } from '../services/content.js';
 import { analyseCrash } from '../services/crashAnalysis.js';
 import * as dockerSvc from '../services/docker.js';
+import { guardMutations } from './mutationGuard.js';
+import { remainingDiskBytes } from '../services/quota.js';
+import { safePath } from '../lib/safePath.js';
 
 /**
  * Einzelne Mods bzw. Plugins eines Servers. Beides ist derselbe Vorgang - eine
@@ -19,6 +22,7 @@ import * as dockerSvc from '../services/docker.js';
  * Ordner unterscheidet sich. Deshalb eine Route statt zweier.
  */
 export default async function contentRoutes(app: FastifyInstance) {
+  guardMutations(app);
   /** Verzeichnis des Servers, oder eine Absage bei VANILLA. */
   async function requireDir(req: FastifyRequest, permission: Permission) {
     const access = await requireServer(req, permission);
@@ -79,8 +83,10 @@ export default async function contentRoutes(app: FastifyInstance) {
     if (!url) throw badRequest('Für diese Datei ist kein automatischer Download erlaubt');
 
     await fs.mkdir(dir, { recursive: true });
-    const target = path.join(dir, path.basename(version.filename));
+    const target = safePath(dir, path.basename(version.filename));
+    const old = await fs.stat(target).catch(() => null);
     await downloadToFile(url, target, {
+      maxBytes: await remainingDiskBytes(access.server) + (old?.size ?? 0),
       headers: body.provider === 'modrinth' ? modrinth.modrinthHeaders() : undefined,
     });
 
