@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
-import { Boxes, ChevronDown, LogOut, Server, Settings, Shield, User, Users } from 'lucide-react';
+import { Boxes, ChevronDown, LogOut, Network, Server, Settings, Shield, User, Users } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { BlockIcon, GrassStrip } from './pixel';
 
@@ -35,6 +35,7 @@ function NavItem({
   return (
     <NavLink
       to={to}
+      aria-label={typeof children === 'string' ? children : undefined}
       end={to === '/'}
       className={({ isActive }) =>
         clsx(
@@ -141,6 +142,9 @@ export default function Layout() {
             </NavItem>
             {user?.role === 'ADMIN' && (
               <>
+                <NavItem to="/admin/proxy" icon={<Network size={15} />}>
+                  Proxy
+                </NavItem>
                 <NavItem to="/admin/users" icon={<Users size={15} />}>
                   Benutzer
                 </NavItem>

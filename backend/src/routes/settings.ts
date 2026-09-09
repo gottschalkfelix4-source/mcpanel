@@ -12,11 +12,13 @@ import {
 } from '../services/backupTarget.js';
 import { globalNotificationRoutes } from './notifications.js';
 import { configureProxy, proxyStatus } from '../services/proxy.js';
+import { proxyOverview } from '../services/proxyOverview.js';
 
 export default async function settingsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
   app.get('/proxy', { preHandler: requireAdmin }, proxyStatus);
+  app.get('/proxy/overview', { preHandler: requireAdmin }, proxyOverview);
   app.put('/proxy', { preHandler: requireAdmin }, async (req) => {
     const next = z.object({ enabled: z.boolean(), port: z.number().int().min(1024).max(65535) }).parse(req.body);
     await configureProxy(next);

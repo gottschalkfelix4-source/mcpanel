@@ -28,10 +28,10 @@ export default function ProxySettings({ publicHost }: { publicHost: string }) {
   });
   return <Panel title="Minecraft-Subdomains">
     <div className="space-y-4">
-      <InfoNote>Verbinde mehrere Minecraft-Server über eigene Subdomains und einen gemeinsamen Port. Die Namen vergibst du in den Einstellungen des jeweiligen Servers.</InfoNote>
+      <InfoNote>Verbinde mehrere Minecraft-Server über eigene Subdomains und einen gemeinsamen Port. Die Namen vergibst du in der Verbindungsübersicht oder in den Server-Einstellungen.</InfoNote>
       {status.error && <ErrorNote>{(status.error as Error).message}</ErrorNote>}
       {status.data?.error && <ErrorNote>{status.data.error}</ErrorNote>}
-      <p className="text-sm text-stone-300">{status.data?.enabled ? (status.data.reachable ? 'Proxy erreichbar' : 'Proxy nicht erreichbar') : 'Proxy deaktiviert'}</p>
+      <p className="text-sm text-stone-300">{status.data?.enabled ? (status.data.reachable ? 'Proxy intern erreichbar' : 'Proxy intern nicht erreichbar') : 'Proxy deaktiviert'}</p>
       <Toggle checked={enabled} onChange={setEnabled} label="Minecraft-Proxy aktivieren" />
       <Field label="Gemeinsamer Minecraft-Port" hint="Standard: 25565. Ein bestehender Server darf diesen Direktport nicht mehr belegen.">
         <input type="number" min={1024} max={65535} className="mc-input" value={port} onChange={e => setPort(Number(e.target.value))} />

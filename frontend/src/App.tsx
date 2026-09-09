@@ -23,6 +23,7 @@ import AutomationTab from './pages/server/AutomationTab';
 import SettingsTab from './pages/server/SettingsTab';
 import UsersPage from './pages/admin/Users';
 import PanelSettingsPage from './pages/admin/PanelSettings';
+import ProxyPage from './pages/admin/Proxy';
 import ProfilePage from './pages/Profile';
 
 export default function App() {
@@ -106,6 +107,7 @@ export default function App() {
           <>
             <Route path="/admin/users" element={<UsersPage />} />
             <Route path="/admin/settings" element={<PanelSettingsPage />} />
+            <Route path="/admin/proxy" element={<ProxyPage />} />
           </>
         )}
         <Route path="*" element={<Navigate to="/" replace />} />

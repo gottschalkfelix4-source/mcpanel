@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useServer } from '../pages/server/ServerLayout';
@@ -22,7 +23,7 @@ export default function ServerRouting() {
   });
   return <Panel title="Subdomains und Direktzugriff">
     <div className="space-y-4">
-      <p className="text-sm text-stone-300">{server.proxy.enabled ? `Gemeinsamer Proxy-Port: ${server.proxy.port}` : 'Proxy noch nicht in den Panel-Einstellungen aktiviert.'}</p>
+      <p className="text-sm text-stone-300">{server.proxy.enabled ? `Gemeinsamer Proxy-Port: ${server.proxy.port}` : 'Proxy noch nicht aktiviert.'} {server.isAdmin && <Link to="/admin/proxy" className="text-grass-light hover:underline">Proxy-Übersicht öffnen →</Link>}</p>
       <Field label="Subdomains – eine pro Zeile" hint="Die erste ist die primäre Adresse. Beispiel: survival.example.de. Aliase dürfen keinem anderen Server zugeordnet sein.">
         <textarea className="mc-input" rows={3} value={names} onChange={e => setNames(e.target.value)} />
       </Field>

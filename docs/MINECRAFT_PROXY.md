@@ -16,7 +16,8 @@ Es handelt sich um Minecraft-Routing; die Webadresse des Panels wird dadurch nic
    das additive Prisma-Schema ab: Hostnamen, Direktzugriff, Sitzungsrevisionen
    und historische Backup-Ziele. Bestehende Server behalten ihren Direktzugriff;
    der Proxy ist zunächst ausgeschaltet.
-2. Als Administrator unter **Server → Einstellungen → Subdomains und Direktzugriff**
+2. Als Administrator oben **Proxy** öffnen und einen Server in der Grafik auswählen
+   (alternativ **Server → Einstellungen → Subdomains und Direktzugriff**), dann
    die echten Subdomains eintragen, eine pro Zeile. Die erste ist die primäre
    Kopieradresse. Weitere Namen sind Aliase für denselben Server.
 3. Falls ein bestehender Server den Direktport 25565 verwendet, dort einen anderen
@@ -24,7 +25,7 @@ Es handelt sich um Minecraft-Routing; die Webadresse des Panels wird dadurch nic
    Dies erstellt den Minecraft-Container neu und unterbricht einen laufenden Server.
    Namen und Daten bleiben erhalten. Bei deaktiviertem Direktzugriff ist bis zur
    Proxy-Aktivierung kein öffentlicher Zugang vorhanden.
-4. Unter **Panel → Minecraft-Subdomains** den Proxy aktivieren und speichern.
+4. Unter **Proxy → Proxy und öffentliche Adresse einstellen** den Proxy aktivieren und speichern.
    Standard ist 25565/TCP. Ein belegter Port führt zu einer Fehlermeldung; das Panel
    verschiebt bestehende Server nicht automatisch.
 5. Beim DNS-Anbieter für jede Subdomain einen **A-Eintrag** auf die öffentliche
@@ -41,6 +42,20 @@ Eigene Direktports können parallel aktiv bleiben. Sind Proxy und Direktzugriff
 für einen Server aus, zeigt das Panel „Kein öffentlicher Zugang“ an.
 **Öffentlicher Host für Direktverbindungen** ist im Panel bearbeitbar und hat
 Vorrang vor `PUBLIC_HOST` aus der Umgebung.
+
+## Zentrale Proxy-Übersicht
+
+Der Admin-Tab **Proxy** zeigt die interaktive Zuordnung **Subdomain → Proxy → Server**.
+Die Suche filtert nach Name, Subdomain oder Direktport. Nach Auswahl eines Servers
+lassen sich dessen Subdomains bearbeiten und Verbindungsadressen kopieren.
+Die Übersicht aktualisiert sich alle 15 Sekunden; ungespeicherte Eingaben bleiben erhalten.
+
+Die Porttabelle unterscheidet tatsächliche Docker-Portbindungen am Host von den
+benötigten Router-Freigaben. Gestoppte Container, nur lokal gebundene Ports und
+Docker-Abfragefehler werden gesondert angezeigt. Interne Container-Ports ohne
+Hostbindung zählen nicht als öffentlich. Zusätzliche veröffentlichte UDP-Ports
+erscheinen ebenfalls, gehören aber nicht zum normalen Minecraft-Java-Proxyzugang.
+DNS, Router und externe Firewall werden dadurch nicht geprüft.
 
 ## Betrieb mit Compose und Unraid
 

@@ -4,7 +4,7 @@ import { Boxes, Container, ExternalLink, Key, ScrollText, Server } from 'lucide-
 import { api } from '../../lib/api';
 import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
-import ProxySettings from '../../components/ProxySettings';
+import { Link } from 'react-router-dom';
 import { formatDate } from '../../lib/format';
 import {
   Badge, Button, ErrorNote, Field, InfoNote, LoadErrorBlock, LoadingBlock, Panel, useToast,
@@ -135,7 +135,7 @@ export default function PanelSettingsPage() {
       </Panel>
 
       <BackupTarget />
-      <ProxySettings publicHost={data.publicHost} />
+      <Panel title="Minecraft-Proxy"><Link to="/admin/proxy" className="text-grass-light hover:underline">Subdomains, Server-Zuordnungen und Portfreigaben auf der Proxy-Seite verwalten →</Link></Panel>
 
       {/* Benachrichtigungen fuer alle Server */}
       <NotificationChannels
