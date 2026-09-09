@@ -14,6 +14,7 @@ export class RconClient {
   private socket: net.Socket | null = null;
   private buffer = Buffer.alloc(0);
   private nextId = 1;
+  private rejectConnect?: (error: Error) => void;
   private pending = new Map<number, { resolve: (v: string) => void; reject: (e: Error) => void }>();
 
   constructor(
@@ -21,10 +22,12 @@ export class RconClient {
     private port: number,
     private password: string,
     private timeoutMs = 8000,
+    private onClose?: () => void,
   ) {}
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
+      this.rejectConnect = reject;
       const socket = net.createConnection({ host: this.host, port: this.port });
       this.socket = socket;
 
@@ -36,14 +39,14 @@ export class RconClient {
       socket.setTimeout(this.timeoutMs, () => onError(new Error('RCON Timeout')));
       socket.once('error', onError);
       socket.on('data', (d) => this.onData(d));
-      socket.on('close', () => this.cleanup(new Error('RCON Verbindung geschlossen')));
+      socket.on('close', () => onError(new Error('RCON Verbindung geschlossen')));
 
       socket.once('connect', () => {
         socket.setTimeout(0);
         socket.removeListener('error', onError);
         socket.on('error', (e) => this.cleanup(e));
         this.send(TYPE_AUTH, this.password)
-          .then(() => resolve())
+          .then(() => { this.rejectConnect = undefined; resolve(); })
           .catch(reject);
       });
     });
@@ -53,6 +56,10 @@ export class RconClient {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= 4) {
       const size = this.buffer.readInt32LE(0);
+      if (size < 10 || size > 4 * 1024 * 1024) {
+        this.cleanup(new Error('RCON: Ungültige Paketgröße'));
+        return;
+      }
       if (this.buffer.length < size + 4) break;
       const packet = this.buffer.subarray(4, size + 4);
       this.buffer = this.buffer.subarray(size + 4);
@@ -62,9 +69,8 @@ export class RconClient {
       const body = packet.subarray(8, packet.length - 2).toString('utf8');
 
       if (id === -1) {
-        for (const p of this.pending.values()) p.reject(new Error('RCON: Passwort falsch'));
-        this.pending.clear();
-        continue;
+        this.cleanup(new Error('RCON: Passwort falsch'));
+        return;
       }
       const waiter = this.pending.get(id);
       if (waiter && (type === TYPE_RESPONSE || type === TYPE_AUTH_RESPONSE)) {
@@ -87,8 +93,9 @@ export class RconClient {
 
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error('RCON Timeout'));
+        // Nach einem Timeout ist unklar, ob der Befehl bereits ausgeführt wurde.
+        // Verbindung verwerfen und den Befehl niemals automatisch wiederholen.
+        this.cleanup(new Error('RCON Timeout'));
       }, this.timeoutMs);
       this.pending.set(id, {
         resolve: (v) => {
@@ -109,12 +116,16 @@ export class RconClient {
   }
 
   private cleanup(err: Error) {
+    this.rejectConnect?.(err);
+    this.rejectConnect = undefined;
     for (const p of this.pending.values()) p.reject(err);
     this.pending.clear();
     if (this.socket) {
       this.socket.removeAllListeners();
       this.socket.destroy();
       this.socket = null;
+      this.buffer = Buffer.alloc(0);
+      this.onClose?.();
     }
   }
 
@@ -123,15 +134,87 @@ export class RconClient {
   }
 }
 
-/** Einmalige RCON-Verbindung: Befehl senden, Antwort zurückgeben. */
-export async function rconCommand(server: Server, command: string): Promise<string> {
-  const client = new RconClient(server.containerName, 25575, server.rconPassword);
-  try {
-    await client.connect();
-    return await client.command(command);
-  } finally {
-    client.close();
+const IDLE_TIMEOUT_MS = 60_000;
+const PLAYER_CACHE_MS = 3000;
+
+interface Connection {
+  client: RconClient;
+  password: string;
+  ready: Promise<void>;
+  tail: Promise<unknown>;
+  pending: number;
+  closed: boolean;
+  playerRevision: number;
+  idleTimer?: NodeJS.Timeout;
+  players?: { command: string; value: PlayerList; expiresAt: number };
+  playerRequest?: { command: string; promise: Promise<PlayerList> };
+}
+
+const connections = new Map<string, Connection>();
+
+function getConnection(server: Server): Connection {
+  const key = server.containerName;
+  const existing = connections.get(key);
+  if (existing?.password === server.rconPassword) return existing;
+  if (existing) {
+    clearTimeout(existing.idleTimer);
+    existing.client.close();
   }
+
+  const discard = () => {
+    entry.closed = true;
+    clearTimeout(entry.idleTimer);
+    if (connections.get(key) === entry) connections.delete(key);
+  };
+  const client = new RconClient(key, 25575, server.rconPassword, 8000, discard);
+  const entry: Connection = {
+    client, password: server.rconPassword,
+    ready: client.connect().catch(error => {
+      discard();
+      client.close();
+      throw error;
+    }),
+    tail: Promise.resolve(), pending: 0, closed: false, playerRevision: 0,
+  };
+  connections.set(key, entry);
+  return entry;
+}
+
+function sendCommand(entry: Connection, command: string): Promise<string> {
+  clearTimeout(entry.idleTimer);
+  entry.pending++;
+  // Eine gemeinsame Verbindung, auch bei gleichzeitigen API-/Live-Abfragen.
+  const result = entry.tail.then(async () => {
+    await entry.ready;
+    return entry.client.command(command);
+  });
+  entry.tail = result.catch(() => {});
+  return result.catch(error => {
+    entry.client.close();
+    throw error;
+  }).finally(() => {
+    if (--entry.pending === 0 && !entry.closed) {
+      entry.idleTimer = setTimeout(() => entry.client.close(), IDLE_TIMEOUT_MS);
+      entry.idleTimer.unref();
+    }
+  });
+}
+
+/** Befehle teilen eine Verbindung pro Server; keine Wiederholung bei Fehlern. */
+export function rconCommand(server: Server, command: string): Promise<string> {
+  const entry = getConnection(server);
+  entry.players = undefined;
+  entry.playerRequest = undefined;
+  entry.playerRevision++;
+  return sendCommand(entry, command);
+}
+
+export function closeRconConnections(): void {
+  for (const entry of connections.values()) {
+    clearTimeout(entry.idleTimer);
+    entry.client.close();
+  }
+  connections.clear();
 }
 
 export interface PlayerList {
@@ -146,7 +229,29 @@ export async function listPlayers(server: Server): Promise<PlayerList> {
   const extra = (server.extraEnv ?? {}) as Record<string, string>;
   const loader = (extra.TYPE || server.type).toUpperCase();
   const command = ['PAPER', 'PURPUR', 'SPIGOT'].includes(loader) ? 'minecraft:list' : 'list';
-  return parsePlayerList(await rconCommand(server, command));
+  const entry = getConnection(server);
+  if (entry.players?.command === command && entry.players.expiresAt > Date.now()) {
+    return { ...entry.players.value, players: [...entry.players.value.players] };
+  }
+  let request = entry.playerRequest;
+  if (!request || request.command !== command) {
+    const revision = entry.playerRevision;
+    const promise = sendCommand(entry, command).then(raw => {
+      const value = parsePlayerList(raw);
+      if (entry.playerRevision === revision) {
+        entry.players = { command, value, expiresAt: Date.now() + PLAYER_CACHE_MS };
+      }
+      return value;
+    });
+    request = { command, promise };
+    entry.playerRequest = request;
+  }
+  try {
+    const value = await request.promise;
+    return { ...value, players: [...value.players] };
+  } finally {
+    if (entry.playerRequest === request) entry.playerRequest = undefined;
+  }
 }
 
 export function parsePlayerList(raw: string): PlayerList {

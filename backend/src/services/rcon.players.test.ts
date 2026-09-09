@@ -1,7 +1,7 @@
 import type { Server } from '@prisma/client';
 import { afterEach, expect, it, vi } from 'vitest';
-import { listPlayers, parsePlayerList, RconClient } from './rcon.js';
-afterEach(() => vi.restoreAllMocks());
+import { closeRconConnections, listPlayers, parsePlayerList, RconClient } from './rcon.js';
+afterEach(() => { closeRconConnections(); vi.restoreAllMocks(); });
 it.each([
   ['There are 2 of a max of 20 players online: Felix, Alex', { online: 2, max: 20, players: ['Felix', 'Alex'] }],
   ['There are 0 of a max of 20 players online:', { online: 0, max: 20, players: [] }],
@@ -17,5 +17,5 @@ it.each([['PAPER', 'minecraft:list'], ['MODPACK', 'list'], ['VANILLA', 'list']] 
   const close = vi.spyOn(RconClient.prototype, 'close').mockImplementation(() => {});
   expect(await listPlayers({ type, containerName: 'mc-id', rconPassword: 'test', extraEnv: {} } as Server)).toMatchObject({ players: ['Felix'] });
   expect(send).toHaveBeenCalledWith(command);
-  expect(close).toHaveBeenCalledOnce();
+  expect(close).not.toHaveBeenCalled();
 });

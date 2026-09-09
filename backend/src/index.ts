@@ -10,6 +10,7 @@ import { prisma } from './db.js';
 import { HttpError } from './lib/errors.js';
 import { bootstrap } from './bootstrap.js';
 import { setupConsoleGateway } from './ws/console.js';
+import { closeRconConnections } from './services/rcon.js';
 
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -117,6 +118,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     app.log.info('Fahre herunter …');
     await app.close();
+    closeRconConnections();
     process.exit(0);
   });
 }
