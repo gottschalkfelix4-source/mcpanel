@@ -490,12 +490,28 @@ Die Icons entstehen aus [gen-icons.mjs](frontend/scripts/gen-icons.mjs)
   jeder beliebige Container auf dem Host starten – das ist eine andere Größenordnung
   als „mehr Arbeitsspeicher für meinen Server“.
 
+- Der eingestellte Java-Heap ist das **Maximum**. Java startet standardmäßig mit
+  höchstens 2 GB (`INIT_MEMORY`) und wächst bis zum Maximum (`MAX_MEMORY`).
+  Eigene Werte in den Umgebungsvariablen bleiben erhalten; bei kleinerem Maximum
+  wird auch der automatische Startwert entsprechend begrenzt. Das ist kein
+  Versprechen für den tatsächlichen Verbrauch: große Modpacks benötigen schon
+  beim Laden mehr Speicher. Die Aikar-Flags sind standardmäßig nur für
+  Paper/Purpur/Spigot aktiv, nicht für Modpacks oder andere Loader. Insbesondere
+  wird nicht mehr pauschal der gesamte maximale Heap beim Start vorbelegt.
+  Bestehende Server übernehmen die neuen Standardwerte beim nächsten Neustart
+  im Panel. Eigene `INIT_MEMORY`-, `JVM_OPTS`- oder Flag-Vorgaben müssen bei Bedarf
+  separat angepasst werden.
+
 - Das Container-Limit liegt bewusst über dem Java-Heap: `+50 %`, mindestens 1 GB,
   höchstens 4 GB. Metaspace, Code-Cache, GC-Strukturen, Thread-Stacks und Direct
   Buffers brauchen Platz — bei einem Modpack mit ~400 Mods und 8 GB Heap wurden
   9,58 GB anonymer Speicher gemessen. Das Limit ist eine Obergrenze, keine
   Reservierung: großzügig zu rechnen kostet nichts, zu knapp killt Docker den
   Server mitten im Spiel. Die Anzeige „Arbeitsspeicher" bezieht sich auf dieses Limit.
+  Der angezeigte Verbrauch zieht wie `docker stats` den inaktiven Dateicache ab
+  (`total_inactive_file` bei cgroup v1, `inactive_file` bei cgroup v2). Er enthält
+  weiterhin den Java-Heap und zusätzlichen Prozessspeicher, ist also keine
+  Messung der aktuell verwendeten Java-Objekte.
 
   | Java-Heap | Container-Limit |
   |---|---|

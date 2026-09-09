@@ -2,7 +2,7 @@ import type { Server } from '@prisma/client';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
-  inspect: vi.fn(), remove: vi.fn(), start: vi.fn(), create: vi.fn(), list: vi.fn(), get: vi.fn(),
+  inspect: vi.fn(), remove: vi.fn(), start: vi.fn(), create: vi.fn(), list: vi.fn(), get: vi.fn(), stats: vi.fn(),
 }));
 vi.mock('../config.js', () => ({
   config: { dockerNetwork: 'mc-network', mcDns: [], mcImageRepo: 'itzg/minecraft-server' },
@@ -15,13 +15,13 @@ vi.mock('dockerode', () => ({ default: class {
   listNetworks = async () => [{ Name: 'mc-network' }];
   listImages = async () => [{}];
 } }));
-const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes } = await import('./docker.js');
+const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes, getStats } = await import('./docker.js');
 const server = {
   id: 'abc123', name: 'Meine Welt', containerName: 'mc-abc123', type: 'FABRIC',
   mcVersion: '1.21.1', memoryMb: 4096, port: 25565, rconPassword: 'test', extraEnv: {},
   modpackIconUrl: null,
 } as Server;
-const container = { inspect: m.inspect, remove: m.remove, start: m.start };
+const container = { inspect: m.inspect, remove: m.remove, start: m.start, stats: m.stats };
 beforeEach(() => {
   vi.resetAllMocks();
   m.get.mockReturnValue(container);
@@ -79,7 +79,7 @@ function currentInfo() {
   };
 }
 
-it.each(['name', 'icon', 'alias'])('updates stale %s only when stopped and preserves current containers', async field => {
+it.each(['name', 'icon', 'alias', 'memory'])('updates stale %s only when stopped and preserves current containers', async field => {
   await createContainer(server);
   const info = currentInfo();
   m.create.mockClear();
@@ -89,6 +89,7 @@ it.each(['name', 'icon', 'alias'])('updates stale %s only when stopped and prese
   if (field === 'name') info.Name = '/mc-abc123';
   if (field === 'icon') info.Config.Labels['net.unraid.docker.icon'] = 'https://example.com/old.png';
   if (field === 'alias') info.NetworkSettings.Networks['mc-network'].Aliases = [];
+  if (field === 'memory') info.Config.Env = info.Config.Env.filter(value => !value.startsWith('INIT_MEMORY=') && !value.startsWith('MAX_MEMORY='));
   info.State.Running = true;
   await ensureContainer(server);
   expect(m.remove).not.toHaveBeenCalled();
@@ -96,6 +97,42 @@ it.each(['name', 'icon', 'alias'])('updates stale %s only when stopped and prese
   await ensureContainer(server);
   expect(m.remove).toHaveBeenCalledWith({ force: true, v: false });
   expect(m.create).toHaveBeenCalledOnce();
+});
+
+function envFor(overrides: Partial<Server> = {}) {
+  return Object.fromEntries(buildEnv({ ...server, ...overrides }).map(entry => {
+    const separator = entry.indexOf('=');
+    return [entry.slice(0, separator), entry.slice(separator + 1)];
+  }));
+}
+
+it('gives ATM10 a small initial heap without reducing its 16 GB maximum or 20 GB container limit', () => {
+  const env = envFor({ type: 'MODPACK', memoryMb: 16384, extraEnv: { TYPE: 'NEOFORGE' } });
+  expect(env).toMatchObject({ MEMORY: '16384M', MAX_MEMORY: '16384M', INIT_MEMORY: '2048M', USE_AIKAR_FLAGS: 'false' });
+  expect(containerMemoryBytes(16384)).toBe(20 * 1024 ** 3);
+});
+
+it('keeps plugin flags and explicit administrator overrides', () => {
+  expect(envFor({ type: 'PAPER' }).USE_AIKAR_FLAGS).toBe('true');
+  expect(envFor({ extraEnv: { INIT_MEMORY: '6G', MAX_MEMORY: '10G', USE_AIKAR_FLAGS: 'true', JVM_OPTS: '-Dexample=a=b' } }))
+    .toMatchObject({ INIT_MEMORY: '6G', MAX_MEMORY: '10G', USE_AIKAR_FLAGS: 'true', JVM_OPTS: '-Dexample=a=b' });
+});
+
+it('respects smaller heaps, custom maximums and blank overrides', () => {
+  expect(envFor({ memoryMb: 512 }).INIT_MEMORY).toBe('512M');
+  expect(envFor({ extraEnv: { MAX_MEMORY: '1G' } }).INIT_MEMORY).toBe('1G');
+  expect(envFor({ extraEnv: { MEMORY: '512M' } })).toMatchObject({ INIT_MEMORY: '512M', MAX_MEMORY: '512M' });
+  expect(envFor({ extraEnv: { INIT_MEMORY: '', MEMORY: '', MAX_MEMORY: '' } })).toMatchObject({ INIT_MEMORY: '2048M', MAX_MEMORY: '4096M' });
+});
+
+it('returns corrected Docker working-set usage through the live stats path', async () => {
+  m.inspect.mockResolvedValue({ Config: { Labels: { 'mcpanel.server': server.id } } });
+  m.stats.mockResolvedValue({
+    cpu_stats: { cpu_usage: { total_usage: 20 }, system_cpu_usage: 200, online_cpus: 1 },
+    precpu_stats: { cpu_usage: { total_usage: 10 }, system_cpu_usage: 100 },
+    memory_stats: { usage: 1900, limit: 2000, stats: { inactive_file: 400 } },
+  });
+  expect(await getStats(server)).toEqual({ cpuPercent: 10, memoryUsed: 1500, memoryLimit: 2000 });
 });
 
 it('does not repeatedly recreate a container using the collision suffix', async () => {

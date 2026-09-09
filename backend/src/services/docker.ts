@@ -6,6 +6,7 @@ import type { Container, ContainerInfo } from 'dockerode';
 import type { Server } from '@prisma/client';
 import { config, serverHostDir } from '../config.js';
 import { containerIcon, containerNames } from './containerPresentation.js';
+import { defaultInitialMemory, memoryWorkingSet, type DockerMemoryStats } from './memory.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
@@ -143,13 +144,16 @@ function containerLabels(server: Server): Record<string, string> {
 /** Baut die Environment-Liste für das itzg/minecraft-server Image. */
 export function buildEnv(server: Server): string[] {
   const extra = (server.extraEnv ?? {}) as Record<string, string>;
+  const memory = extra.MEMORY || `${server.memoryMb}M`;
+  const maxMemory = extra.MAX_MEMORY || memory;
+  const loader = (extra.TYPE || (server.type === 'MODPACK' ? 'FORGE' : server.type)).toUpperCase();
 
   const env: Record<string, string> = {
     EULA: 'TRUE',
     TYPE: server.type === 'MODPACK' ? (extra.TYPE ?? 'FORGE') : server.type,
     VERSION: server.mcVersion || 'LATEST',
-    MEMORY: `${server.memoryMb}M`,
-    USE_AIKAR_FLAGS: 'true',
+    // Aikar's preset targets plugin servers, not Forge/NeoForge modpacks.
+    USE_AIKAR_FLAGS: ['PAPER', 'PURPUR', 'SPIGOT'].includes(loader) ? 'true' : 'false',
     ENABLE_RCON: 'true',
     RCON_PASSWORD: server.rconPassword,
     RCON_PORT: '25575',
@@ -160,6 +164,11 @@ export function buildEnv(server: Server): string[] {
     STOP_SERVER_ANNOUNCE_DELAY: '5',
     TZ: process.env.TZ ?? 'Europe/Berlin',
     ...extra,
+    MEMORY: memory,
+    MAX_MEMORY: maxMemory,
+    // MEMORY alone sets both Xms and Xmx; with AlwaysPreTouch this eagerly
+    // occupies the whole heap even on an empty server. Preserve custom values.
+    INIT_MEMORY: extra.INIT_MEMORY || defaultInitialMemory(maxMemory),
   };
 
   return Object.entries(env)
@@ -384,17 +393,15 @@ export async function getStats(server: Server) {
         online_cpus?: number;
       };
       precpu_stats: { cpu_usage: { total_usage: number }; system_cpu_usage: number };
-      memory_stats: { usage?: number; limit?: number; stats?: { cache?: number } };
+      memory_stats: DockerMemoryStats;
     };
     const cpuDelta = s.cpu_stats.cpu_usage.total_usage - s.precpu_stats.cpu_usage.total_usage;
     const sysDelta = s.cpu_stats.system_cpu_usage - s.precpu_stats.system_cpu_usage;
     const cpus = s.cpu_stats.online_cpus ?? 1;
     const cpuPercent = sysDelta > 0 && cpuDelta > 0 ? (cpuDelta / sysDelta) * cpus * 100 : 0;
-    const cache = s.memory_stats.stats?.cache ?? 0;
-    const memUsed = Math.max(0, (s.memory_stats.usage ?? 0) - cache);
     return {
       cpuPercent: Math.round(cpuPercent * 10) / 10,
-      memoryUsed: memUsed,
+      memoryUsed: memoryWorkingSet(s.memory_stats),
       memoryLimit: s.memory_stats.limit ?? 0,
     };
   } catch {

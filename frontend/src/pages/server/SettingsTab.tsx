@@ -14,7 +14,7 @@ const SERVER_TYPES: ServerType[] = [
   'VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT', 'MODPACK',
 ];
 
-const RAM_PRESETS = [1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576];
+const RAM_PRESETS = [1024, 2048, 4096, 6144, 8192, 10240, 12288, 16384, 24576];
 
 export default function SettingsTab() {
   const { server, refresh } = useServer();
@@ -147,7 +147,7 @@ export default function SettingsTab() {
             </datalist>
           </Field>
 
-          <Field label="Java-Heap" hint={`Aktuell ${memoryMb} MB. Das Container-Limit liegt darüber (Reserve für die JVM).`}>
+          <Field label="Maximaler Java-Heap" hint={`Maximum ${memoryMb} MB. Standardmäßig startet Java mit höchstens 2 GB und wächst bei Bedarf. INIT_MEMORY kann den Startwert überschreiben. Das Container-Limit enthält zusätzliche JVM-Reserve.`}>
             <select
               className="mc-select"
               value={memoryMb}

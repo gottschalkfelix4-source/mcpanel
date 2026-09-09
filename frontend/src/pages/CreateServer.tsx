@@ -18,7 +18,7 @@ const SERVER_TYPES: { value: ServerType; label: string; hint: string }[] = [
   { value: 'QUILT', label: 'Quilt', hint: 'Fabric-Fork' },
 ];
 
-const RAM_PRESETS = [2048, 4096, 6144, 8192, 12288, 16384];
+const RAM_PRESETS = [2048, 4096, 6144, 8192, 10240, 12288, 16384];
 
 export default function CreateServerPage() {
   const navigate = useNavigate();
@@ -239,7 +239,7 @@ export default function CreateServerPage() {
               </Field>
             )}
 
-            <Field label="Java-Heap" hint="Modpacks brauchen meist 6–8 GB. Der Container bekommt zusätzlich Reserve für die JVM.">
+            <Field label="Maximaler Java-Heap" hint="Java startet mit höchstens 2 GB und wächst bei Bedarf bis zu diesem Maximum. Der Bedarf hängt vom Modpack ab. Der Container erhält zusätzliche JVM-Reserve.">
               <div className="grid grid-cols-3 gap-1.5">
                 {RAM_PRESETS.map((mb) => (
                   <button

@@ -74,7 +74,7 @@ export default function OverviewTab() {
           tint="#7FB238"
           label="Arbeitsspeicher"
           value={running ? formatBytes(memCount) : '–'}
-          sub={`von ${formatBytes(memLimit)} Container-Limit · Java-Heap ${formatMemory(server.memoryMb)}`}
+          sub={<span title="Container-Speicher ohne inaktiven Dateicache, wie bei docker stats. Enthält auch Speicher außerhalb des Java-Heaps.">{`von ${formatBytes(memLimit)} Container-Limit · Java-Heap max. ${formatMemory(server.memoryMb)}`}</span>}
           percent={memPercent}
           delay={0.12}
         />
