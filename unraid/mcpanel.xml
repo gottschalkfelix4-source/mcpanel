@@ -42,6 +42,7 @@ Die Minecraft-Server oeffnen ihre Ports selbst auf dem Host (Vorgabe 25565-25700
     niemals diese Standardvorlage ueber eine konfigurierte Benutzervorlage kopieren.
   -->
   <TemplateURL/>
+  <!-- Diese PNG-Datei muss eingecheckt sein: Unraid laedt sie direkt von GitHub. -->
   <Icon>https://raw.githubusercontent.com/gottschalkfelix4-source/mcpanel/main/frontend/public/icons/icon-192.png</Icon>
   <DonateText/>
   <DonateLink/>

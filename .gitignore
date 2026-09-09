@@ -5,3 +5,6 @@ data/
 *.log
 .DS_Store
 *.tsbuildinfo
+# Unraid loads this icon directly from GitHub, outside the frontend build.
+frontend/public/icons/*
+!frontend/public/icons/icon-192.png
