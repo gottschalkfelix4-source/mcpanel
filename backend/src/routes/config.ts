@@ -12,6 +12,7 @@ import {
 } from '../services/properties.js';
 import { rconCommand } from '../services/rcon.js';
 import * as dockerSvc from '../services/docker.js';
+import { readKnownPlayers } from '../services/knownPlayers.js';
 
 export default async function configRoutes(app: FastifyInstance) {
   guardMutations(app);
@@ -48,15 +49,16 @@ export default async function configRoutes(app: FastifyInstance) {
   /** Operatoren, Whitelist und Bans. */
   app.get('/players', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
-    const [ops, whitelist, banned] = await Promise.all([
+    const [ops, whitelist, banned, known] = await Promise.all([
       readJsonList<{ uuid: string; name: string; level: number }>(access.server.id, 'ops.json'),
       readJsonList<{ uuid: string; name: string }>(access.server.id, 'whitelist.json'),
       readJsonList<{ uuid: string; name: string; reason?: string }>(
         access.server.id,
         'banned-players.json',
       ),
+      readKnownPlayers(access.server.id),
     ]);
-    return { ops, whitelist, banned };
+    return { ops, whitelist, banned, known };
   });
 
   /** Spieleraktionen laufen über RCON, damit sie sofort greifen. */

@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, Crown, ListChecks, LogOut, Plus, ShieldCheck, UserMinus, Users } from 'lucide-react';
 import { api } from '../../lib/api';
-import { Badge, Button, EmptyState, LoadingBlock, Panel, useToast } from '../../components/ui';
+import { Badge, Button, EmptyState, ErrorNote, LoadingBlock, Panel, useToast } from '../../components/ui';
 import { PixelHead } from '../../components/pixel';
 import { useServer } from './ServerLayout';
 
 interface PlayerLists {
+  known: { uuid: string; name: string }[];
   ops: { uuid: string; name: string; level: number }[];
   whitelist: { uuid: string; name: string }[];
   banned: { uuid: string; name: string; reason?: string }[];
@@ -22,12 +23,14 @@ const Avatar = PixelHead;
 export default function PlayersTab() {
   const { server, can, liveState, players } = useServer();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const [newName, setNewName] = useState('');
 
   const lists = useQuery({
     queryKey: ['player-lists', server.id],
     queryFn: () => api.get<PlayerLists>(`/servers/${server.id}/config/players`),
     refetchInterval: 20_000,
+    enabled: can('files.read'),
   });
 
   const act = useMutation({
@@ -38,13 +41,22 @@ export default function PlayersTab() {
       }),
     onSuccess: (res) => {
       toast.success(res.response?.trim() || 'Erledigt.');
-      setTimeout(() => void lists.refetch(), 600);
+      setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ['online-players', server.id] });
+        if (can('files.read')) void lists.refetch();
+      }, 600);
     },
     onError: (err: Error) => toast.error(err.message),
   });
 
   const canEdit = can('config.edit');
   const offline = liveState !== 'running';
+  const onlineNames = new Set(players?.players.map(name => name.toLowerCase()) ?? []);
+  const known = [...new Map([
+    ...(lists.data?.known ?? []),
+    ...(players?.players.map(name => ({ name, uuid: '' })) ?? []),
+  ].map(player => [player.name.toLowerCase(), player])).values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   function run(action: Action, player: string) {
     if (!player.trim()) return;
@@ -53,6 +65,7 @@ export default function PlayersTab() {
 
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
+      {lists.isError && <ErrorNote>Gespeicherte Spielerlisten konnten nicht geladen werden: {lists.error.message}</ErrorNote>}
       {offline && (
         <div className="mc-frame animate-pop-in !border-gold/40">
           <div className="mc-frame-inner flex items-center gap-2.5 p-3 text-sm text-gold">
@@ -73,8 +86,8 @@ export default function PlayersTab() {
           {!players || players.players.length === 0 ? (
             <EmptyState
               icon={<Users size={36} />}
-              title="Niemand online"
-              description={offline ? 'Starte den Server, damit Spieler beitreten können.' : undefined}
+              title={!offline && !players ? 'Spielerliste noch nicht verfügbar' : 'Niemand online'}
+              description={offline ? 'Starte den Server, damit Spieler beitreten können.' : !players ? 'Die Verbindung zur Spielerabfrage ist noch nicht bereit oder gestört. Die Abfrage wird automatisch wiederholt.' : undefined}
             />
           ) : (
             <ul className="divide-y divide-stone-875">
@@ -116,6 +129,24 @@ export default function PlayersTab() {
             </ul>
           )}
         </Panel>
+
+        {/* Known profiles remain manageable after a player disconnects. */}
+        {can('files.read') && <Panel title="Bekannte Spieler" icon={<Users size={16} />} subtitle="Gespeicherte Minecraft-Profile und aktuell verbundene Spieler" bodyClassName="!p-0">
+          {lists.isLoading ? <LoadingBlock /> : known.length === 0 ? (
+            <EmptyState icon={<Users size={36} />} title="Noch keine Spieler bekannt" description="Spieler erscheinen nach dem Beitritt. Gespeicherte Profile bleiben auch nach dem Verlassen sichtbar." />
+          ) : <ul className="max-h-96 divide-y divide-stone-875 overflow-y-auto">
+            {known.map(player => <li key={player.name.toLowerCase()} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+              <Avatar name={player.name} size={24} />
+              <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-stone-100">{player.name}</span>
+              <span className="text-xs text-stone-400">{onlineNames.has(player.name.toLowerCase()) ? 'Online' : !offline && !players ? 'Status unbekannt' : 'Offline'}</span>
+              {canEdit && <div className="flex gap-1">
+                <Button variant="ghost" className="!px-2 !py-1 !text-[11px]" disabled={offline || act.isPending} icon={<Crown size={12} />} title="Zum Operator machen" onClick={() => run('op', player.name)} />
+                <Button variant="ghost" className="!px-2 !py-1 !text-[11px]" disabled={offline || act.isPending} icon={<ListChecks size={12} />} title="Zur Whitelist hinzufügen" onClick={() => run('whitelistAdd', player.name)} />
+                <Button variant="danger" className="!px-2 !py-1 !text-[11px]" disabled={offline || act.isPending} icon={<Ban size={12} />} title="Bannen" onClick={() => run('ban', player.name)} />
+              </div>}
+            </li>)}
+          </ul>}
+        </Panel>}
 
         {/* Whitelist */}
         <Panel

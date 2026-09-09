@@ -142,16 +142,27 @@ export interface PlayerList {
 
 /** `list`-Ausgabe des Servers parsen. */
 export async function listPlayers(server: Server): Promise<PlayerList> {
-  const raw = await rconCommand(server, 'list');
+  // Bukkit plugins may override /list with a formatted/custom command.
+  const extra = (server.extraEnv ?? {}) as Record<string, string>;
+  const loader = (extra.TYPE || server.type).toUpperCase();
+  const command = ['PAPER', 'PURPUR', 'SPIGOT'].includes(loader) ? 'minecraft:list' : 'list';
+  return parsePlayerList(await rconCommand(server, command));
+}
+
+export function parsePlayerList(raw: string): PlayerList {
   const clean = raw.replace(/§./g, '').trim();
-  const m = clean.match(/(\d+)\s*(?:of a max(?:imum)? of|\/)\s*(\d+)/i);
-  const online = m ? Number(m[1]) : 0;
-  const max = m ? Number(m[2]) : 0;
-  const idx = clean.indexOf(':');
+  const m = clean.match(/(\d+)\s*(?:of a max(?:imum)? of|von maximal|\/)\s*(\d+)/i);
+  if (!m) throw new Error('Spielerliste konnte nicht gelesen werden: unerwartete Serverantwort');
+  const online = Number(m[1]);
+  const max = Number(m[2]);
+  const idx = clean.indexOf(':', m.index! + m[0].length);
   const namePart = idx >= 0 ? clean.slice(idx + 1) : '';
   const players = namePart
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  if (players.length !== online || players.some(name => !/^[A-Za-z0-9_]{1,16}$/.test(name))) {
+    throw new Error('Spielerliste konnte nicht vollständig gelesen werden');
+  }
   return { online, max, players };
 }

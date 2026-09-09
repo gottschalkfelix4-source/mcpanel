@@ -178,6 +178,19 @@ wird höchstens alle zwei Sekunden in der Datenbank aktualisiert.
 
 ## Unraid
 
+Die Online-Spielerliste wird alle fünf Sekunden abgefragt, auch ohne
+Konsolenberechtigung oder aktive WebSocket-Verbindung. Eine nicht erreichbare
+Spielerabfrage wird ausdrücklich als unbekannt angezeigt. Unter **Spieler →
+Bekannte Spieler** stehen zusätzlich die gespeicherten Profile aus
+`usercache.json`; diese Liste wird alle 20 Sekunden erneuert. Online-Spieler
+erscheinen sofort mit der nächsten Spielerabfrage, auch bevor Minecraft ihr
+Profil in die Datei geschrieben hat.
+
+Das Panel verbindet seinen eigenen Container beim Start automatisch mit dem
+Minecraft-Netzwerk, damit die interne RCON-Abfrage auch bei Unraids
+Bridge-Konfiguration funktioniert. Der RCON-Port wird dafür nicht auf dem Host
+veröffentlicht.
+
 Minecraft-Container tragen den Servernamen aus dem Panel. Leerzeichen werden zu
 Bindestrichen, Umlaute werden ausgeschrieben; bei belegten Namen kommt die
 Server-ID dazu. Unraid erhält über `net.unraid.docker.icon` das Modpack-Bild,

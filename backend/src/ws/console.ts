@@ -60,8 +60,11 @@ function detachStream(serverId: string) {
 /** Pollt Status/Stats/Spieler und schickt sie an alle Zuschauer. */
 function startStatusPolling(io: IOServer, serverId: string) {
   if (statusTimers.has(serverId)) return;
+  let polling = false;
 
   const timer = setInterval(async () => {
+    if (polling) return;
+    polling = true;
     try {
     const room = io.sockets.adapter.rooms.get(roomForServer(serverId));
     if (!room || room.size === 0) {
@@ -91,6 +94,7 @@ function startStatusPolling(io: IOServer, serverId: string) {
       memoryLimitMb: server.memoryMb,
     });
     } catch { /* A transient database/Docker failure is retried next tick. */ }
+    finally { polling = false; }
   }, 3000);
 
   statusTimers.set(serverId, timer);

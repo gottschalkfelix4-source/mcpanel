@@ -51,7 +51,6 @@ export default function ServerLayout() {
   const [liveState, setLiveState] = useState<PowerState | null>(null);
   const [liveHealth, setLiveHealth] = useState<string | null>(null);
   const [liveStats, setLiveStats] = useState<ContainerStats | null>(null);
-  const [players, setPlayers] = useState<{ online: number; max: number; players: string[] } | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
 
@@ -62,11 +61,22 @@ export default function ServerLayout() {
     refetchInterval: 15_000,
   });
 
+  // Player visibility must not depend on console permission or Socket.IO.
+  const playerQuery = useQuery({
+    queryKey: ['online-players', id],
+    queryFn: () => api.get<{ online: number; max: number; players: string[]; available: boolean }>(`/servers/${id}/players`),
+    enabled: Boolean(id) && (liveState ?? server?.state) === 'running',
+    refetchInterval: 5000,
+    retry: false,
+  });
+  const players = (liveState ?? server?.state) === 'running' && !playerQuery.isError && playerQuery.data?.available
+    ? playerQuery.data : null;
+
   // Live-Status über Socket.IO
   useEffect(() => {
     if (!id) return;
     const socket = getSocket();
-    const clearLive = () => { setLiveState(null); setLiveHealth(null); setLiveStats(null); setPlayers(null); };
+    const clearLive = () => { setLiveState(null); setLiveHealth(null); setLiveStats(null); };
     clearLive();
     const subscribe = () => socket.emit('subscribe', { serverId: id }, () => {});
 
@@ -81,7 +91,6 @@ export default function ServerLayout() {
       setLiveState(payload.state);
       setLiveHealth(payload.health);
       setLiveStats(payload.stats);
-      setPlayers(payload.players);
     };
 
     socket.on('status', onStatus);

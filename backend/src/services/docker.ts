@@ -7,6 +7,7 @@ import type { Server } from '@prisma/client';
 import { config, serverHostDir } from '../config.js';
 import { containerIcon, containerNames } from './containerPresentation.js';
 import { defaultInitialMemory, memoryWorkingSet, type DockerMemoryStats } from './memory.js';
+import { connectPanelToNetwork } from './dockerNetwork.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
@@ -95,8 +96,13 @@ export function imageForServer(server: Server): string {
 export async function ensureNetwork(): Promise<void> {
   const nets = await docker.listNetworks({ filters: { name: [config.dockerNetwork] } });
   if (!nets.find((n) => n.Name === config.dockerNetwork)) {
-    await docker.createNetwork({ Name: config.dockerNetwork, Driver: 'bridge' });
+    try {
+      await docker.createNetwork({ Name: config.dockerNetwork, Driver: 'bridge' });
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode !== 409) throw error;
+    }
   }
+  await connectPanelToNetwork(docker, config.dockerNetwork);
 }
 
 export async function ensureImage(image: string, onProgress?: (msg: string) => void): Promise<void> {
