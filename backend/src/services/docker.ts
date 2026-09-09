@@ -5,6 +5,7 @@ import Docker from 'dockerode';
 import type { Container, ContainerInfo } from 'dockerode';
 import type { Server } from '@prisma/client';
 import { config, serverHostDir } from '../config.js';
+import { containerIcon, containerNames } from './containerPresentation.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
@@ -118,12 +119,25 @@ export async function ensureImage(image: string, onProgress?: (msg: string) => v
 export async function findContainer(server: Server): Promise<Container | null> {
   try {
     const c = docker.getContainer(server.containerName);
-    await c.inspect();
-    return c;
+    const info = await c.inspect();
+    if (info.Config.Labels?.[LABEL_SERVER] === server.id) return c;
   } catch (err) {
-    if ((err as { statusCode?: number }).statusCode === 404) return null;
-    throw err;
+    if ((err as { statusCode?: number }).statusCode !== 404) throw err;
   }
+  // The stored name remains the stable DNS alias for RCON and proxy routes.
+  // Docker's visible name can change; ownership is always identified by label.
+  const matches = await docker.listContainers({ all: true, filters: { label: [`${LABEL_SERVER}=${server.id}`] } });
+  if (matches.length > 1) throw conflict('Mehrere Container gehören zu diesem Server');
+  return matches.length ? docker.getContainer(matches[0].Id) : null;
+}
+
+function containerLabels(server: Server): Record<string, string> {
+  return {
+    [LABEL_SERVER]: server.id,
+    'mcpanel.name': server.name,
+    'net.unraid.docker.icon': containerIcon(server),
+    'net.unraid.docker.shell': 'bash',
+  };
 }
 
 /** Baut die Environment-Liste für das itzg/minecraft-server Image. */
@@ -174,16 +188,19 @@ export async function createContainer(server: Server): Promise<Container> {
 
   const memBytes = containerMemoryBytes(server.memoryMb);
 
-  return docker.createContainer({
-    name: server.containerName,
+  const [name, collisionName] = containerNames(server);
+  const options: Docker.ContainerCreateOptions = {
+    name,
     Image: imageForServer(server),
     Env: buildEnv(server),
     Tty: true,
     OpenStdin: true,
     StdinOnce: false,
-    Labels: {
-      [LABEL_SERVER]: server.id,
-      'mcpanel.name': server.name,
+    Labels: containerLabels(server),
+    NetworkingConfig: {
+      EndpointsConfig: {
+        [config.dockerNetwork]: { Aliases: [server.containerName] },
+      },
     },
     ExposedPorts: {
       '25565/tcp': {},
@@ -203,7 +220,14 @@ export async function createContainer(server: Server): Promise<Container> {
       NetworkMode: config.dockerNetwork,
       ...(config.mcDns.length > 0 ? { Dns: config.mcDns } : {}),
     },
-  });
+  };
+  try {
+    return await docker.createContainer(options);
+  } catch (error) {
+    // Docker arbitrates concurrent name reservations. Never remove the occupant.
+    if ((error as { statusCode?: number }).statusCode !== 409) throw error;
+    return docker.createContainer({ ...options, name: collisionName });
+  }
 }
 
 /**
@@ -214,6 +238,11 @@ async function configMatches(container: Container, server: Server): Promise<bool
   try {
     const info = await container.inspect();
 
+    if (!containerNames(server).includes(info.Name.replace(/^\//, ''))) return false;
+    for (const [key, value] of Object.entries(containerLabels(server))) {
+      if (info.Config.Labels?.[key] !== value) return false;
+    }
+    if (!info.NetworkSettings.Networks[config.dockerNetwork]?.Aliases?.includes(server.containerName)) return false;
     if (info.Config.Image !== imageForServer(server)) return false;
     if (info.HostConfig.Memory !== containerMemoryBytes(server.memoryMb)) return false;
 

@@ -178,6 +178,17 @@ wird höchstens alle zwei Sekunden in der Datenbank aktualisiert.
 
 ## Unraid
 
+Minecraft-Container tragen den Servernamen aus dem Panel. Leerzeichen werden zu
+Bindestrichen, Umlaute werden ausgeschrieben; bei belegten Namen kommt die
+Server-ID dazu. Unraid erhält über `net.unraid.docker.icon` das Modpack-Bild,
+ansonsten das Logo des verwendeten Loaders (bei Vanilla das Grasblock-Icon).
+Die PNG-Logos müssen vom Unraid-Host aus über HTTPS erreichbar sein.
+
+Bestehende Container und spätere Namensänderungen werden beim nächsten
+**Server-Neustart im Panel** übernommen. Laufende Server werden dafür nicht
+automatisch unterbrochen. Weltverzeichnisse, interne DNS-Aliase, RCON und
+Subdomain-Routen bleiben an die unveränderliche Server-ID gebunden.
+
 Im Ordner [`unraid/`](unraid/mcpanel.xml) liegt eine Template-Datei. In Unraid unter
 *Docker → Add Container → Template* die URL eintragen:
 
