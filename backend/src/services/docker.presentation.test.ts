@@ -15,7 +15,7 @@ vi.mock('dockerode', () => ({ default: class {
   listNetworks = async () => [{ Name: 'mc-network' }];
   listImages = async () => [{}];
 } }));
-const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes, getStats } = await import('./docker.js');
+const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes, getStats, javaTagForVersion } = await import('./docker.js');
 const server = {
   id: 'abc123', name: 'Meine Welt', containerName: 'mc-abc123', type: 'FABRIC',
   mcVersion: '1.21.1', memoryMb: 4096, port: 25565, rconPassword: 'test', extraEnv: {},
@@ -143,4 +143,32 @@ it('does not repeatedly recreate a container using the collision suffix', async 
   m.inspect.mockResolvedValue(info);
   await ensureContainer(server);
   expect(m.remove).not.toHaveBeenCalled();
+});
+
+/**
+ * Die Zuordnung stammt aus `javaVersion.majorVersion` im Versionsmanifest von
+ * Mojang (Stand 09/2026). Zu alt gewaehlt bricht der Start sofort ab:
+ * `UnsupportedClassVersionError … class file version 69.0`, so ist 26.3 auf
+ * dem java21-Abbild gestorben.
+ */
+it('waehlt das Java-Abbild nach der Minecraft-Version', () => {
+  expect(javaTagForVersion('1.12.2')).toBe('java8');
+  expect(javaTagForVersion('1.16.5')).toBe('java8');
+  expect(javaTagForVersion('1.17.1')).toBe('java17');
+  expect(javaTagForVersion('1.20.1')).toBe('java17');
+  expect(javaTagForVersion('1.20.4')).toBe('java17');
+  expect(javaTagForVersion('1.20.5')).toBe('java21');
+  expect(javaTagForVersion('1.21.1')).toBe('java21');
+  expect(javaTagForVersion('1.21.11')).toBe('java21');
+});
+
+it('gibt der Jahreszaehlung ab 26.x das neueste Java', () => {
+  expect(javaTagForVersion('26.1')).toBe('java25');
+  expect(javaTagForVersion('26.3')).toBe('java25');
+  expect(javaTagForVersion('27.1.2')).toBe('java25');
+});
+
+it('raet bei LATEST und Schnappschuessen lieber zu neu als zu alt', () => {
+  expect(javaTagForVersion('LATEST')).toBe('java25');
+  expect(javaTagForVersion('26w14a')).toBe('java25');
 });

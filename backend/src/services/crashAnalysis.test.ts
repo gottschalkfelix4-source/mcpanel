@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import AdmZip from 'adm-zip';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { analyseCrash } from './crashAnalysis.js';
 
 /**
@@ -170,5 +174,111 @@ describe('analyseCrash - fehlende Abhaengigkeit (Fabric)', () => {
   it('zeigt die erklaerenden Zeilen, nicht den Stacktrace', () => {
     expect(d.excerpt.join(' ')).toContain('requires');
     expect(d.excerpt.join(' ')).not.toContain('KnotServer');
+  });
+});
+
+/**
+ * Dritter echter Fall vom Testserver (Better MC, Fabric 1.20.1): eine Mod
+ * bricht in ihrem Einstiegspunkt ab. Fabric nennt sie im Fliesstext, im
+ * Stacktrace darunter stehen nur noch Loader und Spiel - und weiter oben im
+ * Protokoll steht eine voellig unbeteiligte Mod.
+ */
+const ECHTER_EINSTIEGSPUNKT = `
+[11:59:17] [main/WARN]: Error loading class: net/minecraft/class_756 (java.lang.ClassNotFoundException: net/minecraft/class_756)
+	at vazkii.patchouli.common.base.Patchouli.init(Patchouli.java:40) ~[Patchouli-1.20.1-84.1-FABRIC.jar:?]
+[11:59:18] [main/ERROR]: Failed to start the minecraft server
+java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to errors, provided by 'certain_questing_additions' at 'ru.hollowhorizon.additions.questing.fabric.CertainQuestingAdditionsFabric'!
+	Suppressed: java.lang.RuntimeException: Cannot load class net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback in environment type SERVER
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:388) ~[fabric-loader-0.19.3.jar:?]
+	at net.minecraft.server.Main.main(Main.java:109) ~[server-intermediary.jar:?]
+`;
+
+describe('analyseCrash - Fehler im Einstiegspunkt (Fabric)', () => {
+  const dateien = [
+    'Patchouli-1.20.1-84.1-FABRIC.jar',
+    'certain_questing_additions-fabric-1.1.3+mc1.20.1.jar',
+  ];
+  const d = analyseCrash(ECHTER_EINSTIEGSPUNKT, dateien)!;
+
+  it('nennt die Mod, die der Loader selbst benennt', () => {
+    expect(d.suspect?.filename).toBe('certain_questing_additions-fabric-1.1.3+mc1.20.1.jar');
+  });
+
+  it('laesst sich nicht von einer Mod weiter oben im Protokoll ablenken', () => {
+    expect(d.suspect?.filename).not.toBe('Patchouli-1.20.1-84.1-FABRIC.jar');
+  });
+
+  it('erklaert den Fehler als clientseitige Mod', () => {
+    expect(d.headline).toContain('Client');
+  });
+
+  it('zeigt den Auszug ab der Meldung des Loaders', () => {
+    expect(d.excerpt[0]).toContain('Could not execute entrypoint stage');
+  });
+});
+
+describe('analyseCrash - Minecraft selbst ist nie der Verdaechtige', () => {
+  it('haelt server-intermediary.jar fuer Infrastruktur', () => {
+    const log = `
+[11:55:49] [main/ERROR]: Minecraft has crashed!
+java.lang.ExceptionInInitializerError
+	at net.minecraft.server.Main.main(Main.java:109) ~[server-intermediary.jar:?]
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23) ~[fabric-loader-0.19.3.jar:?]
+`;
+    expect(analyseCrash(log, ['irgendeine-mod-1.0.jar'])).toBeNull();
+  });
+
+  it('haelt sich nicht an den Hunderten von "Error loading class"-Warnungen fest', () => {
+    const log = `
+[11:55:36] [main/WARN]: Error loading class: net/minecraft/class_761 (java.lang.ClassNotFoundException: net/minecraft/class_761)
+	at dev.emi.emi.EmiClient.init(EmiClient.java:11) ~[emi-1.1.jar:?]
+[11:55:49] [main/ERROR]: Minecraft has crashed!
+java.lang.NoSuchMethodError: boom
+	at com.example.schuld.Start.init(Start.java:7) ~[schuld-2.0.jar:?]
+`;
+    expect(analyseCrash(log, ['emi-1.1.jar', 'schuld-2.0.jar'])?.suspect?.filename).toBe('schuld-2.0.jar');
+  });
+});
+
+/**
+ * Vierter echter Fall: eine leere `lang/*.json` in einem Mod-Jar. Im
+ * Stacktrace steht ausschliesslich Minecraft - ohne einen Blick in die Jars
+ * bliebe der Absturz unerklaert.
+ */
+const ECHTE_SPRACHDATEI = `
+[11:55:49] [main/ERROR]: Minecraft has crashed!
+java.lang.ExceptionInInitializerError
+	at net.minecraft.class_2588.method_11025(class_2588.java:48) ~[server-intermediary.jar:?]
+Caused by: java.lang.NullPointerException: Cannot invoke "com.google.gson.JsonObject.entrySet()" because "$$2" is null
+	at net.minecraft.class_2477.loadFromPath(class_2477.java:574) ~[server-intermediary.jar:?]
+`;
+
+describe('analyseCrash - leere Sprachdatei in einem Mod-Jar', () => {
+  let modsDir: string;
+
+  beforeAll(() => {
+    modsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpanel-crash-test-'));
+
+    const kaputt = new AdmZip();
+    kaputt.addFile('fabric.mod.json', Buffer.from('{"id":"freezefix"}'));
+    kaputt.addFile('assets/example_mod/lang/en_us.json', Buffer.from(''));
+    fs.writeFileSync(path.join(modsDir, 'freezefix-1.0.0.jar'), kaputt.toBuffer());
+
+    // Kommentare sind erlaubt - Minecraft liest die Dateien nachsichtig.
+    const heil = new AdmZip();
+    heil.addFile('assets/heil/lang/en_us.json', Buffer.from('{\n // Hinweis\n "a": "b"\n}'));
+    fs.writeFileSync(path.join(modsDir, 'heil-1.0.0.jar'), heil.toBuffer());
+  });
+
+  afterAll(() => fs.rmSync(modsDir, { recursive: true, force: true }));
+
+  it('nennt das Jar mit der leeren Sprachdatei', () => {
+    const d = analyseCrash(ECHTE_SPRACHDATEI, ['freezefix-1.0.0.jar', 'heil-1.0.0.jar'], modsDir)!;
+    expect(d.suspect?.filename).toBe('freezefix-1.0.0.jar');
+    expect(d.reason).toContain('en_us.json');
+  });
+
+  it('schweigt weiterhin, wenn die Jars nicht mitgegeben werden', () => {
+    expect(analyseCrash(ECHTE_SPRACHDATEI, ['freezefix-1.0.0.jar'])).toBeNull();
   });
 });

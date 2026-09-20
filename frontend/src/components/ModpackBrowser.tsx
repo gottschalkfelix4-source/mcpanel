@@ -57,17 +57,28 @@ export function ModpackBrowser({
   type = 'modpack',
   onPick,
   actionLabel = 'Installieren',
+  loader = null,
+  defaultGameVersion = '',
 }: {
   type?: CatalogType;
   onPick: (project: ProjectSummary, version: ProjectVersion) => unknown;
   actionLabel?: string;
+  /**
+   * Loader des Servers, klein geschrieben. Gesetzt, wenn der Server einen
+   * bestimmten braucht – dann gibt es gar nichts anderes zu sehen: eine
+   * Forge-Datei im mods-Ordner eines Fabric-Servers wird entweder ignoriert
+   * oder reisst den Start mit ab.
+   */
+  loader?: string | null;
+  /** Minecraft-Version des Servers, als Vorauswahl des Filters. */
+  defaultGameVersion?: string;
 }) {
   // Plugins laufen per Definition auf dem Server – der Servertauglichkeits-
   // filter und seine Abzeichen sagen dort nichts aus.
   const isPlugin = type === 'plugin';
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState<Provider>('all');
-  const [gameVersion, setGameVersion] = useState('');
+  const [gameVersion, setGameVersion] = useState(defaultGameVersion);
   const [sort, setSort] = useState<'relevance' | 'downloads' | 'updated'>('relevance');
   const [serverOnly, setServerOnly] = useState(true);
   const [page, setPage] = useState(1);
@@ -98,7 +109,7 @@ export function ModpackBrowser({
 
   const search = useQuery({
     queryKey: [
-      'catalog-search', type, debouncedQuery, provider, gameVersion, sort, page, effectiveServerOnly,
+      'catalog-search', type, debouncedQuery, provider, gameVersion, sort, page, effectiveServerOnly, loader,
     ],
     queryFn: () => {
       const params = new URLSearchParams({
@@ -111,6 +122,7 @@ export function ModpackBrowser({
       });
       if (debouncedQuery) params.set('q', debouncedQuery);
       if (gameVersion) params.set('gameVersion', gameVersion);
+      if (loader) params.set('loader', loader);
       return api.get<{
         hits: ProjectSummary[];
         total: number;
@@ -307,6 +319,8 @@ export function ModpackBrowser({
         onClose={() => setSelected(null)}
         actionLabel={actionLabel}
         showServerPack={!isPlugin}
+        loader={loader}
+        gameVersion={gameVersion}
         onPick={async (project, version) => {
           await onPick(project, version);
           setSelected(null);
@@ -322,6 +336,8 @@ function VersionPicker({
   onPick,
   actionLabel,
   showServerPack,
+  loader,
+  gameVersion,
 }: {
   project: ProjectSummary | null;
   onClose: () => void;
@@ -329,9 +345,16 @@ function VersionPicker({
   actionLabel: string;
   /** Bei Plugins gibt es keine Client-/Server-Pakete, die man unterscheiden muesste. */
   showServerPack: boolean;
+  /** Loader und Version des Servers, falls die Auswahl dazu passen muss. */
+  loader: string | null;
+  gameVersion: string;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
+  // Die Suche liefert das passende Projekt – die falsche Datei daraus zu
+  // erwischen ist danach der naechstliegende Fehler.
+  const [nurPassende, setNurPassende] = useState(true);
+  const pruefbar = Boolean(loader && gameVersion);
 
   const versions = useQuery({
     queryKey: ['catalog-versions', project?.provider, project?.id],
@@ -340,15 +363,22 @@ function VersionPicker({
     enabled: Boolean(project),
   });
 
+  const passt = (v: ProjectVersion) =>
+    !pruefbar ||
+    (v.gameVersions.includes(gameVersion) &&
+      v.loaders.some((l) => l.toLowerCase() === loader!.toLowerCase()));
+
   const list = useMemo(() => {
-    const all = versions.data?.versions ?? [];
+    let all = versions.data?.versions ?? [];
+    if (pruefbar && nurPassende) all = all.filter(passt);
     if (!filter) return all;
     return all.filter(
       (v) =>
         v.name.toLowerCase().includes(filter.toLowerCase()) ||
         v.gameVersions.some((g) => g.includes(filter)),
     );
-  }, [versions.data, filter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versions.data, filter, nurPassende, pruefbar, loader, gameVersion]);
 
   if (!project) return null;
 
@@ -384,6 +414,18 @@ function VersionPicker({
           onChange={(e) => setFilter(e.target.value)}
         />
 
+        {pruefbar && (
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-stone-350">
+            <input
+              type="checkbox"
+              checked={nurPassende}
+              onChange={(e) => setNurPassende(e.target.checked)}
+              className="accent-grass"
+            />
+            Nur Versionen für {loader} {gameVersion}
+          </label>
+        )}
+
         {versions.isLoading ? (
           <LoadingBlock label="Versionen werden geladen …" />
         ) : versions.error ? (
@@ -415,6 +457,11 @@ function VersionPicker({
                         className="!text-[9px]"
                       >
                         {version.serverPackFileId ? 'Serverpaket' : 'nur Client-Paket'}
+                      </Badge>
+                    )}
+                    {pruefbar && !passt(version) && (
+                      <Badge tone="red" className="!text-[9px]">
+                        passt nicht zum Server
                       </Badge>
                     )}
                     <span className="font-mono text-[10px] text-stone-450">

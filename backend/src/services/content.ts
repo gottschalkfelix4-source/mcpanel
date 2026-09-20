@@ -2,6 +2,29 @@ import path from 'node:path';
 import type { Server } from '@prisma/client';
 import { serverDir } from '../config.js';
 
+/** Womit ein Modpack-Server laeuft, solange noch keines installiert ist. */
+const MODPACK_VORGABE = 'FORGE';
+
+/**
+ * Der Loader, mit dem der Server tatsaechlich laeuft - so, wie er als `TYPE`
+ * im Container ankommt.
+ *
+ * Ein `TYPE` in extraEnv gewinnt immer: bei einem Modpack setzt es die
+ * Installation, sonst ein Administrator von Hand, und der Container laeuft
+ * damit, egal was der Servertyp sagt. Ohne diese Angabe sagt der Servertyp
+ * nur bei einem Modpack nichts - dort gilt die Vorgabe. Wer das uebersieht,
+ * sucht im Katalog nach Mods fuer den falschen Loader und legt eine
+ * Forge-Datei in einen Fabric-Server.
+ */
+export function serverLoader(
+  server: Pick<Server, 'type' | 'extraEnv'>,
+): string {
+  const extra = (server.extraEnv ?? {}) as Record<string, string>;
+  const gesetzt = extra.TYPE?.trim();
+  if (gesetzt) return gesetzt.toUpperCase();
+  return server.type === 'MODPACK' ? MODPACK_VORGABE : server.type;
+}
+
 /**
  * Womit ein Server erweitert wird. Die Unterscheidung haengt allein am
  * Servertyp: Bukkit-Abkoemmlinge laden `plugins/`, die Mod-Loader `mods/`.
@@ -57,8 +80,8 @@ export function catalogTypeFor(kind: ContentKind): 'mod' | 'plugin' {
  * Spigot und Paper sind bei Modrinth Kategorien desselben Projekttyps, und
  * CurseForge kennt bei Plugins gar keinen Loader.
  */
-export function catalogLoaderFor(serverType: string): string | null {
-  const kind = contentKindFor(serverType);
+export function catalogLoaderFor(server: Pick<Server, 'type' | 'extraEnv'>): string | null {
+  const kind = contentKindFor(server.type);
   if (kind !== 'mod') return null;
-  return serverType === 'MODPACK' ? null : serverType.toLowerCase();
+  return serverLoader(server).toLowerCase();
 }

@@ -1,4 +1,5 @@
 import type { Server } from '@prisma/client';
+import { serverLoader } from './content.js';
 
 const DEFAULT_ICON = 'https://raw.githubusercontent.com/gottschalkfelix4-source/mcpanel/main/frontend/public/icons/icon-192.png';
 
@@ -33,7 +34,5 @@ export function containerIcon(server: Pick<Server, 'type' | 'extraEnv' | 'modpac
       if (url.protocol === 'https:' && !url.username && !url.password) return url.href;
     } catch { /* Missing or malformed provider artwork: use the loader logo. */ }
   }
-  const extra = (server.extraEnv ?? {}) as Record<string, string>;
-  const loader = (extra.TYPE || (server.type === 'MODPACK' ? 'FORGE' : server.type)).toUpperCase();
-  return LOADER_ICONS[loader] ?? DEFAULT_ICON;
+  return LOADER_ICONS[serverLoader(server)] ?? DEFAULT_ICON;
 }

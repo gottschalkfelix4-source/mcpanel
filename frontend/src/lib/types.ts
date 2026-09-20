@@ -204,6 +204,14 @@ export interface ContentListing {
   /** null: Der Servertyp unterstuetzt weder Mods noch Plugins. */
   kind: ContentKind | null;
   dirName: string | null;
+  /**
+   * Loader fuer die Katalogsuche, klein geschrieben (`fabric`, `neoforge`).
+   * Bei einem Modpack der tatsaechliche Loader, nicht "modpack". null bei
+   * Plugins und bei Servern ohne Loader.
+   */
+  loader: string | null;
+  /** Minecraft-Version des Servers – Vorauswahl im Katalog. */
+  mcVersion: string;
   items: ContentFile[];
 }
 

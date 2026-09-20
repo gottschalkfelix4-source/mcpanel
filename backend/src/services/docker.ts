@@ -8,6 +8,7 @@ import { config, serverHostDir } from '../config.js';
 import { containerIcon, containerNames } from './containerPresentation.js';
 import { defaultInitialMemory, memoryWorkingSet, type DockerMemoryStats } from './memory.js';
 import { connectPanelToNetwork } from './dockerNetwork.js';
+import { serverLoader } from './content.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
@@ -40,19 +41,37 @@ function announcePlannedStop(serverId: string): void {
 }
 
 /**
+ * Neuestes Java, das wir kennen. Gilt für alles, was sich keiner Ausgabe
+ * zuordnen lässt – „LATEST", Schnappschüsse (`26w14a`) und Versionsnamen, die
+ * es zur Bauzeit noch nicht gab. Zu alt zu raten ist hier der teurere Fehler:
+ * eine zu neue JVM liest alte Klassendateien, umgekehrt bricht der Start mit
+ * `UnsupportedClassVersionError` ab, bevor irgendetwas passiert.
+ */
+const NEUESTES_JAVA = 'java25';
+
+/**
  * Passende Java-Version zur Minecraft-Version.
  *
  * Mojang bindet jede Ausgabe an eine JVM-Generation, und Mods brechen auf zu
  * neuen JVMs: ein 1.20.1-Pack auf Java 25 stirbt zum Beispiel im nativen Code
  * des Spark-Profilers. Deshalb wählen wir das Image nicht pauschal als
  * "latest", sondern anhand der Version.
+ *
+ * Die Zuordnung stammt aus `javaVersion.majorVersion` im Versionsmanifest von
+ * Mojang: ≤1.16 → 8, 1.17–1.20.4 → 17, 1.20.5–1.21.x → 21. Seit 2026 zählt
+ * Mojang nach Jahr (26.1, 26.2, 26.3 …) statt nach `1.x`, und diese Ausgaben
+ * verlangen Java 25.
  */
 export function javaTagForVersion(mcVersion: string): string {
-  const match = mcVersion.match(/^1\.(\d+)(?:\.(\d+))?/);
-  if (!match) return 'java21'; // LATEST, Snapshots, Unbekanntes
+  const match = mcVersion.match(/^(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!match) return NEUESTES_JAVA; // LATEST, Schnappschüsse, Unbekanntes
 
-  const minor = Number(match[1]);
-  const patch = Number(match[2] ?? 0);
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3] ?? 0);
+
+  // Jahreszählung ab 26.x – und alles, was danach kommt.
+  if (major !== 1) return NEUESTES_JAVA;
 
   if (minor <= 16) return 'java8';
   if (minor <= 19) return 'java17';
@@ -152,11 +171,11 @@ export function buildEnv(server: Server): string[] {
   const extra = (server.extraEnv ?? {}) as Record<string, string>;
   const memory = extra.MEMORY || `${server.memoryMb}M`;
   const maxMemory = extra.MAX_MEMORY || memory;
-  const loader = (extra.TYPE || (server.type === 'MODPACK' ? 'FORGE' : server.type)).toUpperCase();
+  const loader = serverLoader(server);
 
   const env: Record<string, string> = {
     EULA: 'TRUE',
-    TYPE: server.type === 'MODPACK' ? (extra.TYPE ?? 'FORGE') : server.type,
+    TYPE: loader,
     VERSION: server.mcVersion || 'LATEST',
     // Aikar's preset targets plugin servers, not Forge/NeoForge modpacks.
     USE_AIKAR_FLAGS: ['PAPER', 'PURPUR', 'SPIGOT'].includes(loader) ? 'true' : 'false',

@@ -474,7 +474,7 @@ async function checkStates(): Promise<void> {
 
       const inhaltsOrdner = contentDir(server);
       const diagnose = inhaltsOrdner
-        ? analyseCrash(log, await fs.readdir(inhaltsOrdner).catch(() => [] as string[]))
+        ? analyseCrash(log, await fs.readdir(inhaltsOrdner).catch(() => [] as string[]), inhaltsOrdner)
         : null;
       const schuld = diagnose?.suspect
         ? [

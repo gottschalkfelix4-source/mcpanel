@@ -12,6 +12,7 @@ import * as curseforge from '../providers/curseforge.js';
 import { checkForUpdate, installModpack, listVersions } from '../services/modpack.js';
 import { withServerOperation } from '../services/operations.js';
 import { runTask } from '../services/tasks.js';
+import { serverLoader } from '../services/content.js';
 
 const installSchema = z.object({
   provider: z.enum(['modrinth', 'curseforge']),
@@ -48,7 +49,7 @@ export default async function modpackRoutes(app: FastifyInstance) {
         versionName: server.modpackVersionName,
         iconUrl: server.modpackIconUrl,
         minecraftVersion: server.mcVersion,
-        loader: (server.extraEnv as Record<string, string>)?.TYPE ?? server.type,
+        loader: serverLoader(server),
       },
       update,
     };

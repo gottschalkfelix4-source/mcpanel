@@ -9,7 +9,7 @@ import { badRequest } from '../lib/errors.js';
 import { downloadToFile } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
 import * as curseforge from '../providers/curseforge.js';
-import { contentDir, contentDirName, contentKindFor } from '../services/content.js';
+import { catalogLoaderFor, contentDir, contentDirName, contentKindFor } from '../services/content.js';
 import { analyseCrash } from '../services/crashAnalysis.js';
 import * as dockerSvc from '../services/docker.js';
 import { guardMutations } from './mutationGuard.js';
@@ -38,7 +38,7 @@ export default async function contentRoutes(app: FastifyInstance) {
   app.get('/', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
     const kind = contentKindFor(access.server.type);
-    if (!kind) return { kind: null, dirName: null, items: [] };
+    if (!kind) return { kind: null, dirName: null, loader: null, mcVersion: access.server.mcVersion, items: [] };
 
     const dir = contentDir(access.server)!;
     const entries = await fs.readdir(dir).catch(() => [] as string[]);
@@ -57,7 +57,15 @@ export default async function contentRoutes(app: FastifyInstance) {
       });
     }
     items.sort((a, b) => a.displayName.localeCompare(b.displayName, 'de', { numeric: true }));
-    return { kind, dirName: contentDirName(kind), items };
+    // Loader und Version begleiten die Liste: der Katalog im Reiter soll gar
+    // nicht erst Mods anbieten, die dieser Server nicht laden kann.
+    return {
+      kind,
+      dirName: contentDirName(kind),
+      loader: catalogLoaderFor(access.server),
+      mcVersion: access.server.mcVersion,
+      items,
+    };
   });
 
   /** Einzelne Mod bzw. einzelnes Plugin von Modrinth/CurseForge ablegen. */
@@ -138,6 +146,6 @@ export default async function contentRoutes(app: FastifyInstance) {
 
     const log = await dockerSvc.tailLogs(access.server, 200).catch(() => '');
     const dateien = await fs.readdir(dir).catch(() => [] as string[]);
-    return { diagnosis: analyseCrash(log, dateien) };
+    return { diagnosis: analyseCrash(log, dateien, dir) };
   });
 }

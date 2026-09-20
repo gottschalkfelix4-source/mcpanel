@@ -25,7 +25,7 @@ const { withServerOperation } = await import('./operations.js');
 const dir = () => path.join(m.root, 'servers/a');
 const task = () => ({ id: 'task', update: vi.fn(async () => {}), log: vi.fn(async () => {}), done: vi.fn(), fail: vi.fn() });
 const request = { provider: 'modrinth' as const, projectId: 'pack', versionId: 'new', backupFirst: false, keepConfig: true };
-function archive(downloads: { path: string; downloads: string[] }[] = [], overrides: Record<string, string> = {}) {
+function archive(downloads: { path: string; downloads: string[] }[] = [], overrides: Record<string, string | Buffer> = {}) {
   const zip = new AdmZip();
   zip.addFile('modrinth.index.json', Buffer.from(JSON.stringify({ formatVersion: 1, name: 'Pack', versionId: 'new', dependencies: { minecraft: '1.20.1', 'fabric-loader': '0.16.0' }, files: downloads })));
   for (const [name, data] of Object.entries(overrides)) zip.addFile('overrides/' + name, Buffer.from(data));
@@ -113,4 +113,56 @@ it('keeps quota accounting incremental instead of scanning the tree per mod', as
     expect(budgets).toHaveLength(12);
     for (let i = 1; i < budgets.length; i++) expect(budgets[i]).toBe(budgets[i - 1] - 7);
   } finally { reads.mockRestore(); }
+});
+
+/** Ein Mod-Jar, wie es im Archiv liegt: nur die fabric.mod.json zaehlt hier. */
+function modJar(id: string, environment: string): Buffer {
+  const jar = new AdmZip();
+  jar.addFile('fabric.mod.json', Buffer.from(JSON.stringify({ schemaVersion: 1, id, environment })));
+  return jar.toBuffer();
+}
+
+it('schaltet eine bekannte Client-Mod ab, die im Modrinth-Paket unter overrides/ mitkommt', async () => {
+  // Genau der Fall aus "Better MC [FABRIC]": die Datei steht nicht im Index,
+  // traegt also keine env-Angabe, und gibt sich selbst als beidseitig aus.
+  archive([], {
+    'mods/missingmodschecker.jar': modJar('missingmodschecker', '*'),
+    'mods/serverseitig.jar': modJar('serverseitig', '*'),
+  });
+  await installModpack('a', request, task());
+
+  await expect(fs.stat(path.join(dir(), 'mods/missingmodschecker.jar'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await fs.stat(path.join(dir(), 'mods/missingmodschecker.jar.disabled'))).isFile()).toBe(true);
+  expect((await fs.stat(path.join(dir(), 'mods/serverseitig.jar'))).isFile()).toBe(true);
+});
+
+it('nimmt Mods mit, die nur wegen einer Client-Mod existieren', async () => {
+  const begleiter = new AdmZip();
+  begleiter.addFile('fabric.mod.json', Buffer.from(JSON.stringify({
+    schemaVersion: 1, id: 'mmc_helper', environment: '*', depends: { missingmodschecker: '*' },
+  })));
+  archive([], {
+    'mods/missingmodschecker.jar': modJar('missingmodschecker', '*'),
+    'mods/mmc-helper.jar': begleiter.toBuffer(),
+  });
+  await installModpack('a', request, task());
+
+  expect((await fs.stat(path.join(dir(), 'mods/mmc-helper.jar.disabled'))).isFile()).toBe(true);
+});
+
+it('laedt Shaderpacks und Client-Welten aus der Dateiliste gar nicht erst herunter', async () => {
+  archive([
+    { path: 'mods/new.jar', downloads: ['https://fixture.test/mod'] },
+    { path: 'shaderpacks/Riesig.zip', downloads: ['https://fixture.test/shader'] },
+    { path: 'saves/Clientwelt/level.dat', downloads: ['https://fixture.test/save'] },
+  ]);
+  const t = task();
+  await installModpack('a', request, t);
+
+  const urls = m.download.mock.calls.map((args: unknown[]) => String(args[0]));
+  expect(urls).toContain('https://fixture.test/mod');
+  expect(urls).not.toContain('https://fixture.test/shader');
+  expect(urls).not.toContain('https://fixture.test/save');
+  await expect(fs.stat(path.join(dir(), 'shaderpacks'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(t.log.mock.calls.some((args: unknown[]) => /2 reine Client-Datei/.test(String(args[0])))).toBe(true);
 });

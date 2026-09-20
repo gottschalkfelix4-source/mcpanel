@@ -233,6 +233,12 @@ export default function ContentTab() {
                 Achte darauf, dass das Plugin zu deiner Minecraft-Version passt
                 ({server.mcVersion}). Nach der Installation ist ein Neustart nötig.
               </>
+            ) : content.data?.loader ? (
+              <>
+                Gezeigt werden nur Mods für{' '}
+                <span className="font-semibold text-stone-200">{content.data.loader}</span>{' '}
+                {content.data.mcVersion}. Nach der Installation ist ein Neustart nötig.
+              </>
             ) : (
               <>
                 Achte darauf, dass Loader und Minecraft-Version zu deinem Server passen
@@ -242,6 +248,8 @@ export default function ContentTab() {
           </p>
           <ModpackBrowser
             type={kind === 'plugin' ? 'plugin' : 'mod'}
+            loader={content.data?.loader ?? null}
+            defaultGameVersion={content.data?.mcVersion ?? server.mcVersion}
             onPick={(project, version) =>
               install.mutateAsync({
                 provider: project.provider,

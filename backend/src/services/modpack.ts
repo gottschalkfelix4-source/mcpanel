@@ -219,6 +219,18 @@ async function installModpackImpl(
           version: version.name,
         });
 
+  // Die Dateiliste eines Client-Pakets führt auch Shaderpacks und Welten des
+  // Clients. Die zu laden kostet bei großen Paketen mehrere hundert Megabyte
+  // Plattenplatz und Wartezeit für etwas, das der Server nie öffnet.
+  const nurClient = plan.downloads.filter((item) => isClientOnlyPackPath(item.path));
+  if (nurClient.length > 0) {
+    plan.downloads = plan.downloads.filter((item) => !isClientOnlyPackPath(item.path));
+    await task.log(
+      `${nurClient.length} reine Client-Datei(en) übersprungen ` +
+        `(${formatBytes(nurClient.reduce((sum, item) => sum + item.size, 0))}).`,
+    );
+  }
+
   await task.log(
     `Minecraft ${plan.minecraftVersion} · ${plan.loader}` +
       `${plan.loaderVersion ? ' ' + plan.loaderVersion : ''} · ${plan.downloads.length} Dateien`,
@@ -316,13 +328,17 @@ async function installModpackImpl(
   }
 
   // --- 6. Client-Mods aussortieren ----------------------------------------
-  // Nur beim Client-Paket nötig – und nur bei Forge/NeoForge:
-  //   * Modrinth markiert die Seite pro Datei (env.server), das ist schon erledigt.
-  //   * Fabric und Quilt lesen `environment` aus der fabric.mod.json und
-  //     überspringen Client-Mods selbst. Die Jars müssen dabei liegen bleiben,
-  //     sonst schlägt die Abhängigkeitsauflösung anderer Mods fehl.
+  // Nur beim Client-Paket nötig, dort aber bei jeder Quelle:
+  //   * Modrinth markiert zwar `env.server` pro Datei, doch die Angabe steht
+  //     nur für die Dateien im Index. Was in `overrides/mods/` mitgeliefert
+  //     wird, trägt gar keine Kennzeichnung – und Packs, die ihre komplette
+  //     Liste pauschal als serverfähig ausweisen, gibt es reichlich.
+  //   * Fabric und Quilt überspringen als `"environment": "client"` erklärte
+  //     Mods selbst. Die Jars müssen dabei liegen bleiben, sonst schlägt die
+  //     Abhängigkeitsauflösung anderer Mods fehl. Wir suchen nur die, die
+  //     faktisch clientseitig sind, es aber nicht angeben.
   //   * Forge/NeoForge kennen keine solche Angabe – hier filtern wir.
-  if (!plan.isServerPack && request.provider === 'curseforge') {
+  if (!plan.isServerPack) {
     await task.update(88, 'Client-Mods werden geprüft …');
 
     const isFabricLike = plan.loader === 'FABRIC' || plan.loader === 'QUILT';
@@ -662,6 +678,18 @@ const CLIENT_ONLY_PREFIXES = [
   'immediatelyfast',
 ];
 
+/**
+ * Mods, die sich in der fabric.mod.json als beidseitig ausgeben
+ * (`"environment": "*"`), auf einem Server aber sofort den Start abbrechen.
+ * Der Loader hat dagegen keine Handhabe – sie sind nur über den Namen zu
+ * erkennen, deshalb bleibt die Liste kurz und nennt jedes Mal den Grund.
+ */
+const CLIENT_ONLY_MOD_IDS: Record<string, string> = {
+  // Öffnet beim Start ein Swing-Fenster: java.awt.HeadlessException. Steckt
+  // in den „Better MC"-Paketen und in allem, was deren Vorlage benutzt.
+  missingmodschecker: 'öffnet beim Start ein Fenster, das es auf einem Server nicht gibt',
+};
+
 function normalizeModName(filename: string): string {
   return filename
     .replace(/\.jar(\.disabled)?$/i, '')
@@ -768,7 +796,9 @@ function readFabricModInfo(modsDir: string, file: string): FabricModInfo | null 
  * beidseitig deklarierte Mod nur wegen einer Client-Mod existiert. Genau die
  * bricht dann beim Start ab (`Cannot load class … in environment type SERVER`).
  *
- * Zwei Regeln, beide transitiv angewandt:
+ * Drei Regeln, alle transitiv angewandt:
+ *   0. Namentlich bekannter Server-Killer (CLIENT_ONLY_MOD_IDS, dazu die
+ *      Renderer aus CLIENT_ONLY_PREFIXES) → clientseitig, egal was drinsteht.
  *   1. Pflicht-Abhängigkeit auf eine Client-Mod  → selbst clientseitig.
  *   2. Mod-ID beginnt mit `<client-mod-id>_` oder `-` → Begleit-Mod desselben
  *      Projekts (z. B. `colorwheel_patcher` zu `colorwheel`).
@@ -785,6 +815,19 @@ async function disableFabricClientDependents(serverPath: string): Promise<Client
 
   const clientIds = new Set(mods.filter((m) => m.environment === 'client').map((m) => m.id));
   const derived = new Map<string, string>(); // Mod-ID -> Begründung
+
+  for (const mod of mods) {
+    if (clientIds.has(mod.id)) continue;
+    const grund =
+      CLIENT_ONLY_MOD_IDS[mod.id] ??
+      (CLIENT_ONLY_PREFIXES.some((p) => normalizeModName(mod.file).startsWith(p))
+        ? 'bekannte Client-Renderer-Mod'
+        : null);
+    if (grund) {
+      clientIds.add(mod.id);
+      derived.set(mod.id, grund);
+    }
+  }
 
   for (let changed = true; changed; ) {
     changed = false;
@@ -879,6 +922,20 @@ async function disableClientOnlyMods(serverPath: string): Promise<ClientModFilte
 // Entpacken
 // ---------------------------------------------------------------------------
 
+/**
+ * Ordner, die es nur im Spiel gibt. Shaderpacks sind bei großen Paketen
+ * dreistellige Megabytebeträge, die ein Server nie anfasst; `saves/` sind die
+ * Einzelspielerwelten des Clients und `screenshots/` braucht keine Erklärung.
+ *
+ * `resourcepacks/` bleibt bewusst drin: ein Server darf seinen Spielern ein
+ * Paket ausliefern, das Verzeichnis hat dort also einen Zweck.
+ */
+const CLIENT_ONLY_DIRS = /^(shaderpacks|screenshots|saves)\//;
+
+export function isClientOnlyPackPath(relative: string): boolean {
+  return CLIENT_ONLY_DIRS.test(relative.replace(/\\/g, '/'));
+}
+
 /** Diese Dateien werden beim Entpacken nie überschrieben. */
 const PROTECTED = [
   'server.properties',
@@ -927,7 +984,7 @@ async function extractOverrides(
       const normalized = path.relative(root, archiveEntryPath(root, relative));
       if (isProtectedPackPath(normalized, opts.worldName, opts.keepConfig)) continue;
       // Rein clientseitige Ordner haben auf einem Server nichts verloren
-      if (/^(shaderpacks|screenshots|saves)\//.test(relative)) continue;
+      if (isClientOnlyPackPath(relative)) continue;
       if (plan.isServerPack && SERVERPACK_SKIP.some((r) => r.test(relative))) continue;
 
       const out = archiveEntryPath(root, relative);
