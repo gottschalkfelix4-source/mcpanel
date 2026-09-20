@@ -58,6 +58,7 @@ das Panel steuert sie über den Docker-Socket.
 - Updater mit Versionsvergleich, automatischem Backup und optionalem Schutz für eigene `config/`-Änderungen
 - Welt, `server.properties`, Whitelist, OP- und Bannlisten bleiben bei Updates immer erhalten
 - Live-Fortschritt mit Protokoll im Panel
+- Absturz-Dialog benennt die schuldige Mod; optional erklärt ein **KI-Assistent** (OpenRouter, OpenAI oder lokal) das ganze Protokoll – siehe [KI-Assistent](#ki-assistent-für-absturzprotokolle)
 
 **Automatisierungen** (pro Server)
 - Auslöser: Zeitplan (Cron, 5 Felder) oder „Nach Absturz“ (Container unerwartet beendet)
@@ -324,6 +325,24 @@ Protokoll, der Start läuft weiter.
 Der CurseForge-Key lässt sich im laufenden Betrieb unter **Panel → Panel-Einstellungen**
 eintragen; er wird dort direkt gegen die API geprüft und in der Datenbank abgelegt
 (hat Vorrang vor der `.env`).
+
+### KI-Assistent für Absturzprotokolle
+
+Unter **Panel → Panel-Einstellungen → KI-Assistent** lässt sich ein beliebiger Dienst mit
+OpenAI-kompatibler `chat/completions`-Schnittstelle anbinden: OpenRouter, OpenAI oder ein
+eigenes Ollama/vLLM im Netz. Nötig sind Adresse (endet auf `/v1`), Modellname und – außer
+bei lokalen Diensten – ein API-Key. Beim Speichern wird die Verbindung sofort getestet;
+eine falsche Angabe wird nicht übernommen. Der Key wird nie an die Oberfläche
+zurückgegeben.
+
+Ist der Assistent eingerichtet, gibt es zwei Knöpfe **„KI fragen“**: im Absturz-Dialog
+(der dann auch erscheint, wenn das Panel selbst keine Mod benennen kann) und in der
+Konsole. Das Panel schickt die letzten 400 Protokollzeilen, die Modliste und die
+Serverdaten (Loader, Version, Modpack) an den Dienst und zeigt die Antwort; nachhaken ist
+im selben Dialog möglich. Der Assistent liest nur – abschalten oder starten bleibt ein
+Klick des Nutzers. Fragen darf, wer die Konsole lesen darf; jede Anfrage steht im
+Aktivitätsprotokoll. Bei OpenRouter und OpenAI verlassen die Protokolle damit das eigene
+Netz – wer das nicht will, nimmt ein lokales Modell.
 
 ### Mods und Plugins
 

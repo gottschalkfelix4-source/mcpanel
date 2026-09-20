@@ -413,7 +413,7 @@ async function checkVolumeSpace(): Promise<void> {
  * docker.ts dort nicht immer – in einer Discord-Nachricht sieht das sonst aus
  * wie `>....[K[23:00:08 INFO]`.
  */
-function cleanLog(text: string): string {
+export function cleanLog(text: string): string {
   // Steuerzeichen bewusst ueber charCodeAt statt ueber ein Regex-Literal:
   // rohe Steuerbytes im Quelltext ueberleben kein Werkzeug unbeschadet.
   const ansi = new RegExp(String.fromCharCode(27) + '\\[[0-9;?]*[A-Za-z]', 'g');

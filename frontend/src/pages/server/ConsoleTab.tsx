@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { ArrowDownToLine, Eraser, Send, Terminal } from 'lucide-react';
+import { ArrowDownToLine, Eraser, Send, Sparkles, Terminal } from 'lucide-react';
 import { getSocket } from '../../lib/socket';
+import { AssistantDialog, useAssistantAvailable } from '../../components/AssistantDialog';
 import { Button, Panel, useToast } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
@@ -47,6 +48,8 @@ export default function ConsoleTab() {
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [filter, setFilter] = useState('');
+  const ki = useAssistantAvailable();
+  const [kiOffen, setKiOffen] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [connected, setConnected] = useState(false);
 
@@ -199,9 +202,21 @@ export default function ConsoleTab() {
           >
             Leeren
           </Button>
+          {ki && (
+            <Button
+              variant="ghost"
+              className="!px-2.5 !py-1.5 !text-xs"
+              icon={<Sparkles size={13} className="text-gold" />}
+              onClick={() => setKiOffen(true)}
+              title="Protokoll vom KI-Assistenten erklären lassen"
+            >
+              KI fragen
+            </Button>
+          )}
         </div>
       }
     >
+      <AssistantDialog serverId={server.id} open={kiOffen} onClose={() => setKiOffen(false)} />
       <div
         ref={viewRef}
         onScroll={onScroll}

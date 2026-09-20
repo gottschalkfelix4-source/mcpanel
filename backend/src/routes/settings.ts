@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
+import { badRequest } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import { audit, authenticate, requireAdmin } from '../auth/context.js';
 import { getCurseforgeKey, getPublicHost, setSetting } from '../services/settings.js';
@@ -13,6 +14,10 @@ import {
 import { globalNotificationRoutes } from './notifications.js';
 import { configureProxy, proxyStatus } from '../services/proxy.js';
 import { proxyOverview } from '../services/proxyOverview.js';
+import {
+  getAssistantConfig, isConfigured as assistantConfigured, publicAssistantConfig,
+  saveAssistantConfig, testAssistant,
+} from '../services/assistant.js';
 
 export default async function settingsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -38,6 +43,8 @@ export default async function settingsRoutes(app: FastifyInstance) {
     publicHost: await getPublicHost(),
     portRange: config.portRange,
     curseforgeAvailable: Boolean(await getCurseforgeKey()),
+    // Damit der Absturz-Dialog weiss, ob er einen KI-Knopf anbieten kann.
+    assistantAvailable: assistantConfigured(await getAssistantConfig()),
   }));
 
   app.get('/', { preHandler: requireAdmin }, async () => {
@@ -76,7 +83,58 @@ export default async function settingsRoutes(app: FastifyInstance) {
       },
       counts: { users, servers, backups },
       docker: dockerInfo,
+      assistant: publicAssistantConfig(await getAssistantConfig()),
     };
+  });
+
+  /**
+   * KI-Assistent: beliebiger OpenAI-kompatibler Dienst. Ein leer gelassener
+   * Key bedeutet "unveraendert lassen" - die Oberflaeche sieht ihn nie. Eine
+   * leere Adresse loest die Anbindung komplett.
+   */
+  app.put('/assistant', { preHandler: requireAdmin }, async (req) => {
+    const body = z
+      .object({
+        baseUrl: z.string().trim().max(300),
+        model: z.string().trim().max(200),
+        apiKey: z.string().max(500).optional(),
+      })
+      .parse(req.body);
+
+    if (!body.baseUrl) {
+      await saveAssistantConfig({ baseUrl: '', apiKey: '', model: '' });
+      await audit(req.user!.id, null, 'settings.assistant', 'entfernt');
+      return { ok: true, configured: false, assistant: publicAssistantConfig(await getAssistantConfig()) };
+    }
+    if (!/^https?:\/\//.test(body.baseUrl)) {
+      throw badRequest('Die Adresse muss mit http:// oder https:// beginnen.');
+    }
+    if (!body.model) throw badRequest('Bitte ein Modell angeben.');
+
+    const current = await getAssistantConfig();
+    const next = {
+      // Ohne Schraegstrich am Ende, sonst wird daraus /v1//chat/completions -
+      // und der Test scheitert an einem 404, den niemand versteht.
+      baseUrl: body.baseUrl.replace(/\/+$/, ''),
+      model: body.model,
+      apiKey: body.apiKey?.length ? body.apiKey : current.apiKey,
+    };
+
+    // Erst pruefen, dann speichern - eine falsche Adresse soll nicht dazu
+    // fuehren, dass ab jetzt jeder Klick im Absturz-Dialog ins Leere laeuft.
+    try {
+      await testAssistant(next);
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Test fehlgeschlagen',
+        assistant: publicAssistantConfig(current),
+      };
+    }
+
+    await saveAssistantConfig(next);
+    await audit(req.user!.id, null, 'settings.assistant', `${next.baseUrl} · ${next.model}`);
+    return { ok: true, configured: true, assistant: publicAssistantConfig(next) };
   });
 
   app.put('/curseforge', { preHandler: requireAdmin }, async (req) => {

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Play } from 'lucide-react';
+import { AlertTriangle, Play, Sparkles } from 'lucide-react';
 import { api } from '../lib/api';
 import type { CrashDiagnosis, PowerState } from '../lib/types';
+import { AssistantDialog, useAssistantAvailable } from './AssistantDialog';
 import { Button, InfoNote, Modal, Spinner, Toggle, useToast } from './ui';
 
 /**
@@ -58,13 +59,18 @@ export function CrashDialog({
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const ki = useAssistantAvailable();
+  const [kiOffen, setKiOffen] = useState(false);
+
   // Nichts Belastbares gefunden: dann gar nicht erst aufpoppen. Dass der
-  // Server abgestuerzt ist, sagt das Abzeichen im Kopf ohnehin schon.
-  if (offen && diagnose.isFetched && !verdacht) return null;
+  // Server abgestuerzt ist, sagt das Abzeichen im Kopf ohnehin schon. Mit
+  // angebundenem KI-Dienst ist genau das aber der Moment, ihn anzubieten.
+  if (offen && diagnose.isFetched && !verdacht && !ki) return null;
 
   const d = diagnose.data?.diagnosis;
 
   return (
+    <>
     <Modal
       open={offen}
       onClose={() => setOffen(false)}
@@ -80,6 +86,15 @@ export function CrashDialog({
           <Button variant="ghost" onClick={() => setOffen(false)}>
             Schließen
           </Button>
+          {ki && (
+            <Button
+              variant="ghost"
+              icon={<Sparkles size={15} className="text-gold" />}
+              onClick={() => setKiOffen(true)}
+            >
+              KI fragen
+            </Button>
+          )}
           <Button
             icon={<Play size={15} />}
             onClick={() => {
@@ -140,7 +155,21 @@ export function CrashDialog({
             </pre>
           </details>
         </div>
+      ) : diagnose.isFetched ? (
+        <div className="space-y-3">
+          <p className="text-sm leading-relaxed text-stone-350">
+            Das Panel konnte im Protokoll keine einzelne Mod als Ursache benennen. Der
+            KI-Assistent liest das ganze Protokoll und kann meist sagen, woran es liegt.
+          </p>
+          {d && d.excerpt.length > 0 && (
+            <pre className="mc-well max-h-52 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-stone-350">
+              {d.excerpt.join('\n')}
+            </pre>
+          )}
+        </div>
       ) : null}
     </Modal>
+    <AssistantDialog serverId={serverId} open={kiOffen} onClose={() => setKiOffen(false)} />
+    </>
   );
 }

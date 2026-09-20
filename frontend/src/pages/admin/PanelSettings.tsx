@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { Boxes, Container, ExternalLink, Key, ScrollText, Server } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Boxes, Container, ExternalLink, Key, ScrollText, Server, Sparkles } from 'lucide-react';
 import { api } from '../../lib/api';
 import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
@@ -21,6 +21,15 @@ interface PanelInfo {
   curseforge: { configured: boolean; masked: string | null };
   counts: { users: number; servers: number; backups: number };
   docker: { version: string; containers: number } | null;
+  assistant: AssistantInfo;
+}
+
+interface AssistantInfo {
+  configured: boolean;
+  baseUrl: string;
+  model: string;
+  hasKey: boolean;
+  masked: string | null;
 }
 
 interface AuditEntry {
@@ -133,6 +142,8 @@ export default function PanelSettingsPage() {
           </Field>
         </div>
       </Panel>
+
+      <AssistantSettings data={data.assistant} onSaved={() => void info.refetch()} />
 
       <BackupTarget />
       <Panel title="Minecraft-Proxy"><Link to="/admin/proxy" className="text-grass-light hover:underline">Subdomains, Server-Zuordnungen und Portfreigaben auf der Proxy-Seite verwalten →</Link></Panel>
@@ -256,5 +267,140 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
         {value}
       </dd>
     </div>
+  );
+}
+
+/** Anbieter, die man nur auswaehlen muss – die Adresse tippt sonst niemand fehlerfrei. */
+const KI_VORLAGEN: { label: string; baseUrl: string; model: string }[] = [
+  { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4.5' },
+  { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' },
+  { label: 'Ollama (lokal)', baseUrl: 'http://host.docker.internal:11434/v1', model: 'qwen2.5:14b' },
+];
+
+/**
+ * KI-Assistent: ein beliebiger Dienst mit OpenAI-kompatibler Schnittstelle.
+ * Der Key wird nie zurueckgegeben – leer lassen heisst "behalten".
+ */
+function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: () => void }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [baseUrl, setBaseUrl] = useState(data.baseUrl);
+  const [model, setModel] = useState(data.model);
+  const [apiKey, setApiKey] = useState('');
+
+  const save = useMutation({
+    mutationFn: (body: { baseUrl: string; model: string; apiKey?: string }) =>
+      api.put<{ ok: boolean; configured?: boolean; error?: string }>('/settings/assistant', body),
+    onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error(`Nicht gespeichert – der Test schlug fehl: ${res.error}`);
+        return;
+      }
+      toast.success(res.configured ? 'KI-Assistent angebunden und geprüft.' : 'KI-Assistent entfernt.');
+      setApiKey('');
+      // Absturz-Dialog und Konsole lesen die Verfuegbarkeit aus /settings/public.
+      void queryClient.invalidateQueries({ queryKey: ['settings-public'] });
+      onSaved();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  return (
+    <Panel
+      title="KI-Assistent"
+      icon={<Sparkles size={16} />}
+      subtitle="Erklärt Absturzprotokolle auf Knopfdruck – über OpenRouter, OpenAI oder einen eigenen OpenAI-kompatiblen Dienst."
+    >
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-stone-400">Status:</span>
+          {data.configured ? (
+            <Badge tone="green">
+              aktiv · {data.model}
+              {data.hasKey ? ` · Key ${data.masked}` : ' · ohne Key'}
+            </Badge>
+          ) : (
+            <Badge tone="neutral">nicht eingerichtet</Badge>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs text-stone-450">
+          Vorlage:
+          {KI_VORLAGEN.map((v) => (
+            <button
+              key={v.label}
+              type="button"
+              className="border border-stone-700 bg-stone-800/70 px-2 py-1 text-stone-200 transition hover:border-grass-light"
+              onClick={() => {
+                setBaseUrl(v.baseUrl);
+                setModel(v.model);
+              }}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Adresse (Base-URL)"
+            hint="Muss auf /v1 enden. Leer lassen und speichern entfernt die Anbindung."
+          >
+            <input
+              className="mc-input font-mono"
+              placeholder="https://openrouter.ai/api/v1"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+            />
+          </Field>
+          <Field label="Modell" hint="Genau so, wie der Anbieter es listet.">
+            <input
+              className="mc-input font-mono"
+              placeholder="anthropic/claude-sonnet-4.5"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <Field
+          label="API-Key"
+          hint={
+            data.hasKey
+              ? 'Ein Key ist hinterlegt. Leer lassen behält ihn; ein neuer ersetzt ihn.'
+              : 'Bei lokalen Diensten wie Ollama darf das Feld leer bleiben.'
+          }
+        >
+          <div className="flex flex-wrap gap-2">
+            <input
+              className="mc-input flex-1 font-mono"
+              type="password"
+              placeholder={data.hasKey ? '•••••••• (unverändert)' : 'sk-or-v1-…'}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              autoComplete="off"
+            />
+            <Button
+              variant="primary"
+              loading={save.isPending}
+              onClick={() =>
+                save.mutate({
+                  baseUrl: baseUrl.trim(),
+                  model: model.trim(),
+                  apiKey: apiKey || undefined,
+                })
+              }
+            >
+              Speichern & testen
+            </Button>
+          </div>
+        </Field>
+
+        <InfoNote>
+          Beim Fragen gehen die letzten 400 Protokollzeilen, die Modliste und die Serverdaten an
+          diesen Dienst. Bei OpenRouter und OpenAI verlassen sie damit dein Netz.
+        </InfoNote>
+      </div>
+    </Panel>
   );
 }

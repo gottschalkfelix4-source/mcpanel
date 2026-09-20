@@ -200,6 +200,12 @@ export interface ContentFile {
   modified: string;
 }
 
+/** Eine Runde im Gespraech mit dem KI-Assistenten – lebt nur im Dialog. */
+export interface AssistantMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface ContentListing {
   /** null: Der Servertyp unterstuetzt weder Mods noch Plugins. */
   kind: ContentKind | null;
