@@ -127,11 +127,13 @@ it('schaltet eine bekannte Client-Mod ab, die im Modrinth-Paket unter overrides/
   // traegt also keine env-Angabe, und gibt sich selbst als beidseitig aus.
   archive([], {
     'mods/missingmodschecker.jar': modJar('missingmodschecker', '*'),
+    'mods/packanalytics-fabric-1.0.4.jar': modJar('packanalytics', '*'),
     'mods/serverseitig.jar': modJar('serverseitig', '*'),
   });
   await installModpack('a', request, task());
 
   await expect(fs.stat(path.join(dir(), 'mods/missingmodschecker.jar'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await fs.stat(path.join(dir(), 'mods/packanalytics-fabric-1.0.4.jar.disabled'))).isFile()).toBe(true);
   expect((await fs.stat(path.join(dir(), 'mods/missingmodschecker.jar.disabled'))).isFile()).toBe(true);
   expect((await fs.stat(path.join(dir(), 'mods/serverseitig.jar'))).isFile()).toBe(true);
 });

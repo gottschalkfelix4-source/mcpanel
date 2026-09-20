@@ -688,6 +688,11 @@ const CLIENT_ONLY_MOD_IDS: Record<string, string> = {
   // Öffnet beim Start ein Swing-Fenster: java.awt.HeadlessException. Steckt
   // in den „Better MC"-Paketen und in allem, was deren Vorlage benutzt.
   missingmodschecker: 'öffnet beim Start ein Fenster, das es auf einem Server nicht gibt',
+  // Telemetrie desselben Autors. Läuft zwar auch serverseitig, aber ihr
+  // Keepalive-Thread hält die JVM nach einem gescheiterten Start am Leben:
+  // der Container bleibt „unhealthy" statt zu enden, das Panel sieht keinen
+  // Absturz, und das Protokoll füllt sich minütlich mit „Connection refused".
+  packanalytics: 'Telemetrie, die den Prozess nach einem Fehlstart am Leben hält und den Absturz verdeckt',
 };
 
 function normalizeModName(filename: string): string {
