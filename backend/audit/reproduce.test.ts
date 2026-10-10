@@ -33,6 +33,27 @@ const { downloadToFile } = await import('../src/lib/download.js');
 const { allocatePort, updateServerSettings } = await import('../src/services/serverManager.js');
 const dir = () => path.join(m.root, 'servers', 'a');
 
+/**
+ * Windows braucht fuer Symlinks Adminrechte oder den Entwicklermodus; ohne
+ * beides scheitert schon das Anlegen der Attrappe. Der Test wird dann
+ * uebersprungen statt rot zu werden.
+ */
+async function symlinksSupported(): Promise<boolean> {
+  const probe = path.join(os.tmpdir(), `mcpanel-symlink-probe-${process.pid}`);
+  try {
+    await fs.writeFile(probe, '');
+    await fs.symlink(probe, `${probe}.link`);
+    await fs.unlink(`${probe}.link`);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await fs.rm(probe, { force: true });
+  }
+}
+
+const hasSymlinks = await symlinksSupported();
+
 beforeEach(async () => {
   m.root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcpanel-audit-'));
   await fs.mkdir(dir(), { recursive: true });
@@ -43,7 +64,7 @@ afterEach(async () => {
   await fs.rm(m.root, { recursive: true, force: true });
 });
 
-it('BUG-01: rejects a symlink for reads AND writes', async () => {
+it.skipIf(!hasSymlinks)('BUG-01: rejects a symlink for reads AND writes', async () => {
   const outside = path.join(m.root, 'outside.txt');
   await fs.writeFile(outside, 'private fixture');
   await fs.symlink(outside, path.join(dir(), 'link.txt'));

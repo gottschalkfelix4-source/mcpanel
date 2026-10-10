@@ -6,6 +6,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mcpanel}
+      # ACHTUNG: Der Vorgabewert ist oeffentlich bekannt. Die Datenbank hat
+      # keinen veroeffentlichten Port und ist nur im internen Compose-Netz
+      # erreichbar - fuer diesen Normalfall genuegt er. Sobald der Port nach
+      # aussen geoeffnet oder die DB mit anderen Diensten geteilt wird, VOR dem
+      # ersten Start ein eigenes Passwort setzen: es landet dauerhaft im
+      # Volume db-data, eine spaetere Aenderung sperrt den Zugriff.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcpanel}
       POSTGRES_DB: ${POSTGRES_DB:-mcpanel}
     volumes:
@@ -15,6 +21,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    # Kein Nachreichen von Rechten (setuid): die Datenbank braucht das nie.
+    security_opt: ["no-new-privileges:true"]
     networks: [mcpanel]
 
   backend:
@@ -67,7 +75,9 @@ services:
     # auch ohne. Im Verhaeltnis zum Docker-Socket weiter oben, der bereits
     # root-gleiche Rechte auf dem Host gibt, ist das kein zusaetzliches Risiko.
     cap_add: [SYS_ADMIN, DAC_READ_SEARCH]
-    security_opt: ["apparmor:unconfined"]
+    # apparmor:unconfined ist fuer den CIFS-Mount noetig; no-new-privileges
+    # verhindert zusaetzlich, dass Prozesse ueber setuid Rechte nachreichen.
+    security_opt: ["apparmor:unconfined", "no-new-privileges:true"]
     networks: [mcpanel]
 
   frontend:
@@ -76,6 +86,7 @@ services:
     depends_on: [backend]
     ports:
       - "${PANEL_PORT:-8080}:80"
+    security_opt: ["no-new-privileges:true"]
     networks: [mcpanel]
 
 volumes:

@@ -43,7 +43,10 @@ it('BUG-27: SMB credentials use a private file and never enter shell arguments',
       expect(command).toBe('mount');
       expect(JSON.stringify(args)).not.toContain(cfg.smb.password);
       credentialPath = args[args.indexOf('-o') + 1].match(/credentials=([^,]+)/)[1];
-      expect((await fs.stat(credentialPath)).mode & 0o777).toBe(0o600);
+      // Windows kennt keine POSIX-Rechtebits; dort ist die Pruefung nicht aussagekraeftig.
+      if (process.platform !== 'win32') {
+        expect((await fs.stat(credentialPath)).mode & 0o777).toBe(0o600);
+      }
       expect(await fs.readFile(credentialPath, 'utf8')).toContain(`password=${cfg.smb.password}\n`);
       m.mounted = true;
     })().then(() => callback(null, '', ''), callback);
