@@ -37,7 +37,7 @@ export async function verifySftpLogin(login: string, password: string): Promise<
 export function getSftpInfo() {
   const address = listener?.address();
   const port = config.sftp.publicPort || (address && typeof address !== 'string' ? address.port : config.sftp.port);
-  return { enabled: Boolean(listener?.listening), host: config.sftp.host, port, fingerprint };
+  return { enabled: Boolean(address), host: config.sftp.host, port, fingerprint };
 }
 
 function attachSftp(stream: SFTPWrapper, user: User, touch: () => void) {

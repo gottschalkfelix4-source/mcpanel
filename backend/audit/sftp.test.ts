@@ -49,6 +49,7 @@ describe.skipIf(process.env.AUDIT_SFTP_TESTS !== '1')('SFTP mit echten Client-Ve
     m.user = { id: 'user', username: 'test', email: 'test@example.com', active: true, role: 'USER', sessionVersion: 0,
       passwordHash: await bcrypt.hash('Test-Passwort', 10) };
     await startSftp(() => {});
+    expect(getSftpInfo().enabled).toBe(true);
   });
   afterAll(async () => {
     for (const client of clients) client.end();
@@ -104,6 +105,7 @@ describe.skipIf(process.env.AUDIT_SFTP_TESTS !== '1')('SFTP mit echten Client-Ve
   it('behält den Hostschlüssel bei einem Dienstneustart', async () => {
     const previous = getSftpInfo().fingerprint;
     await stopSftp();
+    expect(getSftpInfo().enabled).toBe(false);
     await startSftp(() => {});
     expect(getSftpInfo().fingerprint).toBe(previous);
   });
