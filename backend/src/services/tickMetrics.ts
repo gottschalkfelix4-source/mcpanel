@@ -3,7 +3,7 @@ import { rconCommand } from './rcon.js';
 import { getState } from './docker.js';
 import { serverLoader } from './content.js';
 
-type Source = 'spark' | 'paper' | 'forge';
+type Source = 'spark' | 'paper' | 'forge' | 'minecraft';
 interface Sample { at: string; tps: number | null; mspt: number | null }
 interface Measurement extends Sample { source: Source | null; available: boolean; message: string; history: Sample[] }
 const entries = new Map<string, { at: number; startedAt: string | null; result: Measurement }>();
@@ -27,12 +27,15 @@ export function parseTickMetrics(raw: string, source: Source): { tps: number | n
     tps = value(text.match(/TPS[^:\n]*:\s*([^\n]+)/i)?.[1]);
     const durations = text.match(/(?:Server tick times|MSPT|Tick times)[^:\n]*:\s*([^\n]+)/i)?.[1];
     mspt = value(durations);
-  } else {
+  } else if (source === 'forge') {
     const overall = text.split('\n').find(line => /Overall/i.test(line));
     if (overall) {
       tps = value(overall.match(/(?:Mean )?TPS\s*:\s*([\d.,]+)/i)?.[1]);
       mspt = value(overall.match(/(?:Mean )?tick time\s*:\s*([\d.,]+)/i)?.[1]);
     }
+  } else {
+    // „Target tick rate“ ist eine Vorgabe, kein gemessener TPS-Wert.
+    mspt = value(text.match(/Average time per tick:\s*([\d.,]+)\s*ms/i)?.[1]);
   }
   return { tps: tps !== null && tps >= 0 && tps <= 20.1 ? Math.min(20, tps) : null,
     mspt: mspt !== null && mspt >= 0 && mspt < 60_000 ? mspt : null };
@@ -57,6 +60,9 @@ export async function getTickMetrics(server: Server): Promise<Measurement> {
       metrics = parseTickMetrics((await ask('tps')) + '\n' + (await ask('mspt')), source);
     } else if (metrics.tps === null && ['FORGE', 'NEOFORGE'].includes(loader)) {
       source = 'forge'; metrics = parseTickMetrics(await ask('forge tps'), source);
+    }
+    if (metrics.tps === null && metrics.mspt === null) {
+      source = 'minecraft'; metrics = parseTickMetrics(await ask('tick query'), source);
     }
     const available = metrics.tps !== null || metrics.mspt !== null;
     const history = available ? [...(reusable?.result.history ?? []), { at, ...metrics }].slice(-240) : reusable?.result.history ?? [];

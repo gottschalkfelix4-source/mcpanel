@@ -29,7 +29,7 @@ export default function TickMetrics({ serverId, running }: { serverId: string; r
         <div><p className="text-sm">TPS: <strong className={data.tps !== null && data.tps < 18 ? 'text-redstone' : 'text-grass-light'}>{data.tps?.toFixed(1) ?? '–'}</strong> / 20</p>{plot('tps', 20)}</div>
         <div><p className="text-sm">MSPT: <strong className={data.mspt !== null && data.mspt > 50 ? 'text-redstone' : 'text-grass-light'}>{data.mspt?.toFixed(1) ?? '–'}</strong> ms</p>{plot('mspt', Math.max(50, ...(data.history.map(sample => sample.mspt ?? 0))))}</div>
       </div>
-      <p className="mt-2 text-xs text-stone-450">Quelle: {data.source} · {new Date(data.at).toLocaleTimeString('de-DE')} · letzte {Math.min(60, data.history.length)} Messungen, alle 30 Sekunden. Spark liefert bei MSPT den Median.</p>
+      <p className="mt-2 text-xs text-stone-450">Quelle: {data.source} · {new Date(data.at).toLocaleTimeString('de-DE')} · letzte {Math.min(60, data.history.length)} Messungen, alle 30 Sekunden. {data.source === 'spark' ? 'Spark liefert bei MSPT den Median.' : data.source === 'minecraft' ? 'Minecraft liefert die mittlere Tickzeit; die Zieltickrate wird nicht als gemessene TPS angezeigt.' : 'MSPT zeigt die mittlere Tickzeit.'}</p>
     </>}
   </Panel>;
 }

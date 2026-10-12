@@ -19,6 +19,10 @@ it('verwendet bei Forge den Gesamtwert statt einer einzelnen Dimension', () => {
 it('erfindet bei unbekannten Befehlen keine Messwerte', () => {
   expect(parseTickMetrics('Unknown command at position 0', 'spark')).toEqual({ tps: null, mspt: null });
 });
+it('liest die eingebaute Minecraft-Tickzeit und gibt die Zieltickrate nicht als gemessene TPS aus', () => {
+  const response = 'The game is running normallyTarget tick rate: 20.0 per second.\nAverage time per tick: 0.1ms (Target: 50.0ms)Percentiles: P50: 0.1ms P95: 0.2ms P99: 0.2ms. Sample: 100';
+  expect(parseTickMetrics(response, 'minecraft')).toEqual({ tps: null, mspt: 0.1 });
+});
 it('bündelt gleichzeitige Messungen und verwirft den Verlauf nach einem Serverneustart', async () => {
   vi.mocked(getState).mockResolvedValue({ state: 'running', health: 'healthy', startedAt: 'start-1' });
   vi.mocked(rconCommand).mockResolvedValue('TPS from last 5s, 10s, 1m:\n20.0, 20.0, 20.0');
