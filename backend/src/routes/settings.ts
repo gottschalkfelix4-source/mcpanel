@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { badRequest } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import { audit, authenticate, requireAdmin } from '../auth/context.js';
-import { getCurseforgeKey, getPublicHost, setSetting } from '../services/settings.js';
+import { getCurseforgeKey, getPanelUrl, getPublicHost, panelUrlSchema, setSetting } from '../services/settings.js';
 import * as curseforge from '../providers/curseforge.js';
 import * as dockerSvc from '../services/docker.js';
 import {
@@ -35,12 +35,19 @@ export default async function settingsRoutes(app: FastifyInstance) {
     await setSetting('panel.publicHost', host);
     return { publicHost: host };
   });
+  app.put('/panel-url', { preHandler: requireAdmin }, async (req) => {
+    const { url } = z.object({ url: panelUrlSchema }).parse(req.body);
+    await setSetting('panel.url', url);
+    await audit(req.user!.id, null, 'settings.panelUrl', url || 'entfernt');
+    return { panelUrl: url };
+  });
 
   await app.register(globalNotificationRoutes, { prefix: '/notifications' });
 
   /** Panel-Infos, die jeder angemeldete Nutzer sehen darf. */
   app.get('/public', async () => ({
     publicHost: await getPublicHost(),
+    panelUrl: await getPanelUrl(),
     portRange: config.portRange,
     curseforgeAvailable: Boolean(await getCurseforgeKey()),
     // Damit der Absturz-Dialog weiss, ob er einen KI-Knopf anbieten kann.
@@ -71,6 +78,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
         date: config.build.date || null,
       },
       publicHost: await getPublicHost(),
+      panelUrl: await getPanelUrl(),
       portRange: config.portRange,
       dataRoot: config.dataRoot,
 

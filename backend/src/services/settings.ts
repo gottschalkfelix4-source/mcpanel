@@ -1,5 +1,23 @@
 import { prisma } from '../db.js';
 import { config } from '../config.js';
+import { z } from 'zod';
+
+export const panelUrlSchema = z.string().trim().max(2048, 'Die Panel-URL ist zu lang.').transform((value, ctx) => {
+  if (!value) return '';
+  const invalid = () => {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Bitte eine gültige Panel-URL mit http:// oder https:// ohne Zugangsdaten, Suchparameter oder Fragment angeben.' });
+    return z.NEVER;
+  };
+  try {
+    const url = new URL(value);
+    if (!/^https?:\/\//i.test(value) || !['http:', 'https:'].includes(url.protocol) ||
+        !url.hostname || url.username || url.password || url.search || url.hash) return invalid();
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return invalid();
+  }
+});
 
 const cache = new Map<string, string>();
 
@@ -34,4 +52,14 @@ export async function getCurseforgeKey(): Promise<string> {
 export async function getPublicHost(): Promise<string> {
   const fromDb = await getSetting('panel.publicHost', '');
   return fromDb || config.publicHost;
+}
+
+export async function getPanelUrl(): Promise<string> {
+  return getSetting('panel.url');
+}
+
+/** Die Webadresse liefert nur den Hostnamen; der SFTP-Port bleibt unabhängig. */
+export async function getSftpHost(): Promise<string> {
+  const panelUrl = await getPanelUrl();
+  return panelUrl ? new URL(panelUrl).hostname : config.sftp.host;
 }

@@ -10,6 +10,7 @@ import * as files from '../services/files.js';
 import { assertDiskAvailable, remainingDiskBytes } from '../services/quota.js';
 import { guardMutations } from './mutationGuard.js';
 import { getSftpInfo } from '../services/sftp.js';
+import { getSftpHost } from '../services/settings.js';
 
 const pathQuery = z.object({ path: z.string().default('/') });
 
@@ -17,7 +18,7 @@ export default async function fileRoutes(app: FastifyInstance) {
   guardMutations(app);
   app.get('/sftp', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
-    return { ...getSftpInfo(), username: req.user!.username,
+    return { ...getSftpInfo(), host: await getSftpHost(), username: req.user!.username,
       path: `/${access.server.id}/`, writable: access.can(PERMISSIONS.FILES_WRITE) };
   });
   // Verzeichnis auflisten

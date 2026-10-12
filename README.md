@@ -310,7 +310,7 @@ Alle Werte kommen aus der `.env` (siehe `.env.example`):
 | `SFTP_ENABLED` | `true` | SFTP-Dateizugriff aktivieren; `false` deaktiviert den Dienst |
 | `SFTP_PORT` | `2222` | TCP-Port des SFTP-Dienstes im Backend |
 | `SFTP_PUBLIC_PORT` | `2222` | Veröffentlichter SFTP-Port; muss zur Docker-Portzuordnung passen |
-| `SFTP_HOST` | leer | Direkte SFTP-Adresse; leer verwendet die Adresse der Weboberfläche |
+| `SFTP_HOST` | leer | SFTP-Adresse, wenn keine externe Panel-URL eingestellt ist; leer verwendet die Adresse der Weboberfläche |
 | `HOST_DATA_ROOT` | leer / automatisch | Absoluter Host-Pfad; Compose bindet standardmäßig `./data` ein |
 | `MC_PORT_MIN` / `MC_PORT_MAX` | `25565` / `25700` | Port-Bereich für neue Server |
 | `PUBLIC_HOST` | `localhost` | Angezeigte Serveradresse |
@@ -453,8 +453,15 @@ Compose veröffentlicht standardmäßig **2222/TCP** am Backend. Im Unraid-Templ
 derselbe Port vorgesehen. Bei einem bestehenden Unraid-Container beim Aktualisieren
 die zusätzliche Portzuordnung `2222:2222/TCP` ergänzen. Wird der öffentliche Port
 anders gewählt, `SFTP_PUBLIC_PORT` entsprechend setzen. Ein HTTP-Reverse-Proxy leitet
-SFTP nicht weiter: dafür die direkte Adresse in `SFTP_HOST` eintragen und den
-SFTP-Port passend zum gewünschten Zugriff erreichbar machen.
+SFTP nicht weiter: den SFTP-Port passend zum gewünschten Zugriff erreichbar machen.
+
+Unter **Panel-Einstellungen → Panel-Adresse → Externe Panel-URL** kann ein Administrator
+die Standardadresse speichern, z. B. `https://panel.example.de`. Der SFTP-Dialog und
+die Client-Verknüpfung verwenden dann `panel.example.de` statt einer lokalen IP aus
+`SFTP_HOST`. HTTPS-Port und URL-Pfad werden nicht übernommen; der SFTP-Port bleibt
+`SFTP_PUBLIC_PORT`. Die Domain muss auch zum SFTP-Host führen. Die Änderung gilt
+sofort ohne Neustart. Ein leeres Feld stellt den bisherigen Rückfall auf `SFTP_HOST`
+beziehungsweise die Browseradresse wieder her. Die Minecraft-Spieleradresse bleibt separat.
 
 Die Dateirechte aus dem Panel gelten auch über SFTP. Mitglieder mit `files.read`
 können nur lesen; `files.write` erlaubt Upload, Umbenennen und Löschen. Änderungen

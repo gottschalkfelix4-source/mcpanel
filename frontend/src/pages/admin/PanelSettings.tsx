@@ -13,6 +13,7 @@ import {
 interface PanelInfo {
   build: { version: string | null; revision: string | null; date: string | null };
   publicHost: string;
+  panelUrl: string;
   portRange: { min: number; max: number };
   dataRoot: string;
   hostDataRoot: string;
@@ -94,6 +95,8 @@ export default function PanelSettingsPage() {
           delay={0.18}
         />
       </div>
+
+      <PanelAddressSettings url={data.panelUrl} />
 
       {/* CurseForge */}
       <Panel
@@ -188,7 +191,7 @@ export default function PanelSettingsPage() {
 
         <div className="mt-4">
           <InfoNote>
-            Den öffentlichen Host kannst du oben ändern. Die übrigen Werte kommen aus der <code>.env</code> bzw. dem Compose-Stack. Nach einer Änderung
+            Die externe Panel-URL kannst du oben ändern. Der öffentliche Hostname ist die Adresse für Minecraft-Spieler. Die übrigen Werte kommen aus der <code>.env</code> bzw. dem Compose-Stack. Nach einer Änderung
             ist ein Neustart des Backends nötig.
           </InfoNote>
         </div>
@@ -223,6 +226,43 @@ export default function PanelSettingsPage() {
         )}
       </Panel>
     </div>
+  );
+}
+
+function PanelAddressSettings({ url }: { url: string }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (value: string) => api.put<{ panelUrl: string }>('/settings/panel-url', { url: value }),
+    onSuccess: (res) => {
+      setDraft(null);
+      queryClient.setQueryData<PanelInfo>(['panel-settings'], (previous) =>
+        previous ? { ...previous, panelUrl: res.panelUrl } : previous);
+      void queryClient.invalidateQueries({ queryKey: ['sftp'] });
+      void queryClient.invalidateQueries({ queryKey: ['settings-public'] });
+      void queryClient.invalidateQueries({ queryKey: ['audit'] });
+      toast.success(res.panelUrl ? 'Panel-URL gespeichert. Die SFTP-Adresse wurde aktualisiert.' : 'Panel-URL entfernt.');
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  return (
+    <Panel title="Panel-Adresse">
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(draft ?? url ?? ''); }} className="space-y-4">
+        <Field label="Externe Panel-URL" hint="Der Hostname dieser URL wird im SFTP-Fenster verwendet. Leer lassen verwendet die bisherige SFTP-Adresse.">
+          <div className="flex flex-wrap gap-2">
+            <input id="panel-url" aria-label="Externe Panel-URL" className="mc-input min-w-0 flex-1 font-mono" type="url"
+              placeholder="https://panel.example.de" value={draft ?? url ?? ''} maxLength={2048}
+              onChange={(e) => setDraft(e.target.value)} />
+            <Button type="submit" variant="primary" loading={save.isPending}>Speichern</Button>
+          </div>
+        </Field>
+        <p className="text-sm text-stone-400">
+          Der SFTP-Port bleibt separat (standardmäßig 2222). Die Domain muss zum SFTP-Host führen und der TCP-Port erreichbar sein; ein HTTP-Reverse-Proxy leitet SFTP nicht weiter.
+        </p>
+      </form>
+    </Panel>
   );
 }
 
