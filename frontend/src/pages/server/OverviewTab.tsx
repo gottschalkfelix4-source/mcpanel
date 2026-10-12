@@ -302,7 +302,7 @@ function Stat({
           <span style={{ color: tint }}>{icon}</span>
           {label}
         </div>
-        <p className="mt-3 font-mono text-[26px] leading-none text-stone-50 text-shadow-pixel">
+        <p className="mt-3 break-words font-mono text-[26px] leading-none text-stone-50 text-shadow-pixel">
           {value}
         </p>
         <p className="mt-2 text-[11px] leading-[1.45] text-stone-450">{sub}</p>
