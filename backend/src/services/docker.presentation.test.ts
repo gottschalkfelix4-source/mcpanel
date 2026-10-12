@@ -2,7 +2,7 @@ import type { Server } from '@prisma/client';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
-  inspect: vi.fn(), remove: vi.fn(), start: vi.fn(), create: vi.fn(), list: vi.fn(), get: vi.fn(), stats: vi.fn(),
+  inspect: vi.fn(), remove: vi.fn(), start: vi.fn(), stop: vi.fn(), logs: vi.fn(), create: vi.fn(), list: vi.fn(), get: vi.fn(), stats: vi.fn(),
 }));
 vi.mock('../config.js', () => ({
   config: { dockerNetwork: 'mc-network', mcDns: [], mcImageRepo: 'itzg/minecraft-server' },
@@ -15,13 +15,13 @@ vi.mock('dockerode', () => ({ default: class {
   listNetworks = async () => [{ Name: 'mc-network' }];
   listImages = async () => [{}];
 } }));
-const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes, getStats, javaTagForVersion } = await import('./docker.js');
+const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes, getStats, javaTagForVersion, getState, stop } = await import('./docker.js');
 const server = {
   id: 'abc123', name: 'Meine Welt', containerName: 'mc-abc123', type: 'FABRIC',
   mcVersion: '1.21.1', memoryMb: 4096, port: 25565, rconPassword: 'test', extraEnv: {},
   modpackIconUrl: null,
 } as Server;
-const container = { inspect: m.inspect, remove: m.remove, start: m.start, stats: m.stats };
+const container = { inspect: m.inspect, remove: m.remove, start: m.start, stop: m.stop, logs: m.logs, stats: m.stats };
 beforeEach(() => {
   vi.resetAllMocks();
   m.get.mockReturnValue(container);
@@ -171,4 +171,48 @@ it('gibt der Jahreszaehlung ab 26.x das neueste Java', () => {
 it('raet bei LATEST und Schnappschuessen lieber zu neu als zu alt', () => {
   expect(javaTagForVersion('LATEST')).toBe('java25');
   expect(javaTagForVersion('26w14a')).toBe('java25');
+});
+
+function exitedInfo(id: string, exitCode = 0) {
+  return { Id: id, Config: { Labels: { 'mcpanel.server': id } }, State: {
+    Running: false, Dead: false, ExitCode: exitCode,
+    StartedAt: '2026-10-12T08:28:20Z', FinishedAt: '2026-10-12T08:29:15Z',
+  } };
+}
+
+it('erkennt den echten Fabric-Fehlstart trotz Exitcode 0 und prüft dessen Protokoll nur einmal', async () => {
+  const s = { ...server, id: 'fehler-null' };
+  m.inspect.mockResolvedValue(exitedInfo(s.id));
+  m.logs.mockResolvedValue(Buffer.from('Failed to start the minecraft server\nmc-server-runner Done'));
+  expect((await getState(s)).state).toBe('error');
+  expect((await getState(s)).state).toBe('error');
+  expect(m.logs).toHaveBeenCalledOnce();
+  expect(m.logs).toHaveBeenCalledWith(expect.objectContaining({ since: Date.parse('2026-10-12T08:28:20Z') / 1000 }));
+});
+
+it('meldet normale Fehlerzeilen beim sauberen Ende nicht als Absturz', async () => {
+  const s = { ...server, id: 'sauber-null' };
+  m.inspect.mockResolvedValue(exitedInfo(s.id));
+  m.logs.mockResolvedValue(Buffer.from('ERROR: No data fixer registered\nStopping server\nmc-server-runner Done'));
+  expect((await getState(s)).state).toBe('stopped');
+});
+
+it('behält einen ausdrücklich geplanten Stopp auch bei einem Startfehler als Stopp bei', async () => {
+  const s = { ...server, id: 'geplant-null' };
+  m.inspect.mockResolvedValue(exitedInfo(s.id));
+  await stop(s);
+  expect((await getState(s)).state).toBe('stopped');
+  expect(m.logs).not.toHaveBeenCalled();
+});
+
+it('verwirft die Absturzzuordnung nach einem neuen Containerlauf', async () => {
+  const s = { ...server, id: 'neuer-lauf' };
+  const info = exitedInfo(s.id);
+  m.inspect.mockResolvedValue(info);
+  m.logs.mockResolvedValueOnce(Buffer.from('Minecraft has crashed!')).mockResolvedValue(Buffer.from('Stopping server'));
+  expect((await getState(s)).state).toBe('error');
+  info.State.StartedAt = '2026-10-12T09:00:00Z';
+  info.State.FinishedAt = '2026-10-12T09:05:00Z';
+  expect((await getState(s)).state).toBe('stopped');
+  expect(m.logs).toHaveBeenCalledTimes(2);
 });

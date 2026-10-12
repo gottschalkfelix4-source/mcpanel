@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import AdmZip from 'adm-zip';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-const m = vi.hoisted(() => ({ root: '', archive: Buffer.alloc(0) as Buffer, row: {} as any, download: vi.fn(), recreate: vi.fn(), start: vi.fn(), stop: vi.fn() }));
+const m = vi.hoisted(() => ({ root: '', archive: Buffer.alloc(0) as Buffer, row: {} as any, download: vi.fn(), recreate: vi.fn(), start: vi.fn(), stop: vi.fn(), ready: vi.fn(), cfVersion: {} as any }));
 vi.mock('../config.js', () => ({
   serverDir: (id: string) => path.join(m.root, 'servers', id),
   serverBackupDir: (id: string) => path.join(m.root, 'backups', id), cacheDir: () => path.join(m.root, 'cache'),
@@ -15,6 +15,12 @@ vi.mock('../db.js', () => ({ prisma: { server: {
 vi.mock('./docker.js', () => ({ getState: async () => ({ state: 'running' }), stop: m.stop, start: m.start, recreateContainer: m.recreate }));
 vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));
 vi.mock('./backups.js', () => ({ createBackup: vi.fn() }));
+vi.mock('./serverStartup.js', () => ({ waitForServerReady: m.ready }));
+vi.mock('../providers/curseforge.js', () => ({
+  getVersion: async () => m.cfVersion,
+  getProject: async () => ({ name: 'Pack', iconUrl: null }),
+  findServerPack: async () => null,
+}));
 vi.mock('../providers/modrinth.js', () => ({
   getVersion: async () => ({ id: 'new', name: 'new pack', filename: 'fixture.mrpack', downloadUrl: 'https://fixture.test/archive' }),
   getProject: async () => ({ name: 'Pack', iconUrl: null }), modrinthHeaders: () => ({}),
@@ -33,6 +39,8 @@ function archive(downloads: { path: string; downloads: string[] }[] = [], overri
 }
 beforeEach(async () => {
   vi.resetAllMocks();
+  m.ready.mockResolvedValue(undefined);
+  m.cfVersion = { id: 'new', name: 'Serverpaket', filename: 'server.zip', downloadUrl: 'https://fixture.test/archive', isServerPack: true, gameVersions: ['1.20.1'], loaders: ['fabric'] };
   m.root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcpanel-modpack-test-'));
   m.row = { id: 'a', name: 'Test', type: 'PAPER', mcVersion: '1.20.1', extraEnv: {}, modpackProjectId: 'pack', modpackVersionId: 'old', quotaDiskMb: 0 };
   for (const sub of ['mods', 'customworld', 'config']) await fs.mkdir(path.join(dir(), sub), { recursive: true });
@@ -167,4 +175,66 @@ it('laedt Shaderpacks und Client-Welten aus der Dateiliste gar nicht erst herunt
   expect(urls).not.toContain('https://fixture.test/save');
   await expect(fs.stat(path.join(dir(), 'shaderpacks'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(t.log.mock.calls.some((args: unknown[]) => /2 reine Client-Datei/.test(String(args[0])))).toBe(true);
+});
+
+it('bricht ein Client-Paket mit fehlenden Zusatzdownloads ab und erhält die bisherigen Daten', async () => {
+  archive([], { 'config/missing_mods_checker.json': JSON.stringify([
+    { displayName: 'Balm', pattern: 'balm-fabric.jar', destination: 'mods', url: 'https://fixture.test/balm' },
+    { displayName: 'Shader', pattern: 'shader.zip', destination: 'resourcepacks' },
+  ]) });
+  const t = task();
+  await expect(installModpack('a', request, t)).rejects.toThrow('Balm');
+  expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
+  expect(m.row.modpackVersionId).toBe('old');
+  expect(t.log.mock.calls.some((args: unknown[]) => String(args[0]).includes('https://fixture.test/balm'))).toBe(true);
+  expect(m.ready).not.toHaveBeenCalled();
+});
+
+it('erkennt vorhandene Zusatzmods anhand einfacher Dateimuster und ignoriert Client-Ressourcen', async () => {
+  archive([], {
+    'config/missing_mods_checker.json': JSON.stringify([
+      { pattern: 'balm-.*\\.jar', destination: 'mods' },
+      { pattern: 'shader.zip', destination: 'resourcepacks' },
+    ]),
+    'mods/Balm-1.20.1.jar': modJar('balm', '*'),
+  });
+  await expect(installModpack('a', request, task())).resolves.toBeUndefined();
+});
+
+it('deaktiviert die beiden weiteren nachgewiesenen Client-Mods vor dem Start', async () => {
+  archive([], {
+    'mods/tooltips.jar': modJar('miningspeedtooltips', '*'),
+    'mods/freezefix.jar': modJar('ftbquestsfreezefix', '*'),
+  });
+  await installModpack('a', request, task());
+  for (const file of ['tooltips.jar.disabled', 'freezefix.jar.disabled']) expect((await fs.stat(path.join(dir(), 'mods', file))).isFile()).toBe(true);
+});
+
+it('wartet vor dem erfolgreichen Abschluss auf Minecraft und rollt einen Fehlstart zurück', async () => {
+  archive([], { 'mods/new.jar': modJar('neu', '*') });
+  m.ready.mockRejectedValueOnce(new Error('Minecraft-Start fehlgeschlagen'));
+  await expect(installModpack('a', request, task())).rejects.toThrow('Minecraft-Start');
+  expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
+  expect(m.row.modpackVersionId).toBe('old');
+  expect(m.start).toHaveBeenLastCalledWith(expect.objectContaining({ modpackVersionId: 'old' }));
+});
+
+it('prüft den Start nur bei angefordertem Autostart', async () => {
+  archive();
+  await installModpack('a', { ...request, startAfter: false }, task());
+  expect(m.ready).not.toHaveBeenCalled();
+  expect(m.start).not.toHaveBeenCalled();
+});
+
+it('übernimmt die Fabric-Version des offiziellen Serverpakets und erhält Welt und Konfiguration', async () => {
+  const zip = new AdmZip();
+  zip.addFile('mods/server.jar', modJar('servermod', '*'));
+  zip.addFile('variables.txt', Buffer.from('MINECRAFT_VERSION=1.20.1\nMODLOADER=Fabric\nMODLOADER_VERSION=0.18.4\n'));
+  zip.addFile('config/user.conf', Buffer.from('Neue Vorgabe'));
+  zip.addFile('customworld/level.dat', Buffer.from('Fremde Welt'));
+  m.archive = zip.toBuffer();
+  await installModpack('a', { ...request, provider: 'curseforge' }, task());
+  expect(m.row.extraEnv).toMatchObject({ TYPE: 'FABRIC', FABRIC_LOADER_VERSION: '0.18.4' });
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  expect(await fs.readFile(path.join(dir(), 'config/user.conf'), 'utf8')).toBe('config original');
 });

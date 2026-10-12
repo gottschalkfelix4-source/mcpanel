@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
+import { z } from 'zod';
 import type { Server } from '@prisma/client';
 import { cacheDir, serverDir, serverBackupDir } from '../config.js';
 import { prisma } from '../db.js';
@@ -18,6 +19,8 @@ import type { TaskHandle } from './tasks.js';
 import * as dockerSvc from './docker.js';
 import { createBackup } from './backups.js';
 import { invalidateDiskUsage } from './diskUsage.js';
+import { badRequest } from '../lib/errors.js';
+import { waitForServerReady } from './serverStartup.js';
 
 export interface InstallRequest {
   provider: ProviderId;
@@ -327,6 +330,8 @@ async function installModpackImpl(
     throw new Error(`${failures.length} Pflichtdatei(en) konnten nicht geladen werden: ${failures.join(', ')}`);
   }
 
+  if (!plan.isServerPack) await assertSupplementaryDownloadsComplete(plan, dir, task);
+
   // --- 6. Client-Mods aussortieren ----------------------------------------
   // Nur beim Client-Paket nötig, dort aber bei jeder Quelle:
   //   * Modrinth markiert zwar `env.server` pro Datei, doch die Angabe steht
@@ -420,6 +425,8 @@ async function installModpackImpl(
   if (request.startAfter ?? wasRunning) {
     await task.update(99, 'Server wird gestartet …');
     await dockerSvc.start(updated);
+    await waitForServerReady(updated, { onWaiting: message => task.update(99, message) });
+    await task.log('Minecraft antwortet – der Server wurde erfolgreich gestartet.');
   }
 
   await task.update(
@@ -620,6 +627,18 @@ function detectLoaderFromArchive(
 ): { loader: Loader; version: string } | null {
   const names = zip.getEntries().map((e) => e.entryName.replace(/\\/g, '/').slice(root.length));
 
+  // ServerPackCreator legt die verbindlichen Versionen in variables.txt ab.
+  // Nur lesen, niemals die mitgelieferten Startskripte ausführen.
+  const variablesEntry = zip.getEntry(root + 'variables.txt');
+  if (variablesEntry) {
+    const variables = parseProperties(variablesEntry.getData().toString('utf8'));
+    const loader = variables.MODLOADER?.toUpperCase() as Loader;
+    const version = variables.MODLOADER_VERSION?.replace(/^['"]|['"]$/g, '');
+    if (['FABRIC', 'QUILT', 'FORGE', 'NEOFORGE'].includes(loader) && version && /^[\d][\w.+-]*$/.test(version)) {
+      return { loader, version };
+    }
+  }
+
   const patterns: { loader: Loader; regexes: RegExp[] }[] = [
     {
       loader: 'NEOFORGE',
@@ -693,7 +712,54 @@ const CLIENT_ONLY_MOD_IDS: Record<string, string> = {
   // der Container bleibt „unhealthy" statt zu enden, das Panel sieht keinen
   // Absturz, und das Protokoll füllt sich minütlich mit „Connection refused".
   packanalytics: 'Telemetrie, die den Prozess nach einem Fehlstart am Leben hält und den Absturz verdeckt',
+  // Greift im gemeinsamen Einstiegspunkt auf ItemTooltipCallback des Clients zu.
+  miningspeedtooltips: 'verwendet beim Serverstart eine ausschließlich clientseitige Tooltip-API',
+  // Als beidseitig deklariert; die leere Sprachdatei bricht Minecraft 1.20.1 ab.
+  ftbquestsfreezefix: 'Client-Menü-Erweiterung mit einer leeren Sprachdatei, die den Serverstart abbricht',
 };
+
+const supplementarySchema = z.array(z.object({
+  displayName: z.string().max(250).optional(),
+  pattern: z.string().min(1).max(500),
+  url: z.string().url().optional(),
+  destination: z.string().default('mods'),
+})).max(1000);
+
+/** Dateinamen und einfache .*-Muster prüfen, ohne fremde reguläre Ausdrücke auszuführen. */
+function matchesSupplementaryFile(file: string, pattern: string): boolean {
+  const name = file.toLowerCase();
+  const parts = pattern.toLowerCase().replace(/\\\./g, '.').split('.*');
+  if (parts.length === 1) return name === parts[0];
+  if (!name.startsWith(parts[0])) return false;
+  let offset = parts[0].length;
+  for (const part of parts.slice(1, -1)) {
+    const found = name.indexOf(part, offset);
+    if (found < 0) return false;
+    offset = found + part.length;
+  }
+  return name.slice(offset).endsWith(parts[parts.length - 1]);
+}
+
+/** Manche Client-Pakete laden weitere Mods erst über ein grafisches Fenster nach. */
+async function assertSupplementaryDownloadsComplete(plan: PackPlan, dir: string, task: TaskHandle): Promise<void> {
+  let entry: ReturnType<AdmZip['getEntry']> = null;
+  for (const prefix of plan.overrideDirs) {
+    const candidate = plan.zip.getEntry(`${prefix}/config/missing_mods_checker.json`);
+    if (candidate) entry = candidate;
+  }
+  if (!entry) return;
+  let raw: unknown;
+  try { raw = JSON.parse(entry.getData().toString('utf8')); }
+  catch { throw badRequest('Die Zusatzdownload-Liste des Modpacks ist ungültig. Bitte ein vollständiges Serverpaket verwenden.'); }
+  const parsed = supplementarySchema.safeParse(raw);
+  if (!parsed.success) throw badRequest('Die Zusatzdownload-Liste des Modpacks ist ungültig. Bitte ein vollständiges Serverpaket verwenden.');
+  const files = await fs.readdir(safePath(dir, 'mods')).catch(() => [] as string[]);
+  const missing = parsed.data.filter(item => item.destination === 'mods' && !files.some(file => /\.jar$/i.test(file) && matchesSupplementaryFile(file, item.pattern)));
+  if (!missing.length) return;
+  await task.log('Das Client-Paket erwartet zusätzliche Downloads, die nicht im Archiv oder Index enthalten sind:');
+  for (const item of missing) await task.log(`   ${item.displayName ?? item.pattern}${item.url ? ` – ${item.url}` : ''}`);
+  throw badRequest(`Das Modpack ist unvollständig: ${missing.length} Zusatzdownload(s) fehlen (${missing.slice(0, 6).map(item => item.displayName ?? item.pattern).join(', ')}). Bitte das vollständige Serverpaket des Autors verwenden; die vorhandenen Serverdaten bleiben erhalten.`);
+}
 
 function normalizeModName(filename: string): string {
   return filename

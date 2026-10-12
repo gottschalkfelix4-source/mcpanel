@@ -9,6 +9,7 @@ import { containerIcon, containerNames } from './containerPresentation.js';
 import { defaultInitialMemory, memoryWorkingSet, type DockerMemoryStats } from './memory.js';
 import { connectPanelToNetwork } from './dockerNetwork.js';
 import { serverLoader } from './content.js';
+import { hasFatalServerLog } from './serverLog.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
@@ -336,6 +337,8 @@ async function recreateContainerUnlocked(server: Server): Promise<Container> {
   return createContainer(server);
 }
 
+const exitedLogChecks = new Map<string, { key: string; failed: boolean }>();
+
 export async function getState(server: Server): Promise<{
   state: PowerState;
   health: string | null;
@@ -355,6 +358,18 @@ export async function getState(server: Server): Promise<{
       state = health === 'starting' ? 'starting' : 'running';
     } else if (info.State.Dead || info.State.ExitCode > 0) {
       state = 'error';
+    } else if (!wasPlannedStop(server.id) && Date.parse(info.State.StartedAt) > 0) {
+      // Fabric kann nach einem fatalen Startfehler trotzdem Exitcode 0 liefern.
+      // Nur diesen Lauf lesen, damit ein früherer Absturz keinen späteren
+      // sauberen Stopp verfälscht. Pro beendetem Lauf genügt eine Log-Abfrage.
+      const key = `${info.Id}:${info.State.StartedAt}:${info.State.FinishedAt}`;
+      let check = exitedLogChecks.get(server.id);
+      if (check?.key !== key) {
+        const log = await c.logs({ stdout: true, stderr: true, tail: 1500, since: Math.floor(Date.parse(info.State.StartedAt) / 1000) });
+        check = { key, failed: hasFatalServerLog(stripDockerHeaders(log as unknown as Buffer)) };
+        exitedLogChecks.set(server.id, check);
+      }
+      if (check.failed) state = 'error';
     }
     return { state, health, startedAt: info.State.StartedAt ?? null };
   } catch (err) {
