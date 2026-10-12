@@ -88,7 +88,7 @@ ENV NODE_ENV=production \
     PORT=3000 \
     TZ=Europe/Berlin
 
-EXPOSE 8080
+EXPOSE 8080 2222
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1

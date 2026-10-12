@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   ChevronRight, Download, File as FileIcon, FileArchive, FileCode2, FileText, Folder,
-  FolderPlus, HardDrive, Home, PencilLine, Save, Trash2, Upload,
+  FolderPlus, HardDrive, Home, PencilLine, Save, Trash2, Upload, ExternalLink, RefreshCw,
 } from 'lucide-react';
 import { api, authedUrl, uploadFiles } from '../../lib/api';
 import { formatBytes, formatDate } from '../../lib/format';
@@ -12,6 +12,7 @@ import {
   Button, ConfirmDialog, EmptyState, ErrorNote, LoadingBlock, Modal, Panel, ProgressBar, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
+import SftpDialog from './SftpDialog';
 
 function iconFor(entry: FileEntry) {
   if (entry.isDir) return <Folder size={16} className="text-gold" />;
@@ -36,6 +37,7 @@ export default function FilesTab() {
   const [renameValue, setRenameValue] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  const [sftpOpen, setSftpOpen] = useState(false);
 
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -171,8 +173,11 @@ export default function FilesTab() {
           </nav>
         }
         actions={
-          can('files.write') && (
-            <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" className="!px-3 !py-1.5 !text-xs" icon={<RefreshCw size={13} />} onClick={() => invalidate()}>Aktualisieren</Button>
+            <Button variant="ghost" className="!px-3 !py-1.5 !text-xs" icon={<ExternalLink size={13} />} onClick={() => setSftpOpen(true)}>SFTP-Zugang</Button>
+            {can('files.write') && (
+            <>
               {selected.size > 0 && (
                 <Button
                   variant="danger"
@@ -206,8 +211,9 @@ export default function FilesTab() {
                 className="hidden"
                 onChange={(e) => handleUpload(e.target.files)}
               />
-            </div>
-          )
+            </>
+            )}
+          </div>
         }
       >
         {uploadPercent !== null && (
@@ -339,6 +345,7 @@ export default function FilesTab() {
         )}
       </Panel>
 
+      <SftpDialog serverId={server.id} path={path} open={sftpOpen} onClose={() => { setSftpOpen(false); invalidate(); }} />
       {/* Editor */}
       <Modal
         open={Boolean(editing)}

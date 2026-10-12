@@ -17,5 +17,5 @@ COPY src ./src
 RUN npx tsc -p tsconfig.json
 
 ENV NODE_ENV=production
-EXPOSE 3000
+EXPOSE 3000 2222
 CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]

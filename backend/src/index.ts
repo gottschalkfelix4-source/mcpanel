@@ -11,6 +11,7 @@ import { HttpError } from './lib/errors.js';
 import { bootstrap } from './bootstrap.js';
 import { setupConsoleGateway } from './ws/console.js';
 import { closeRconConnections } from './services/rcon.js';
+import { startSftp, stopSftp } from './services/sftp.js';
 
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -110,6 +111,8 @@ const io = new IOServer(app.server, {
 setupConsoleGateway(io);
 
 await bootstrap((msg) => app.log.info(msg));
+try { await startSftp((msg) => app.log.info(msg)); }
+catch (err) { app.log.error({ err }, 'SFTP-Dateizugriff konnte nicht gestartet werden'); }
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 app.log.info(`MCPanel-Backend läuft auf Port ${config.port}`);
@@ -117,6 +120,7 @@ app.log.info(`MCPanel-Backend läuft auf Port ${config.port}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     app.log.info('Fahre herunter …');
+    await stopSftp();
     await app.close();
     closeRconConnections();
     process.exit(0);

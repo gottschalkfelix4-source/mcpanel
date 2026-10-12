@@ -57,6 +57,12 @@ function resolveJwtSecret(): string {
 
 export const config = {
   port: Number(process.env.PORT ?? 3000),
+  sftp: {
+    enabled: process.env.SFTP_ENABLED !== 'false',
+    port: Number(process.env.SFTP_PORT ?? 2222),
+    publicPort: Number(process.env.SFTP_PUBLIC_PORT ?? process.env.SFTP_PORT ?? 2222),
+    host: process.env.SFTP_HOST?.trim() ?? '',
+  },
   jwtSecret: resolveJwtSecret(),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '7d',
 

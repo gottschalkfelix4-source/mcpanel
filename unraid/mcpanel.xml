@@ -85,6 +85,11 @@ Die Minecraft-Server oeffnen ihre Ports selbst auf dem Host (Vorgabe 25565-25700
     Required="true"
     Mask="false">/mnt/user/appdata/mcpanel</Config>
 
+  <Config Name="SFTP-Dateizugriff" Target="2222" Default="2222" Mode="tcp" Description="SFTP-Port für Dateiübertragungen mit den Panel-Zugangsdaten." Type="Port" Display="always" Required="true" Mask="false">2222</Config>
+  <Config Name="SFTP-Adresse" Target="SFTP_HOST" Default="" Mode="" Description="Direkte IP oder Adresse dieses Hosts für SFTP. Leer verwendet die Adresse der Weboberfläche. Bei einem HTTP-Reverse-Proxy die direkte Hostadresse eintragen." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Öffentlicher SFTP-Port" Target="SFTP_PUBLIC_PORT" Default="2222" Mode="" Description="Muss mit dem veröffentlichten SFTP-Port übereinstimmen, falls dieser von 2222 abweicht." Type="Variable" Display="advanced" Required="false" Mask="false">2222</Config>
+  <Config Name="SFTP aktivieren" Target="SFTP_ENABLED" Default="true" Mode="" Description="true aktiviert den SFTP-Dateizugriff; false deaktiviert ihn." Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+
   <Config
     Name="Docker-Socket"
     Target="/var/run/docker.sock"

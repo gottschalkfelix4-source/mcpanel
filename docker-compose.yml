@@ -36,6 +36,10 @@ services:
       # Zeitzone bestimmt, wann Automatisierungs-Zeitplaene ausloesen
       TZ: ${TZ:-Europe/Berlin}
       PORT: 3000
+      SFTP_ENABLED: ${SFTP_ENABLED:-true}
+      SFTP_PORT: ${SFTP_PORT:-2222}
+      SFTP_PUBLIC_PORT: ${SFTP_PUBLIC_PORT:-2222}
+      SFTP_HOST: ${SFTP_HOST:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mcpanel}:${POSTGRES_PASSWORD:-mcpanel}@db:5432/${POSTGRES_DB:-mcpanel}
       # Leer lassen ist in Ordnung: das Panel erzeugt beim ersten Start selbst
       # eines und legt es unter /data/.jwt-secret ab.
@@ -59,6 +63,8 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    ports:
+      - "${SFTP_PUBLIC_PORT:-2222}:${SFTP_PORT:-2222}"
     volumes:
       # Docker-Socket: das Panel startet/stoppt die Minecraft-Container
       - type: bind

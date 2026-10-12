@@ -42,7 +42,7 @@ das Panel steuert sie über den Docker-Socket.
 | Konsole | Live-Log über WebSocket, farbig, Befehlseingabe mit Verlauf (↑), Filter, Log-Download |
 | Modpack | Installiertes Pack, Update-Prüfung, Versionswechsel, Modpack-Suche |
 | Mods / Plugins | Inhalt von `mods/` bzw. `plugins/`, einzeln aktivieren/deaktivieren/löschen, einzelne nachinstallieren – siehe [Mods und Plugins](#mods-und-plugins) |
-| Dateien | Dateimanager mit Editor, Upload, Download, Umbenennen, ZIP entpacken |
+| Dateien | Dateimanager mit Editor, Upload, Download, Umbenennen, ZIP entpacken und SFTP-Zugang für externe Clients |
 | Konfiguration | `server.properties` als gruppiertes Formular + Rohwerte |
 | Backups | tar.gz-Sicherungen erstellen, herunterladen, einspielen, löschen, optional mit Zweitkopie |
 | Spieler | Online-Liste, Whitelist, Operatoren, Bans – Aktionen laufen über RCON |
@@ -307,6 +307,10 @@ Alle Werte kommen aus der `.env` (siehe `.env.example`):
 | Variable | Standard | Zweck |
 |---|---|---|
 | `PANEL_PORT` | `8080` | Port des Web-Panels |
+| `SFTP_ENABLED` | `true` | SFTP-Dateizugriff aktivieren; `false` deaktiviert den Dienst |
+| `SFTP_PORT` | `2222` | TCP-Port des SFTP-Dienstes im Backend |
+| `SFTP_PUBLIC_PORT` | `2222` | Veröffentlichter SFTP-Port; muss zur Docker-Portzuordnung passen |
+| `SFTP_HOST` | leer | Direkte SFTP-Adresse; leer verwendet die Adresse der Weboberfläche |
 | `HOST_DATA_ROOT` | leer / automatisch | Absoluter Host-Pfad; Compose bindet standardmäßig `./data` ein |
 | `MC_PORT_MIN` / `MC_PORT_MAX` | `25565` / `25700` | Port-Bereich für neue Server |
 | `PUBLIC_HOST` | `localhost` | Angezeigte Serveradresse |
@@ -431,6 +435,51 @@ $HOST_DATA_ROOT/
 ```
 
 ---
+
+## SFTP-Dateiübertragungen
+
+Im Server-Tab **Dateien → SFTP-Zugang** stehen Adresse, Port, Benutzername,
+Serververzeichnis und SSH-Hostschlüssel. Die Anmeldung erfolgt mit dem normalen
+**Benutzernamen oder der E-Mail-Adresse und dem Panel-Passwort**. Das Passwort wird
+im Client eingegeben und steht weder im Panel-Fenster noch in der Verbindungs-URL.
+
+**SFTP-Client öffnen** verwendet eine `sftp://`-Adresse. Das Betriebssystem muss einen
+Client wie WinSCP dafür registriert haben. Alternativ die angezeigten Daten in
+FileZilla oder WinSCP eintragen. Die virtuelle Wurzel zeigt Server-IDs; das Fenster
+öffnet direkt das Verzeichnis des ausgewählten Servers. Mit **Aktualisieren** werden
+extern übertragene Dateien im Dateibrowser sichtbar.
+
+Compose veröffentlicht standardmäßig **2222/TCP** am Backend. Im Unraid-Template ist
+derselbe Port vorgesehen. Bei einem bestehenden Unraid-Container beim Aktualisieren
+die zusätzliche Portzuordnung `2222:2222/TCP` ergänzen. Wird der öffentliche Port
+anders gewählt, `SFTP_PUBLIC_PORT` entsprechend setzen. Ein HTTP-Reverse-Proxy leitet
+SFTP nicht weiter: dafür die direkte Adresse in `SFTP_HOST` eintragen und den
+SFTP-Port passend zum gewünschten Zugriff erreichbar machen.
+
+Die Dateirechte aus dem Panel gelten auch über SFTP. Mitglieder mit `files.read`
+können nur lesen; `files.write` erlaubt Upload, Umbenennen und Löschen. Änderungen
+an Mitgliedschaften, deaktivierte Konten und Passwortwechsel werden auch bei offenen
+Verbindungen berücksichtigt. Shell, Befehle, Portweiterleitung und Symlinks bleiben
+gesperrt; Panel-Datenbank, Backups und andere interne Verzeichnisse werden nicht
+angeboten. Der private Hostschlüssel liegt dauerhaft unter `/data/.sftp-host-key`.
+Beim ersten Verbinden den im Fenster angezeigten SHA256-Fingerabdruck vergleichen.
+
+Im Client **eine gleichzeitige Übertragung je Server** einstellen. Ein Upload hält
+die Serversperre bis zum Abschluss; Sicherungen, Wiederherstellungen und andere
+Schreibvorgänge melden währenddessen einen Konflikt. Uploads verwenden temporäre
+Dateien und ersetzen die Zieldatei erst bei erfolgreichem Abschluss. Abbrüche und
+überschrittene Speicherkontingente erhalten die vorherige Datei. Nach fünf Minuten
+ohne SFTP-Anfragen wird die Verbindung geschlossen. UNIX-Eigentümer und Zugriffsrechte
+werden nicht durch Client-Attribute geändert; neue Dateien erben den Ordnerbesitzer,
+beim Ersetzen bleiben die bisherigen Dateirechte erhalten.
+
+Der zusätzliche Protokolltest nutzt echte lokale SSH/SFTP-Verbindungen, temporäre
+Verzeichnisse und eine gemockte Datenbank, ohne bestehende Dienste anzusprechen:
+
+```sh
+cd backend
+AUDIT_SFTP_TESTS=1 npx vitest run audit/sftp.test.ts
+```
 
 ## Entwicklung
 
