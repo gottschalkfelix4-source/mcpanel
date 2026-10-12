@@ -1,12 +1,14 @@
 import type { Server } from '@prisma/client';
+import { performance } from 'node:perf_hooks';
 import { rconCommand } from './rcon.js';
 import { getState } from './docker.js';
 import { serverLoader } from './content.js';
 
 type Source = 'spark' | 'paper' | 'forge' | 'minecraft';
 interface Sample { at: string; tps: number | null; mspt: number | null }
-interface Measurement extends Sample { source: Source | null; available: boolean; message: string; history: Sample[] }
-const entries = new Map<string, { at: number; startedAt: string | null; result: Measurement }>();
+interface GameTime { ticks: number; at: number }
+interface Measurement extends Sample { source: Source | 'gametime' | null; msptSource: Source | null; tpsWindowSeconds: number | null; available: boolean; message: string; history: Sample[] }
+const entries = new Map<string, { at: number; startedAt: string | null; counter: GameTime | null; result: Measurement }>();
 const pending = new Map<string, Promise<Measurement>>();
 const clean = (raw: string) => raw.replace(/\x1b\[[0-9;]*m/g, '').replace(/§[0-9a-fk-or]/gi, '');
 const value = (text?: string) => {
@@ -41,18 +43,38 @@ export function parseTickMetrics(raw: string, source: Source): { tps: number | n
     mspt: mspt !== null && mspt >= 0 && mspt < 60_000 ? mspt : null };
 }
 
+export function parseGameTime(raw: string): number | null {
+  // 1.20 meldet „The time is …“, ab 26.1 „The game time is … tick(s)“.
+  const match = clean(raw).trim().match(/^The (?:game )?time is (\d+)(?: tick\(s\))?$/i);
+  if (!match) return null;
+  const ticks = Number(match[1]);
+  return Number.isSafeInteger(ticks) ? ticks : null;
+}
+
+export function gameTimeTps(previous: GameTime, current: GameTime): number | null {
+  const seconds = (current.at - previous.at) / 1000;
+  const ticks = current.ticks - previous.ticks;
+  // Neustarts, zurückgesetzte/übergelaufene Zähler und lange Messlücken verwerfen.
+  if (seconds < 4 || seconds > 120 || ticks < 0) return null;
+  const tps = ticks / seconds;
+  return tps <= 20.5 ? Math.min(20, tps) : null;
+}
+
 export async function getTickMetrics(server: Server): Promise<Measurement> {
   const existing = pending.get(server.id);
   if (existing) return existing;
   const execute = async (): Promise<Measurement> => {
     const state = await getState(server);
     const at = new Date().toISOString();
-    if (state.state !== 'running') return { at, tps: null, mspt: null, source: null, available: false, message: 'Der Server läuft noch nicht.', history: [] };
+    if (state.state !== 'running') {
+      entries.delete(server.id);
+      return { at, tps: null, mspt: null, source: null, msptSource: null, tpsWindowSeconds: null, available: false, message: 'Der Server läuft noch nicht.', history: [] };
+    }
     const previous = entries.get(server.id);
     const reusable = previous?.startedAt === state.startedAt ? previous : undefined;
     if (reusable && Date.now() - reusable.at < 30_000) return reusable.result;
     const ask = (command: string) => rconCommand(server, command).catch(() => '');
-    let source: Source = 'spark';
+    let source: Source | 'gametime' = 'spark';
     let metrics = parseTickMetrics(await ask('spark tps'), source);
     const loader = serverLoader(server);
     if (metrics.tps === null && ['PAPER', 'PURPUR', 'SPIGOT'].includes(loader)) {
@@ -64,11 +86,38 @@ export async function getTickMetrics(server: Server): Promise<Measurement> {
     if (metrics.tps === null && metrics.mspt === null) {
       source = 'minecraft'; metrics = parseTickMetrics(await ask('tick query'), source);
     }
+    const msptSource = metrics.mspt !== null ? source as Source : null;
+    let counter: GameTime | null = null, tpsWindowSeconds: number | null = null;
+    if (metrics.tps === null) {
+      const readCounter = async (): Promise<GameTime | null> => {
+        const begin = performance.now();
+        const ticks = parseGameTime(await ask('time query gametime'));
+        const end = performance.now();
+        // Langsame RCON-Antworten liefern keinen ausreichend genauen Messzeitpunkt.
+        return ticks !== null && end - begin < 1000 ? { ticks, at: (begin + end) / 2 } : null;
+      };
+      counter = await readCounter();
+      let baseline = reusable?.counter ?? null;
+      if (counter && (!baseline || gameTimeTps(baseline, counter) === null)) {
+        baseline = counter;
+        // Beim ersten Aufruf direkt messen; weitere Aufrufe nutzen das Poll-Intervall.
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        counter = await readCounter();
+      }
+      if (baseline && counter) {
+        const tps = gameTimeTps(baseline, counter);
+        if (tps !== null) {
+          metrics.tps = tps; source = 'gametime';
+          tpsWindowSeconds = (counter.at - baseline.at) / 1000;
+        }
+      }
+    }
+    const measuredAt = new Date().toISOString();
     const available = metrics.tps !== null || metrics.mspt !== null;
-    const history = available ? [...(reusable?.result.history ?? []), { at, ...metrics }].slice(-240) : reusable?.result.history ?? [];
-    const result: Measurement = { at, ...metrics, source: available ? source : null, available, history,
+    const history = available ? [...(reusable?.result.history ?? []), { at: measuredAt, ...metrics }].slice(-240) : reusable?.result.history ?? [];
+    const result: Measurement = { at: measuredAt, ...metrics, source: available ? source : null, msptSource, tpsWindowSeconds, available, history,
       message: available ? '' : 'Keine Tick-Messwerte verfügbar. Spark oder ein unterstützter Serverbefehl muss vorhanden und über RCON erreichbar sein.' };
-    entries.set(server.id, { at: Date.now(), startedAt: state.startedAt, result });
+    entries.set(server.id, { at: Date.now(), startedAt: state.startedAt, counter, result });
     return result;
   };
   const request = execute();

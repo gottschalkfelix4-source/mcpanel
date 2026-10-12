@@ -130,7 +130,11 @@ Die Archive enthalten Zugangsdaten und müssen geschützt aufbewahrt werden.
 Der Compose-Backend-Container enthält dafür ebenfalls den PostgreSQL-Client.
 
 Die Serverübersicht zeigt **TPS/MSPT** mit Messverlauf, sofern Spark oder geeignete
-Paper-/Forge-Befehle über RCON antworten. Neuere Minecraft-Versionen liefern über
+Paper-/Forge-Befehle über RCON antworten. Fehlt deren TPS-Wert, misst das Panel
+die tatsächlich fortgeschrittenen Spielticks über `time query gametime` pro
+vergangener Sekunde. Der erste Aufruf benötigt dafür ungefähr fünf Sekunden;
+anschließend wird der Mittelwert über das Messintervall angezeigt. Pausierte
+Server liefern dabei 0 TPS. Neuere Minecraft-Versionen liefern über
 `tick query` auch ohne Spark die mittlere Tickzeit; dessen Zieltickrate wird nicht
 als gemessene TPS ausgegeben. Messungen sind lesend, alle 30 Sekunden,
 werden bei gleichzeitigen Anfragen gebündelt und nach einem Serverneustart neu
