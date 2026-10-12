@@ -106,6 +106,14 @@ function envFor(overrides: Partial<Server> = {}) {
   }));
 }
 
+it('prüft Minecraft standardmäßig über IPv4, damit localhost nicht auf die unbeantwortete IPv6-Adresse zeigt', () => {
+  expect(envFor().SERVER_HOST).toBe('127.0.0.1');
+});
+
+it('behält einen ausdrücklich konfigurierten Host für die Statusprüfung bei', () => {
+  expect(envFor({ extraEnv: { SERVER_HOST: '::1' } }).SERVER_HOST).toBe('::1');
+});
+
 it('gives ATM10 a small initial heap without reducing its 16 GB maximum or 20 GB container limit', () => {
   const env = envFor({ type: 'MODPACK', memoryMb: 16384, extraEnv: { TYPE: 'NEOFORGE' } });
   expect(env).toMatchObject({ MEMORY: '16384M', MAX_MEMORY: '16384M', INIT_MEMORY: '2048M', USE_AIKAR_FLAGS: 'false' });

@@ -184,6 +184,9 @@ export function buildEnv(server: Server): string[] {
     RCON_PASSWORD: server.rconPassword,
     RCON_PORT: '25575',
     SERVER_PORT: '25565',
+    // Manche Modpacks beantworten den Status-Ping nur über IPv4. „localhost“
+    // kann zu ::1 aufgelöst werden und dann einen falschen Fehlstatus liefern.
+    SERVER_HOST: '127.0.0.1',
     // server.properties verwalten wir selbst über den Config-Tab.
     OVERRIDE_SERVER_PROPERTIES: 'false',
     SKIP_SUDO: 'true',
