@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { Client, type SFTPWrapper } from 'ssh2';
+import ssh2, { type Client as SshClient, type SFTPWrapper } from 'ssh2';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({ root: '', user: {} as any, rights: ['files.read', 'files.write'] }));
@@ -24,9 +24,10 @@ vi.mock('../src/services/quota.js', () => ({ remainingDiskBytes: async () => Inf
 vi.mock('../src/services/diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));
 const { startSftp, stopSftp, getSftpInfo } = await import('../src/services/sftp.js');
 const { withServerOperation } = await import('../src/services/operations.js');
+const { Client } = ssh2;
 
 describe.skipIf(process.env.AUDIT_SFTP_TESTS !== '1')('SFTP mit echten Client-Verbindungen', () => {
-  const clients = new Set<Client>();
+  const clients = new Set<SshClient>();
   async function connect(password = 'Test-Passwort', username = 'test') {
     const client = new Client();
     clients.add(client);

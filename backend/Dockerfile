@@ -15,6 +15,7 @@ RUN npx prisma generate
 COPY tsconfig.json ./
 COPY src ./src
 RUN npx tsc -p tsconfig.json
+RUN JWT_SECRET=mcpanel-laufzeitpruefung-ohne-produktivzugriff node --input-type=module -e "await import('./dist/services/sftp.js'); console.log('SFTP-Modul geladen');"
 
 ENV NODE_ENV=production
 EXPOSE 3000 2222

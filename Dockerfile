@@ -49,6 +49,7 @@ COPY backend/prisma ./prisma
 RUN npx prisma generate
 
 COPY --from=backend /build/dist ./dist
+RUN JWT_SECRET=mcpanel-laufzeitpruefung-ohne-produktivzugriff node --input-type=module -e "await import('./dist/services/sftp.js'); console.log('SFTP-Modul geladen');"
 COPY --from=frontend /build/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/entrypoint.sh /entrypoint.sh

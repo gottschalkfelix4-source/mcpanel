@@ -28,8 +28,13 @@ jobs:
       - run: npx prisma generate
         working-directory: backend
 
-      - run: npx tsc -p tsconfig.json --noEmit
+      - run: npx tsc -p tsconfig.json
         working-directory: backend
+
+      - run: node --input-type=module -e "await import('./dist/services/sftp.js'); console.log('SFTP-Modul geladen');"
+        working-directory: backend
+        env:
+          JWT_SECRET: mcpanel-laufzeitpruefung-ohne-produktivzugriff
 
       - run: npm test
         working-directory: backend
