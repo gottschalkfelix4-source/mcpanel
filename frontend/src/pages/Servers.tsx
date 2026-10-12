@@ -34,7 +34,7 @@ export default function ServersPage() {
     );
   }, [data, search]);
 
-  const online = data?.filter((s) => s.state === 'running').length ?? 0;
+  const online = data?.filter((s) => s.state === 'running' && s.health === 'healthy').length ?? 0;
   const totalPlayers = (data ?? []).reduce((sum, s) => sum + (s.players?.online ?? 0), 0);
 
   return (

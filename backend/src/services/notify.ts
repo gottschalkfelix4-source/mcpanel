@@ -15,6 +15,7 @@ import { contentDir } from './content.js';
 import { analyseCrash } from './crashAnalysis.js';
 import * as dockerSvc from './docker.js';
 import { getSetting, setSetting } from './settings.js';
+import { HealthMonitor } from './healthMonitor.js';
 
 // ---------------------------------------------------------------------------
 // Ereignisse
@@ -24,6 +25,8 @@ export const EVENTS = [
   'server.started',
   'server.stopped',
   'server.crashed',
+  'server.unhealthy',
+  'server.recovered',
   'automation.ok',
   'automation.failed',
   'backup.done',
@@ -38,6 +41,8 @@ export const EVENT_LABELS: Record<NotifyEvent, string> = {
   'server.started': 'Server gestartet',
   'server.stopped': 'Server gestoppt',
   'server.crashed': 'Server abgestürzt',
+  'server.unhealthy': 'Statusprüfung länger fehlgeschlagen',
+  'server.recovered': 'Statusprüfung wieder erfolgreich',
   'automation.ok': 'Automatisierung ausgeführt',
   'automation.failed': 'Automatisierung fehlgeschlagen',
   'backup.done': 'Backup erstellt',
@@ -49,6 +54,7 @@ export const EVENT_LABELS: Record<NotifyEvent, string> = {
 /** Was beim Anlegen eines Kanals vorausgewählt ist: nur die Störungen. */
 export const DEFAULT_EVENTS: NotifyEvent[] = [
   'server.crashed',
+  'server.unhealthy',
   'automation.failed',
   'backup.failed',
   'disk.low',
@@ -67,6 +73,8 @@ const SEVERITY_OF: Record<NotifyEvent, Severity> = {
   'server.started': 'erfolg',
   'server.stopped': 'info',
   'server.crashed': 'fehler',
+  'server.unhealthy': 'warnung',
+  'server.recovered': 'erfolg',
   'automation.ok': 'erfolg',
   'automation.failed': 'fehler',
   'backup.done': 'erfolg',
@@ -433,11 +441,21 @@ export function cleanLog(text: string): string {
     .join('\n');
 }
 
+const healthMonitor = new HealthMonitor();
 async function checkStates(): Promise<void> {
   const servers = await prisma.server.findMany();
+  healthMonitor.retain(new Set(servers.map(server => server.id)));
 
   for (const server of servers) {
-    const { state } = await dockerSvc.getState(server);
+    const { state, health, startedAt } = await dockerSvc.getState(server);
+    const healthEvent = healthMonitor.observe(server.id, state, health, startedAt);
+    if (healthEvent) await notify(healthEvent === 'failed' ? 'server.unhealthy' : 'server.recovered', {
+      serverId: server.id, serverName: server.name,
+      title: `${server.name}: ${healthEvent === 'failed' ? 'Statusprüfung fehlgeschlagen' : 'wieder erreichbar'}`,
+      message: healthEvent === 'failed'
+        ? 'Der Container läuft, aber der Minecraft-Status-Ping schlägt seit mindestens zwei Minuten fehl. Bitte Konsole und Erreichbarkeit prüfen.'
+        : 'Der Minecraft-Status-Ping antwortet wieder erfolgreich.',
+    });
     // Ein Server, der nach dem ersten Durchlauf neu auftaucht, wurde gerade
     // angelegt – er startet aus dem Nichts, nicht aus "unbekannt".
     const previous = lastState.has(server.id)
@@ -461,7 +479,7 @@ async function checkStates(): Promise<void> {
         serverId: server.id,
         serverName: server.name,
         title: `${server.name} läuft`,
-        message: 'Der Server ist gestartet und nimmt Verbindungen an.',
+        message: 'Der Container wurde gestartet. Minecraft kann noch Anlaufzeit benötigen.',
       });
       continue;
     }

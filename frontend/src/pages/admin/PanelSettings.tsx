@@ -4,6 +4,7 @@ import { Boxes, Container, ExternalLink, Key, ScrollText, Server, Sparkles } fro
 import { api } from '../../lib/api';
 import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
+import PanelBackups from '../../components/PanelBackups';
 import { Link } from 'react-router-dom';
 import { formatDate } from '../../lib/format';
 import {
@@ -149,6 +150,7 @@ export default function PanelSettingsPage() {
       <AssistantSettings data={data.assistant} onSaved={() => void info.refetch()} />
 
       <BackupTarget />
+      <PanelBackups />
       <Panel title="Minecraft-Proxy"><Link to="/admin/proxy" className="text-grass-light hover:underline">Subdomains, Server-Zuordnungen und Portfreigaben auf der Proxy-Seite verwalten →</Link></Panel>
 
       {/* Benachrichtigungen fuer alle Server */}

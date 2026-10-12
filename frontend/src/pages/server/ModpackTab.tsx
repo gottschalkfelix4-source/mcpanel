@@ -13,6 +13,7 @@ import {
   Toggle, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
+import ModpackPreview from '../../components/ModpackPreview';
 
 interface ModpackState {
   installed: {
@@ -31,7 +32,7 @@ interface ModpackState {
     | null;
 }
 
-const TASK_TYPES = ['modpack.install', 'modpack.update'];
+const TASK_TYPES = ['modpack.install', 'modpack.update', 'modpack.preview'];
 
 export default function ModpackTab() {
   const { server, can, refresh } = useServer();
@@ -92,6 +93,7 @@ export default function ModpackTab() {
     void state.refetch();
     refresh();
     queryClient.invalidateQueries({ queryKey: ['servers'] });
+    queryClient.invalidateQueries({ queryKey: ['modpack-preview', server.id] });
   }, [state, refresh, queryClient]);
 
   const installed = state.data?.installed ?? null;
@@ -229,6 +231,7 @@ export default function ModpackTab() {
               <ErrorNote>{updateError}</ErrorNote>
             ) : hasUpdate && updateInfo && 'latest' in updateInfo ? (
               <div className="space-y-4">
+                {can('modpack.manage') && <ModpackPreview serverId={server.id} provider={installed.provider} projectId={installed.projectId} versionId={updateInfo.latest.id} busy={installing} />}
                 <div className="flex flex-wrap items-center justify-between gap-3 border border-gold/40 bg-gold/10 p-3">
                   <div>
                     <p className="text-sm font-bold text-gold">Neue Version verfügbar</p>

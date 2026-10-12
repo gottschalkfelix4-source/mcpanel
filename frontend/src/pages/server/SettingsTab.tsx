@@ -8,6 +8,7 @@ import {
   Button, ConfirmDialog, Field, InfoNote, Panel, Toggle, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
+import CloneServer from '../../components/CloneServer';
 import ServerRouting from '../../components/ServerRouting';
 
 const SERVER_TYPES: ServerType[] = [
@@ -104,6 +105,7 @@ export default function SettingsTab() {
 
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
+      {server.isAdmin && <CloneServer id={server.id} name={server.name} />}
       <Panel title="Servereinstellungen" icon={<Settings2 size={16} />}>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name">

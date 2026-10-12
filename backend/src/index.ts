@@ -6,6 +6,7 @@ import { Server as IOServer } from 'socket.io';
 import { ZodError } from 'zod';
 
 import { config } from './config.js';
+import { stopPanelBackupScheduler } from './services/panelBackups.js';
 import { prisma } from './db.js';
 import { HttpError } from './lib/errors.js';
 import { bootstrap } from './bootstrap.js';
@@ -120,6 +121,7 @@ app.log.info(`MCPanel-Backend läuft auf Port ${config.port}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     app.log.info('Fahre herunter …');
+    stopPanelBackupScheduler();
     await stopSftp();
     await app.close();
     closeRconConnections();

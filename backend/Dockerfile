@@ -2,7 +2,7 @@ FROM node:22-alpine
 
 # tar/unzip für Backups & Modpacks, curl für Healthchecks,
 # cifs-utils für die Samba-Zweitablage (wird zur Laufzeit eingehängt)
-RUN apk add --no-cache tar curl tzdata openssl openssl-dev libc6-compat cifs-utils
+RUN apk add --no-cache tar curl tzdata openssl openssl-dev libc6-compat cifs-utils postgresql16-client
 
 WORKDIR /app
 

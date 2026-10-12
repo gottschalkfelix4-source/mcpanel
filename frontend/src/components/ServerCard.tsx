@@ -124,7 +124,7 @@ export function ServerCard({ server }: { server: ServerSummary }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2.5">
               <h3 className="heading truncate text-base leading-tight">{server.name}</h3>
-              <StateBadge state={server.state} />
+              <StateBadge state={server.state} health={server.health} />
             </div>
 
             <p className="mt-1 truncate text-xs text-stone-350">

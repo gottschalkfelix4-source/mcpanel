@@ -7,6 +7,7 @@ import { prisma } from './db.js';
 import { ensureDataDirs, runAutostart } from './services/serverManager.js';
 import { detectHostDataRoot, ensureNetwork, stop, recreateContainer } from './services/docker.js';
 import { startWatcher } from './services/notify.js';
+import { startPanelBackupScheduler } from './services/panelBackups.js';
 import { applyTarget, getTarget } from './services/backupTarget.js';
 import { startScheduler } from './services/automation.js';
 
@@ -124,4 +125,5 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
 
   startScheduler(log);
   startWatcher(log);
+  startPanelBackupScheduler(log);
 }

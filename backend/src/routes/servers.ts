@@ -19,6 +19,9 @@ import { assertMemoryAllowed, quotaState } from '../services/quota.js';
 import { getPublicHost } from '../services/settings.js';
 import { getProxyConfig, normalizeHostnames, syncProxyRoutes } from '../services/proxy.js';
 import { withServerOperation, withQueuedOperation } from '../services/operations.js';
+import { cloneServer } from '../services/serverClone.js';
+import { runTask } from '../services/tasks.js';
+import { getTickMetrics } from '../services/tickMetrics.js';
 
 import filesRoutes from './files.js';
 import configRoutes from './config.js';
@@ -142,6 +145,17 @@ export default async function serverRoutes(app: FastifyInstance) {
   });
 
   // --- Detail ------------------------------------------------------------
+  app.post('/:id/clone', async req => {
+    const access = await requireServer(req, PERMISSIONS.FILES_READ);
+    if (!access.isAdmin) throw forbidden('Nur Administratoren können Testserver anlegen');
+    const body = z.object({ name: z.string().trim().min(2).max(48), includeWorld: z.boolean().default(false) }).parse(req.body);
+    const taskId = await runTask(access.server.id, 'server.clone', async task => {
+      const copy = await cloneServer(access.server, body, task);
+      await audit(req.user!.id, copy.id, 'server.clone', `Testkopie von ${access.server.name}`);
+    });
+    return { taskId };
+  });
+
   app.get('/:id', async (req) => {
     const access = await requireServer(req);
     const [serialized, disk, quota, owner, members] = await Promise.all([
@@ -316,6 +330,10 @@ export default async function serverRoutes(app: FastifyInstance) {
       serverDiskUsage(access.server),
     ]);
     return { ...state, stats, disk, memoryLimitMb: access.server.memoryMb };
+  });
+  app.get('/:id/ticks', async req => {
+    const access = await requireServer(req, PERMISSIONS.CONSOLE_READ);
+    return getTickMetrics(access.server);
   });
 
   app.get('/:id/tasks', async (req) => {

@@ -21,6 +21,8 @@ import { createBackup } from './backups.js';
 import { invalidateDiskUsage } from './diskUsage.js';
 import { badRequest } from '../lib/errors.js';
 import { waitForServerReady } from './serverStartup.js';
+import { describeModFile, compareModDescriptors } from './modpackDiff.js';
+import { serverLoader } from './content.js';
 
 export interface InstallRequest {
   provider: ProviderId;
@@ -107,20 +109,29 @@ async function installModpackImpl(
   serverId: string,
   request: InstallRequest,
   task: TaskHandle,
+  prepared: string,
+  changes: { started: boolean },
 ): Promise<void> {
   const server = await prisma.server.findUniqueOrThrow({ where: { id: serverId } });
   const isUpdate = Boolean(server.modpackProjectId);
 
-  await task.update(1, 'Serverstatus prüfen …');
+  await task.update(1, 'Paket wird bei laufendem Server vorbereitet …');
+  const { plan, version, project } = await loadPackPlan(server, request, task);
+  const rawBefore = await fs.readFile(safePath(serverDir(serverId), 'server.properties'), 'utf8').catch(() => '');
+  const worldBefore = parseProperties(rawBefore)['level-name'] || 'world';
+  await prefetchDownloads(plan, prepared, server, task, relative => isProtectedPackPath(relative, worldBefore, request.keepConfig ?? false));
+  // Erst ab hier müssen Welt und Serverdateien für den Austausch ruhen.
+  await task.update(22, 'Serverstatus vor dem Austausch prüfen …');
   const { state } = await dockerSvc.getState(server);
   const wasRunning = state === 'running' || state === 'starting';
+  changes.started = true;
   if (wasRunning) {
     await task.log('Server wird für die Installation gestoppt …');
     await dockerSvc.stop(server);
   }
 
   if (request.backupFirst ?? isUpdate) {
-    await task.update(4, 'Sicherheitsbackup wird erstellt …');
+    await task.update(22, 'Sicherheitsbackup wird erstellt …');
     await task.log('Backup vor der Installation …');
     await createBackup(server, {
       name: `Vor ${isUpdate ? 'Update' : 'Installation'} ${new Date().toISOString().slice(0, 16)}`,
@@ -129,6 +140,188 @@ async function installModpackImpl(
     });
   }
 
+  // --- 3. Alte Mods entfernen ---------------------------------------------
+  const original = serverDir(serverId);
+  const { stage: dir } = restorePaths(serverId);
+  await fs.mkdir(original, { recursive: true });
+  await task.update(23, 'Vorhandene Daten werden für die sichere Installation vorbereitet …');
+  // Reflink where supported; otherwise copy. Hardlinks would compromise rollback.
+  // Old mods/scripts are discarded on updates, so never copy them just to delete them.
+  const replaced = new Set(['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']);
+  await fs.cp(original, dir, {
+    recursive: true, mode: fsConstants.COPYFILE_FICLONE,
+    filter: source => !isUpdate || !replaced.has(path.relative(original, source).split(path.sep).join('/')),
+  });
+  const rawProperties = await fs.readFile(safePath(original, 'server.properties'), 'utf8').catch(() => '');
+  const worldName = parseProperties(rawProperties)['level-name'] || 'world';
+  const protectedPath = (relative: string) => isProtectedPackPath(relative, worldName, request.keepConfig ?? false);
+  // Validate all paths before removing/replacing anything, even in staging.
+  for (const item of plan.downloads) archiveEntryPath(dir, item.path);
+  for (const prefixDir of plan.overrideDirs) {
+    const prefix = prefixDir === '.' ? '' : prefixDir.replace(/\/+$/, '') + '/';
+    for (const entry of plan.zip.getEntries()) {
+      const name = entry.entryName.replace(/\\/g, '/');
+      if (!prefix || name.startsWith(prefix)) archiveEntryPath(dir, prefix ? name.slice(prefix.length) : name);
+    }
+  }
+  if (isUpdate) {
+    await task.update(24, 'Alte Mods werden entfernt …');
+    for (const sub of ['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']) {
+      await fs.rm(path.join(dir, sub), { recursive: true, force: true });
+    }
+    await task.log('mods/ geleert – Welt, Konfiguration und Spielerdaten bleiben erhalten.');
+  }
+
+  // --- 4. Archivinhalt entpacken ------------------------------------------
+  await task.update(26, 'Modpack-Dateien werden entpackt …');
+  const extracted = await extractOverrides(plan, dir, { keepConfig: request.keepConfig ?? false, worldName, maxGrowth: server.quotaDiskMb > 0 ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity });
+  if (plan.isServerPack) {
+    await task.log(`${extracted} Dateien aus dem Serverpaket entpackt.`);
+  }
+
+  // --- 5. Mods herunterladen ----------------------------------------------
+  const total = plan.downloads.length;
+  let completed = 0;
+  // With a quota, count once and update the budget after each atomic replacement.
+  // Without a quota, a small worker pool overlaps CDN latency without flooding HDDs.
+  const limited = server.quotaDiskMb > 0;
+  const concurrency = limited ? 1 : 4;
+  let remaining = limited ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity;
+  const queue = [...plan.downloads];
+
+  const worker = async () => {
+    for (;;) {
+      const item = queue.shift();
+      if (!item) return;
+      const target = archiveEntryPath(dir, item.path);
+      if (protectedPath(path.relative(dir, target))) continue;
+
+      const source = archiveEntryPath(prepared, item.path);
+      const size = (await fs.stat(source)).size;
+      const oldSize = (await fs.stat(target).catch(() => null))?.size ?? 0;
+      if (size > remaining + oldSize) throw badRequest('Speicherkontingent reicht für das Modpack nicht aus');
+      await fs.mkdir(path.dirname(archiveEntryPath(dir, item.path)), { recursive: true });
+      await fs.copyFile(archiveEntryPath(prepared, item.path), archiveEntryPath(dir, item.path));
+      if (limited) remaining -= size - oldSize;
+      completed++;
+      if (completed % 3 === 0 || completed === total) {
+        await task.update(
+          30 + (completed / Math.max(1, total)) * 55,
+          `Mods werden geladen … ${completed}/${total}`,
+        );
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, total)) }, worker));
+
+  if (!plan.isServerPack) await assertSupplementaryDownloadsComplete(plan, dir, task);
+
+  // --- 6. Client-Mods aussortieren ----------------------------------------
+  // Nur beim Client-Paket nötig, dort aber bei jeder Quelle:
+  //   * Modrinth markiert zwar `env.server` pro Datei, doch die Angabe steht
+  //     nur für die Dateien im Index. Was in `overrides/mods/` mitgeliefert
+  //     wird, trägt gar keine Kennzeichnung – und Packs, die ihre komplette
+  //     Liste pauschal als serverfähig ausweisen, gibt es reichlich.
+  //   * Fabric und Quilt überspringen als `"environment": "client"` erklärte
+  //     Mods selbst. Die Jars müssen dabei liegen bleiben, sonst schlägt die
+  //     Abhängigkeitsauflösung anderer Mods fehl. Wir suchen nur die, die
+  //     faktisch clientseitig sind, es aber nicht angeben.
+  //   * Forge/NeoForge kennen keine solche Angabe – hier filtern wir.
+  if (!plan.isServerPack) {
+    await task.update(88, 'Client-Mods werden geprüft …');
+
+    const isFabricLike = plan.loader === 'FABRIC' || plan.loader === 'QUILT';
+    const { disabled, keptAsDependency } = isFabricLike
+      ? await disableFabricClientDependents(dir)
+      : await disableClientOnlyMods(dir);
+
+    if (isFabricLike) {
+      await task.log(
+        `${plan.loader} überspringt als "client" markierte Mods selbst – ` +
+          'geprüft wird nur, was faktisch clientseitig ist, es aber nicht angibt.',
+      );
+    }
+
+    if (disabled.length > 0) {
+      await task.log(`${disabled.length} Client-Mod(s) deaktiviert:`);
+      for (const entry of disabled.slice(0, 15)) {
+        await task.log(`   ${entry.file} – ${entry.reason}`);
+      }
+      if (disabled.length > 15) await task.log(`   … +${disabled.length - 15} weitere`);
+      await task.log('Im Tab "Mods" kannst du sie bei Bedarf wieder aktivieren.');
+    } else {
+      await task.log('Keine problematischen Client-Mods gefunden.');
+    }
+
+    for (const kept of keptAsDependency) {
+      await task.log(`${kept.file} bleibt aktiv – ${kept.neededBy} braucht sie als Abhängigkeit.`);
+    }
+  }
+
+  // --- 7. Server-Datensatz aktualisieren ----------------------------------
+  await task.update(94, 'Servereinstellungen werden gespeichert …');
+  const extraEnv: Record<string, string> = {
+    ...((server.extraEnv ?? {}) as Record<string, string>),
+    TYPE: plan.loader,
+  };
+  delete extraEnv.FORGE_VERSION;
+  delete extraEnv.NEOFORGE_VERSION;
+  delete extraEnv.FABRIC_LOADER_VERSION;
+  delete extraEnv.QUILT_LOADER_VERSION;
+
+  if (plan.loaderVersion) {
+    if (plan.loader === 'FORGE') extraEnv.FORGE_VERSION = plan.loaderVersion;
+    if (plan.loader === 'NEOFORGE') extraEnv.NEOFORGE_VERSION = plan.loaderVersion;
+    if (plan.loader === 'FABRIC') extraEnv.FABRIC_LOADER_VERSION = plan.loaderVersion;
+    if (plan.loader === 'QUILT') extraEnv.QUILT_LOADER_VERSION = plan.loaderVersion;
+  }
+
+  if (server.quotaDiskMb > 0 && await dirSize(dir) + await dirSize(serverBackupDir(serverId)) > server.quotaDiskMb * 1024 * 1024) throw new Error('Modpack überschreitet das Speicherkontingent');
+  await saveRestoreMetadata(serverId, {
+    type: server.type, mcVersion: server.mcVersion, extraEnv: server.extraEnv,
+    modpackProvider: server.modpackProvider, modpackProjectId: server.modpackProjectId,
+    modpackVersionId: server.modpackVersionId, modpackName: server.modpackName,
+    modpackVersionName: server.modpackVersionName, modpackIconUrl: server.modpackIconUrl,
+  });
+  const updated = await prisma.server.update({
+    where: { id: serverId },
+    data: {
+      type: 'MODPACK',
+      mcVersion: plan.minecraftVersion,
+      extraEnv,
+      modpackProvider: request.provider,
+      modpackProjectId: request.projectId,
+      // Immer die vom Nutzer gewählte Version speichern – nicht die des
+      // Serverpakets, sonst findet die Update-Prüfung sie nicht wieder.
+      modpackVersionId: request.versionId,
+      modpackName: project.name,
+      modpackVersionName: version.name,
+      modpackIconUrl: project.iconUrl,
+    },
+  });
+
+  // --- 8. Container neu aufsetzen -----------------------------------------
+  await task.update(97, 'Container wird neu aufgesetzt …');
+  await commitRestore(serverId);
+  await dockerSvc.recreateContainer(updated);
+  invalidateDiskUsage(serverId);
+
+  if (request.startAfter ?? wasRunning) {
+    await task.update(99, 'Server wird gestartet …');
+    await dockerSvc.start(updated);
+    await waitForServerReady(updated, { onWaiting: message => task.update(99, message) });
+    await task.log('Minecraft antwortet – der Server wurde erfolgreich gestartet.');
+  }
+
+  await task.update(
+    100,
+    `${project.name} ${version.name} installiert`,
+  );
+  await finishRestore(serverId);
+}
+
+async function loadPackPlan(server: Server, request: InstallRequest, task: TaskHandle) {
   await task.update(8, 'Modpack-Version wird geladen …');
   const version = await getVersion(request.provider, request.projectId, request.versionId);
   const project =
@@ -239,201 +432,76 @@ async function installModpackImpl(
       `${plan.loaderVersion ? ' ' + plan.loaderVersion : ''} · ${plan.downloads.length} Dateien`,
   );
 
-  // --- 3. Alte Mods entfernen ---------------------------------------------
-  const original = serverDir(serverId);
-  const { stage: dir } = restorePaths(serverId);
-  await fs.mkdir(original, { recursive: true });
-  await task.update(23, 'Vorhandene Daten werden für die sichere Installation vorbereitet …');
-  // Reflink where supported; otherwise copy. Hardlinks would compromise rollback.
-  // Old mods/scripts are discarded on updates, so never copy them just to delete them.
-  const replaced = new Set(['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']);
-  await fs.cp(original, dir, {
-    recursive: true, mode: fsConstants.COPYFILE_FICLONE,
-    filter: source => !isUpdate || !replaced.has(path.relative(original, source).split(path.sep).join('/')),
-  });
-  const rawProperties = await fs.readFile(safePath(original, 'server.properties'), 'utf8').catch(() => '');
-  const worldName = parseProperties(rawProperties)['level-name'] || 'world';
-  const protectedPath = (relative: string) => isProtectedPackPath(relative, worldName, request.keepConfig ?? false);
-  // Validate all paths before removing/replacing anything, even in staging.
+  return { plan, version, project };
+}
+
+async function prefetchDownloads(plan: PackPlan, dir: string, server: Server, task: TaskHandle, protectedPath: (relative: string) => boolean) {
   for (const item of plan.downloads) archiveEntryPath(dir, item.path);
-  for (const prefixDir of plan.overrideDirs) {
-    const prefix = prefixDir === '.' ? '' : prefixDir.replace(/\/+$/, '') + '/';
+  for (const root of plan.overrideDirs) {
+    const prefix = root === '.' ? '' : root.replace(/\/+$/, '') + '/';
     for (const entry of plan.zip.getEntries()) {
       const name = entry.entryName.replace(/\\/g, '/');
-      if (!prefix || name.startsWith(prefix)) archiveEntryPath(dir, prefix ? name.slice(prefix.length) : name);
+      if (name.startsWith(prefix)) archiveEntryPath(dir, name.slice(prefix.length));
     }
   }
-  if (isUpdate) {
-    await task.update(24, 'Alte Mods werden entfernt …');
-    for (const sub of ['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']) {
-      await fs.rm(path.join(dir, sub), { recursive: true, force: true });
-    }
-    await task.log('mods/ geleert – Welt, Konfiguration und Spielerdaten bleiben erhalten.');
-  }
-
-  // --- 4. Archivinhalt entpacken ------------------------------------------
-  await task.update(26, 'Modpack-Dateien werden entpackt …');
-  const extracted = await extractOverrides(plan, dir, { keepConfig: request.keepConfig ?? false, worldName, maxGrowth: server.quotaDiskMb > 0 ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity });
-  if (plan.isServerPack) {
-    await task.log(`${extracted} Dateien aus dem Serverpaket entpackt.`);
-  }
-
-  // --- 5. Mods herunterladen ----------------------------------------------
-  const total = plan.downloads.length;
+  const queue = plan.downloads.filter(item => !protectedPath(item.path));
+  const total = queue.length;
   let completed = 0;
-  // With a quota, count once and update the budget after each atomic replacement.
-  // Without a quota, a small worker pool overlaps CDN latency without flooding HDDs.
-  const limited = server.quotaDiskMb > 0;
-  const concurrency = limited ? 1 : 4;
-  let remaining = limited ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity;
-  const queue = [...plan.downloads];
+  let remaining = server.quotaDiskMb > 0 ? server.quotaDiskMb * 1024 * 1024 : Infinity;
   const failures: string[] = [];
-
   const worker = async () => {
     for (;;) {
       const item = queue.shift();
       if (!item) return;
-      const target = archiveEntryPath(dir, item.path);
-      if (protectedPath(path.relative(dir, target))) continue;
-
       let ok = false;
       for (const candidate of item.urls) {
         try {
-          const previous = await fs.stat(target).catch(() => null);
-          const oldSize = previous?.size ?? 0;
-          const budget = remaining + oldSize;
-          const size = await downloadToFile(candidate, target, { retries: 2, maxBytes: budget });
-          if (limited) remaining -= size - oldSize;
+          const size = await downloadToFile(candidate, archiveEntryPath(dir, item.path), { retries: 2, maxBytes: remaining });
+          remaining -= size;
           ok = true;
           break;
-        } catch {
-          /* nächste URL versuchen */
+        } catch { /* Nächste Downloadadresse versuchen. */ }
+      }
+      if (!ok) failures.push(item.path);
+      completed++;
+      if (completed % 3 === 0 || completed === total) await task.update(22,
+        `Vorbereitung ohne Serverstopp: ${completed}/${total} Dateien`);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(server.quotaDiskMb > 0 ? 1 : 4, Math.max(1, total)) }, worker));
+  if (failures.length) throw badRequest(`${failures.length} Pflichtdatei(en) konnten nicht geladen werden: ${failures.join(', ')}`);
+}
+
+export async function previewModpack(server: Server, request: InstallRequest) {
+  return withServerOperation(server.id, 'Modpack-Vorschau', async () => {
+    await fs.mkdir(path.join(cacheDir(), 'modpacks'), { recursive: true });
+    const prepared = await fs.mkdtemp(path.join(cacheDir(), 'modpacks', 'vorschau-'));
+    const task: TaskHandle = { id: '', update: async () => {}, log: async () => {}, done: async () => {}, fail: async () => {} };
+    try {
+      const { plan, version } = await loadPackPlan(server, request, task);
+      await prefetchDownloads(plan, prepared, server, task, () => false);
+      const incoming = new Map<string, ReturnType<typeof describeModFile>>();
+      for (const root of plan.overrideDirs) {
+        const prefix = root === '.' ? '' : root.replace(/\/+$/, '') + '/';
+        for (const entry of plan.zip.getEntries()) {
+          const name = entry.entryName.replace(/\\/g, '/');
+          if (!name.startsWith(prefix)) continue;
+          const relative = name.slice(prefix.length);
+          archiveEntryPath(prepared, relative);
+          if (/^mods\/[^/]+\.jar$/i.test(relative)) incoming.set(path.basename(relative), describeModFile(path.basename(relative), entry.getData()));
         }
       }
-      if (!ok) {
-        failures.push(item.path);
-        await task.log(`FEHLER: ${item.path} konnte nicht geladen werden`);
+      for (const item of plan.downloads) if (/^mods\/[^/]+\.jar$/i.test(item.path)) incoming.set(path.basename(item.path), describeModFile(path.basename(item.path), await fs.readFile(archiveEntryPath(prepared, item.path))));
+      const current: ReturnType<typeof describeModFile>[] = [];
+      const root = serverDir(server.id);
+      for (const name of await fs.readdir(safePath(root, 'mods')).catch(() => [])) {
+        if (/\.jar$/i.test(name)) current.push(describeModFile(name, await fs.readFile(safePath(root, 'mods/' + name))));
       }
-      completed++;
-      if (completed % 3 === 0 || completed === total) {
-        await task.update(
-          30 + (completed / Math.max(1, total)) * 55,
-          `Mods werden geladen … ${completed}/${total}`,
-        );
-      }
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, total)) }, worker));
-
-  if (failures.length > 0) {
-    throw new Error(`${failures.length} Pflichtdatei(en) konnten nicht geladen werden: ${failures.join(', ')}`);
-  }
-
-  if (!plan.isServerPack) await assertSupplementaryDownloadsComplete(plan, dir, task);
-
-  // --- 6. Client-Mods aussortieren ----------------------------------------
-  // Nur beim Client-Paket nötig, dort aber bei jeder Quelle:
-  //   * Modrinth markiert zwar `env.server` pro Datei, doch die Angabe steht
-  //     nur für die Dateien im Index. Was in `overrides/mods/` mitgeliefert
-  //     wird, trägt gar keine Kennzeichnung – und Packs, die ihre komplette
-  //     Liste pauschal als serverfähig ausweisen, gibt es reichlich.
-  //   * Fabric und Quilt überspringen als `"environment": "client"` erklärte
-  //     Mods selbst. Die Jars müssen dabei liegen bleiben, sonst schlägt die
-  //     Abhängigkeitsauflösung anderer Mods fehl. Wir suchen nur die, die
-  //     faktisch clientseitig sind, es aber nicht angeben.
-  //   * Forge/NeoForge kennen keine solche Angabe – hier filtern wir.
-  if (!plan.isServerPack) {
-    await task.update(88, 'Client-Mods werden geprüft …');
-
-    const isFabricLike = plan.loader === 'FABRIC' || plan.loader === 'QUILT';
-    const { disabled, keptAsDependency } = isFabricLike
-      ? await disableFabricClientDependents(dir)
-      : await disableClientOnlyMods(dir);
-
-    if (isFabricLike) {
-      await task.log(
-        `${plan.loader} überspringt als "client" markierte Mods selbst – ` +
-          'geprüft wird nur, was faktisch clientseitig ist, es aber nicht angibt.',
-      );
-    }
-
-    if (disabled.length > 0) {
-      await task.log(`${disabled.length} Client-Mod(s) deaktiviert:`);
-      for (const entry of disabled.slice(0, 15)) {
-        await task.log(`   ${entry.file} – ${entry.reason}`);
-      }
-      if (disabled.length > 15) await task.log(`   … +${disabled.length - 15} weitere`);
-      await task.log('Im Tab "Mods" kannst du sie bei Bedarf wieder aktivieren.');
-    } else {
-      await task.log('Keine problematischen Client-Mods gefunden.');
-    }
-
-    for (const kept of keptAsDependency) {
-      await task.log(`${kept.file} bleibt aktiv – ${kept.neededBy} braucht sie als Abhängigkeit.`);
-    }
-  }
-
-  // --- 7. Server-Datensatz aktualisieren ----------------------------------
-  await task.update(94, 'Servereinstellungen werden gespeichert …');
-  const extraEnv: Record<string, string> = {
-    ...((server.extraEnv ?? {}) as Record<string, string>),
-    TYPE: plan.loader,
-  };
-  delete extraEnv.FORGE_VERSION;
-  delete extraEnv.NEOFORGE_VERSION;
-  delete extraEnv.FABRIC_LOADER_VERSION;
-  delete extraEnv.QUILT_LOADER_VERSION;
-
-  if (plan.loaderVersion) {
-    if (plan.loader === 'FORGE') extraEnv.FORGE_VERSION = plan.loaderVersion;
-    if (plan.loader === 'NEOFORGE') extraEnv.NEOFORGE_VERSION = plan.loaderVersion;
-    if (plan.loader === 'FABRIC') extraEnv.FABRIC_LOADER_VERSION = plan.loaderVersion;
-    if (plan.loader === 'QUILT') extraEnv.QUILT_LOADER_VERSION = plan.loaderVersion;
-  }
-
-  if (server.quotaDiskMb > 0 && await dirSize(dir) + await dirSize(serverBackupDir(serverId)) > server.quotaDiskMb * 1024 * 1024) throw new Error('Modpack überschreitet das Speicherkontingent');
-  await saveRestoreMetadata(serverId, {
-    type: server.type, mcVersion: server.mcVersion, extraEnv: server.extraEnv,
-    modpackProvider: server.modpackProvider, modpackProjectId: server.modpackProjectId,
-    modpackVersionId: server.modpackVersionId, modpackName: server.modpackName,
-    modpackVersionName: server.modpackVersionName, modpackIconUrl: server.modpackIconUrl,
+      return { version: version.name, minecraft: { current: server.mcVersion, next: plan.minecraftVersion },
+        loader: { current: serverLoader(server), next: plan.loader, version: plan.loaderVersion },
+        serverPack: plan.isServerPack, ...compareModDescriptors(current, [...incoming.values()]) };
+    } finally { await fs.rm(prepared, { recursive: true, force: true }); }
   });
-  const updated = await prisma.server.update({
-    where: { id: serverId },
-    data: {
-      type: 'MODPACK',
-      mcVersion: plan.minecraftVersion,
-      extraEnv,
-      modpackProvider: request.provider,
-      modpackProjectId: request.projectId,
-      // Immer die vom Nutzer gewählte Version speichern – nicht die des
-      // Serverpakets, sonst findet die Update-Prüfung sie nicht wieder.
-      modpackVersionId: request.versionId,
-      modpackName: project.name,
-      modpackVersionName: version.name,
-      modpackIconUrl: project.iconUrl,
-    },
-  });
-
-  // --- 8. Container neu aufsetzen -----------------------------------------
-  await task.update(97, 'Container wird neu aufgesetzt …');
-  await commitRestore(serverId);
-  await dockerSvc.recreateContainer(updated);
-  invalidateDiskUsage(serverId);
-
-  if (request.startAfter ?? wasRunning) {
-    await task.update(99, 'Server wird gestartet …');
-    await dockerSvc.start(updated);
-    await waitForServerReady(updated, { onWaiting: message => task.update(99, message) });
-    await task.log('Minecraft antwortet – der Server wurde erfolgreich gestartet.');
-  }
-
-  await task.update(
-    100,
-    `${project.name} ${version.name} installiert`,
-  );
-  await finishRestore(serverId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,14 +1192,20 @@ async function installModpackUnlocked(serverId: string, request: InstallRequest,
   await recoverInterruptedRestore(serverId);
   const server = await prisma.server.findUniqueOrThrow({ where: { id: serverId } });
   const { state } = await dockerSvc.getState(server);
+  await fs.mkdir(path.join(cacheDir(), 'modpacks'), { recursive: true });
+  const prepared = await fs.mkdtemp(path.join(cacheDir(), 'modpacks', 'vorbereitung-'));
+  const changes = { started: false };
   try {
-    await installModpackImpl(serverId, request, task);
+    await installModpackImpl(serverId, request, task, prepared, changes);
   } catch (err) {
+    if (!changes.started) throw err;
     await dockerSvc.stop(await prisma.server.findUniqueOrThrow({ where: { id: serverId } }));
     await recoverInterruptedRestore(serverId);
     const recovered = await prisma.server.findUniqueOrThrow({ where: { id: serverId } });
     await dockerSvc.recreateContainer(recovered);
     if (state === 'running' || state === 'starting') await dockerSvc.start(recovered);
     throw err;
+  } finally {
+    await fs.rm(prepared, { recursive: true, force: true });
   }
 }

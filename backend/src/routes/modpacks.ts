@@ -9,7 +9,7 @@ import { badRequest } from '../lib/errors.js';
 import { downloadToFile } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
 import * as curseforge from '../providers/curseforge.js';
-import { checkForUpdate, installModpack, listVersions } from '../services/modpack.js';
+import { checkForUpdate, installModpack, listVersions, previewModpack } from '../services/modpack.js';
 import { withServerOperation } from '../services/operations.js';
 import { runTask } from '../services/tasks.js';
 import { serverLoader } from '../services/content.js';
@@ -24,6 +24,25 @@ const installSchema = z.object({
 });
 
 export default async function modpackRoutes(app: FastifyInstance) {
+  const previews = new Map<string, { at: number; versionId: string; result: Awaited<ReturnType<typeof previewModpack>> }>();
+  app.get('/preview', async req => {
+    const access = await requireServer(req, PERMISSIONS.MODPACK_MANAGE);
+    const entry = previews.get(access.server.id);
+    if (!entry || Date.now() - entry.at > 30 * 60_000) { previews.delete(access.server.id); return null; }
+    return { ...entry.result, versionId: entry.versionId, checkedAt: new Date(entry.at).toISOString() };
+  });
+  app.post('/preview', async req => {
+    const access = await requireServer(req, PERMISSIONS.MODPACK_MANAGE);
+    const body = installSchema.parse(req.body);
+    previews.delete(access.server.id);
+    const taskId = await runTask(access.server.id, 'modpack.preview', async task => {
+      await task.update(5, 'Paketinhalt wird mit den installierten Mods verglichen …');
+      const result = await previewModpack(access.server, body);
+      previews.set(access.server.id, { at: Date.now(), versionId: body.versionId, result });
+      await task.update(100, 'Modpack-Vorschau erstellt; Quellserver unverändert');
+    });
+    return { taskId };
+  });
   /** Aktuell installiertes Modpack + Update-Prüfung. */
   app.get('/', async (req) => {
     const access = await requireServer(req);

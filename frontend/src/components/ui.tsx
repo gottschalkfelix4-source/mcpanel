@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { AlertTriangle, CheckCircle2, Info, Loader2, X, XCircle } from 'lucide-react';
 import type { PowerState } from '../lib/types';
+import { serverStatus } from '../lib/serverStatus';
 
 // ---------------------------------------------------------------- Button ---
 
@@ -120,11 +121,11 @@ const STATE_META: Record<
   error: { label: 'Fehler', tone: 'red', dot: 'bg-redstone animate-pulse-soft' },
 };
 
-export function StateBadge({ state, className }: { state: PowerState; className?: string }) {
-  const meta = STATE_META[state] ?? STATE_META.stopped;
+export function StateBadge({ state, health, className }: { state: PowerState; health?: string | null; className?: string }) {
+  const meta = { ...(STATE_META[state] ?? STATE_META.stopped), ...serverStatus(state, health) };
   return (
     <Badge tone={meta.tone} className={className}>
-      <span className={clsx('h-[7px] w-[7px] shrink-0', meta.dot)} />
+      <span className={clsx('h-[7px] w-[7px] shrink-0', meta.tone === 'red' ? 'bg-redstone' : meta.tone === 'neutral' ? 'bg-stone-500' : meta.dot)} />
       {meta.label}
     </Badge>
   );

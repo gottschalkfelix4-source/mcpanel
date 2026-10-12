@@ -10,9 +10,11 @@ import type { TaskInfo } from '../../lib/types';
 import { Badge, Panel } from '../../components/ui';
 import { BarChart, PixelBar, PixelHead, useCountUp, useHistory } from '../../components/pixel';
 import { useServer } from './ServerLayout';
+import { serverStatus } from '../../lib/serverStatus';
+import TickMetrics from '../../components/TickMetrics';
 
 export default function OverviewTab() {
-  const { server, liveState, liveHealth, liveStats, players } = useServer();
+  const { server, liveState, liveHealth, liveStats, players, can } = useServer();
 
   const tasks = useQuery({
     queryKey: ['server-tasks', server.id],
@@ -47,15 +49,15 @@ export default function OverviewTab() {
       <div className="grid gap-[18px] [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
         <Stat
           icon={<Activity size={13} />}
-          tint="#17DD62"
+          tint={serverStatus(liveState, liveHealth).tone === 'red' ? '#E8453C' : '#7FB238'}
           label="Status"
-          value={liveState === 'running' ? 'Online' : liveState === 'starting' ? 'Startet' : 'Offline'}
+          value={serverStatus(liveState, liveHealth).label}
           sub={
             !running
-              ? 'Container gestoppt'
+              ? liveState === 'starting' ? 'Minecraft wird vorbereitet' : 'Container nicht aktiv'
               : liveHealth === 'unhealthy'
                 ? `seit ${formatUptime(server.startedAt)} · Status-Ping antwortet nicht`
-                : `seit ${formatUptime(server.startedAt)} · Health-Ping OK`
+                : `seit ${formatUptime(server.startedAt)} · ${liveHealth === 'healthy' ? 'Status-Ping OK' : 'Keine bestätigte Statusprüfung'}`
           }
           percent={running ? 100 : 0}
           delay={0}
@@ -101,6 +103,8 @@ export default function OverviewTab() {
           delay={0.18}
         />
       </div>
+
+      {can('console.read') && <TickMetrics serverId={server.id} running={running} />}
 
       {/* min-w-0: Grid-Kinder schrumpfen sonst nicht unter ihre Inhaltsbreite
           und schieben auf schmalen Screens die ganze Seite auf. */}

@@ -34,6 +34,8 @@ das Panel steuert sie über den Docker-Socket.
 - Automatische Port-Vergabe aus einem konfigurierbaren Bereich
 - Optionaler Minecraft-Proxy: mehrere Server über eigene Subdomains und einen gemeinsamen TCP-Port; [Einrichtung und Migration](docs/MINECRAFT_PROXY.md)
 - Live-Werte für CPU, RAM, Speicherplatz und Spielerzahl
+- Statusanzeige unterscheidet bestätigte Bereitschaft, Anlaufzeit, fehlgeschlagene und unbekannte Statusprüfungen.
+- Administratoren können unter Server-Einstellungen eine gestoppte Testkopie mit eigenem Port und RCON-Passwort erstellen, optional mit der konsistent gespeicherten Welt. Mitglieder, Subdomains, Automationen und Autostart werden nicht übernommen.
 
 **Dashboard mit Tabs** (Klick auf einen Server)
 | Tab | Inhalt |
@@ -58,6 +60,8 @@ das Panel steuert sie über den Docker-Socket.
 - Updater mit Versionsvergleich, automatischem Backup und optionalem Schutz für eigene `config/`-Änderungen
 - Welt, `server.properties`, Whitelist, OP- und Bannlisten bleiben bei Updates immer erhalten
 - Live-Fortschritt mit Protokoll im Panel
+- Vor Updates ist ein Paketvergleich verfügbar: neue, entfernte und anhand von Mod-ID und Inhalt aktualisierte Mods sowie Minecraft- und Loader-Version. Die zusätzliche Client-Mod-Prüfung erfolgt während der Installation.
+- Paket und einzelne Downloads werden vor dem Serverstopp vorbereitet. Ein Downloadfehler unterbricht den laufenden Server nicht.
 - Absturz-Dialog benennt die schuldige Mod; optional erklärt ein **KI-Assistent** (OpenRouter, OpenAI oder lokal) das ganze Protokoll – siehe [KI-Assistent](#ki-assistent-für-absturzprotokolle)
 
 **Automatisierungen** (pro Server)
@@ -91,6 +95,7 @@ das Panel steuert sie über den Docker-Socket.
 - Ereignisse einzeln abonnierbar: Server gestartet / gestoppt / **abgestürzt**, Automatisierung
   gelungen / fehlgeschlagen, Backup erstellt / fehlgeschlagen, Modpack-Update verfügbar, Speicherplatz knapp
 - Bei einem Absturz hängen die letzten Protokollzeilen mit in der Nachricht
+- Die Ereignisse „Statusprüfung länger fehlgeschlagen“ und „Statusprüfung wieder erfolgreich“ lassen sich je Kanal abonnieren. Der Wächter gibt Modpacks 15 Minuten Anlaufzeit und warnt anschließend erst nach zwei Minuten anhaltender Störung; er startet Server nicht automatisch neu.
 - Testknopf je Kanal; die gespeicherte URL wird nie zurückgegeben, in der Liste steht sie gekürzt
 
 **Kontingent je Server**
@@ -112,6 +117,24 @@ das Panel steuert sie über den Docker-Socket.
 - Aktivitätsprotokoll für Administratoren
 
 ---
+
+## Panel-Sicherungen und Tick-Messwerte
+
+Unter **Panel-Einstellungen → Panel-Sicherungen** lassen sich vollständige Sicherungen
+der Panel-Datenbank, JWT- und SFTP-Hostschlüssel sowie Laufzeitvorgaben erstellen,
+herunterladen und löschen. Ein eigener Cron-Zeitplan und eine Aufbewahrungsgrenze
+gelten für diese Archive; die automatische Sicherung ist zunächst deaktiviert.
+Welten und Minecraft-Dateien bleiben Aufgabe der separaten Server-Backups.
+Die Archive enthalten Zugangsdaten und müssen geschützt aufbewahrt werden.
+`WIEDERHERSTELLUNG.txt` im Archiv beschreibt das Einspielen über die Notfall-CLI.
+Der Compose-Backend-Container enthält dafür ebenfalls den PostgreSQL-Client.
+
+Die Serverübersicht zeigt **TPS/MSPT** mit Messverlauf, sofern Spark oder geeignete
+Paper-/Forge-Befehle über RCON antworten. Messungen sind lesend, alle 30 Sekunden,
+werden bei gleichzeitigen Anfragen gebündelt und nach einem Serverneustart neu
+begonnen. Der Verlauf hält höchstens 240 Messungen im Speicher; bei Spark ist MSPT
+der Median, bei Paper/Forge der Mittelwert. Ohne verfügbare Messquelle werden keine
+Werte erfunden und keine Mods automatisch installiert.
 
 ## Schnellstart
 

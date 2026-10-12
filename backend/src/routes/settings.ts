@@ -14,6 +14,7 @@ import {
 import { globalNotificationRoutes } from './notifications.js';
 import { configureProxy, proxyStatus } from '../services/proxy.js';
 import { proxyOverview } from '../services/proxyOverview.js';
+import panelBackupRoutes from './panelBackups.js';
 import {
   getAssistantConfig, isConfigured as assistantConfigured, publicAssistantConfig,
   saveAssistantConfig, testAssistant,
@@ -43,6 +44,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
   });
 
   await app.register(globalNotificationRoutes, { prefix: '/notifications' });
+  await app.register(panelBackupRoutes, { prefix: '/panel-backups' });
 
   /** Panel-Infos, die jeder angemeldete Nutzer sehen darf. */
   app.get('/public', async () => ({

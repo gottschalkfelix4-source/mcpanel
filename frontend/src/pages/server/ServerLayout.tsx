@@ -198,13 +198,13 @@ export default function ServerLayout() {
                 <div className="flex items-center gap-2 sm:gap-[11px]">
                   <h1 className="heading min-w-0 truncate text-base sm:text-xl">{server.name}</h1>
                   <span className="hidden shrink-0 sm:inline-flex">
-                    <StateBadge state={state} />
+                    <StateBadge state={state} health={context.liveHealth} />
                   </span>
                 </div>
 
                 <div className="mt-[7px] flex flex-wrap items-center gap-x-[18px] gap-y-1.5 text-xs text-stone-350">
                   <span className="sm:hidden">
-                    <StateBadge state={state} />
+                    <StateBadge state={state} health={context.liveHealth} />
                   </span>
                   <button
                     onClick={copyAddress}

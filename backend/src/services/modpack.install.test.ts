@@ -62,7 +62,8 @@ it('BUG-16: missing mandatory download preserves original files and version bind
   await expect(installModpack('a', request, task())).rejects.toThrow('Pflichtdatei');
   expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
   expect(m.row.modpackVersionId).toBe('old');
-  expect(m.start).toHaveBeenCalledWith(expect.objectContaining({ modpackVersionId: 'old' }));
+  expect(m.stop).not.toHaveBeenCalled();
+  expect(m.start).not.toHaveBeenCalled();
 });
 it('BUG-35: downloads and overrides cannot overwrite the configured world or preserved config', async () => {
   archive([
