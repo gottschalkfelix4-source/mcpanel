@@ -12,7 +12,7 @@ import { byteLimit } from '../lib/byteLimit.js';
 import { serverDir } from '../config.js';
 import { prisma } from '../db.js';
 import { withServerOperation } from './operations.js';
-import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths } from './restoreRecovery.js';
+import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths, saveRestoreMetadata } from './restoreRecovery.js';
 import { parseProperties } from './properties.js';
 import { invalidateDiskUsage } from './diskUsage.js';
 import * as docker from './docker.js';
@@ -116,16 +116,17 @@ export async function extractServerZip(file: string, plan: ImportPlan, destinati
 }
 
 /** Nur vom Import-Endpunkt für einen frisch angelegten Server aufgerufen. */
-export async function importServerZip(id: string, file: string, plan: ImportPlan, request: ImportRequest, task: TaskHandle) {
+export async function importServerZip(id: string, file: string, plan: ImportPlan, request: ImportRequest, task: TaskHandle, actor?: { id: string; isAdmin: boolean }) {
   return withServerOperation(id, 'Ein ZIP-Import', async () => {
     const server = await prisma.server.findUniqueOrThrow({ where: { id } });
     const state = await docker.getState(server);
     const original = await fs.readdir(serverDir(id));
-    if (!['stopped', 'missing'].includes(state.state) || original.some(name => name !== 'eula.txt')) {
+    if (!actor && (!['stopped', 'missing'].includes(state.state) || original.some(name => name !== 'eula.txt'))) {
       throw conflict('ZIP-Import ist nur in einen neuen, leeren Server möglich. Bestehende Daten werden nicht überschrieben.');
     }
     const { stage } = restorePaths(id);
-    let committed = false;
+    let committed = false, changing = false;
+    let imported = server;
     try {
       const free = await fs.statfs(serverDir(id));
       if (plan.bytes > free.bavail * free.bsize - 64 * 1024 ** 2) throw badRequest('Nicht genügend freier Speicher für den Serverimport.');
@@ -148,18 +149,47 @@ export async function importServerZip(id: string, file: string, plan: ImportPlan
         for (const name of launchFiles) await fs.rename(safePath(stage, name), safePath(stage, path.relative(stage, path.join(stored, name))));
         await task.log('Bisherige Startskripte und JVM-Argumente bleiben im Ordner ' + path.basename(stored) + ' erhalten.');
       }
+      if (actor) {
+        const { assertMemoryAllowed } = await import('./quota.js');
+        const { createBackup } = await import('./backups.js');
+        const { dirSize } = await import('./files.js');
+        const { serverBackupDir } = await import('../config.js');
+        const { reinstallEnvironment, reinstallMetadata } = await import('./reinstallationData.js');
+        assertMemoryAllowed(server, request.memoryMb, actor.isAdmin);
+        if (server.quotaDiskMb > 0 && plan.bytes > server.quotaDiskMb * 1024 ** 2) throw badRequest('Das ZIP überschreitet das Speicherkontingent des Servers.');
+        await docker.ensureImage(docker.imageForServer({ ...server, type: request.type, mcVersion: request.mcVersion }));
+        changing = true;
+        await docker.stop(server);
+        const backup = await createBackup(server, { name: `Vor ZIP-Import ${new Date().toISOString().slice(0, 16)}`, note: 'Automatisch vor ZIP-Import', createdById: actor.id });
+        await task.log(`Sicherheitsbackup erstellt: ${backup.name}`);
+        if (server.quotaDiskMb > 0 && await dirSize(stage) + await dirSize(serverBackupDir(id)) > server.quotaDiskMb * 1024 ** 2) throw badRequest('Speicherkontingent reicht für ZIP-Import und Sicherheitsbackup nicht aus.');
+        await saveRestoreMetadata(id, reinstallMetadata(server));
+        imported = await prisma.server.update({ where: { id }, data: {
+          name: request.name, type: request.type, mcVersion: request.mcVersion, memoryMb: request.memoryMb,
+          extraEnv: { ...reinstallEnvironment(server), ...importEnvironment(request) },
+          modpackProvider: null, modpackProjectId: null, modpackVersionId: null, modpackName: null, modpackVersionName: null, modpackIconUrl: null,
+        } });
+      }
       await commitRestore(id);
+      if (actor) await docker.recreateContainer(imported);
       await finishRestore(id);
       committed = true;
       invalidateDiskUsage(id);
       await task.log('Serverdateien einschließlich Welten, Mods, Plugins und Spielerlisten übernommen. Netzwerk und RCON auf das Panel angepasst.');
       if (request.startAfter) {
-        await docker.start(server);
-        await waitForServerReady(server, { onWaiting: message => task.update(95, message) });
+        await docker.start(imported);
+        await waitForServerReady(imported, { onWaiting: message => task.update(95, message) });
       }
       await task.update(100, request.startAfter ? 'Import abgeschlossen – Minecraft antwortet.' : 'Import abgeschlossen – der Server kann gestartet werden.');
     } catch (error) {
-      if (!committed) await recoverInterruptedRestore(id);
+      if (!committed) {
+        await recoverInterruptedRestore(id);
+        if (changing) {
+          const recovered = await prisma.server.findUniqueOrThrow({ where: { id } });
+          await docker.recreateContainer(recovered);
+          if (['running', 'starting'].includes(state.state)) await docker.start(recovered);
+        }
+      }
       // Nach erfolgreichem Import bleiben Welten auch bei einem Startfehler erhalten.
       throw error;
     }

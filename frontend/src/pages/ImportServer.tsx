@@ -6,17 +6,19 @@ import { uploadFiles } from '../lib/api';
 import { Button, ErrorNote, Field, InfoNote, Panel, ProgressBar, Toggle } from '../components/ui';
 import { TaskProgress } from '../components/TaskProgress';
 
+import type { ServerDetail } from '../lib/types';
+
 const TYPES = ['VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT'];
 const TASKS = ['server.import'];
 
-export default function ImportServerPage() {
+export default function ImportServerPage({ existingServer }: { existingServer?: ServerDetail }) {
   const queries = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(existingServer?.name ?? '');
   const [type, setType] = useState('PAPER');
   const [mcVersion, setMcVersion] = useState('');
   const [loaderVersion, setLoaderVersion] = useState('');
-  const [memoryMb, setMemoryMb] = useState(4096);
+  const [memoryMb, setMemoryMb] = useState(existingServer?.memoryMb ?? 4096);
   const [startAfter, setStartAfter] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -32,7 +34,7 @@ export default function ImportServerPage() {
     try {
       const params = new URLSearchParams({ name: name.trim(), type, mcVersion: mcVersion.trim(), memoryMb: String(memoryMb), startAfter: String(startAfter) });
       if (modded) params.set('loaderVersion', loaderVersion.trim());
-      const response = await uploadFiles<{ id: string; taskId: string }>(`/servers/import?${params}`, [file], setProgress);
+      const response = await uploadFiles<{ id: string; taskId: string }>(`/servers/${existingServer ? existingServer.id + "/" : ""}import?${params}`, [file], setProgress);
       setCreated(response);
       void queries.invalidateQueries({ queryKey: ['servers'] });
     } catch (error) { setError(error instanceof Error ? error.message : 'Serverimport fehlgeschlagen'); }
@@ -42,7 +44,7 @@ export default function ImportServerPage() {
   return <div className="flex max-w-3xl flex-col gap-5">
     <Link to="/" className="inline-flex items-center gap-2 text-sm text-stone-300"><ArrowLeft size={16} />Zur Serverübersicht</Link>
     <h1 className="heading-pixel text-base">Server aus ZIP importieren</h1>
-    <InfoNote>Erstellt einen neuen Server. Das ZIP muss den vollständigen Serverordner mit server.properties enthalten – direkt oder in einem übergeordneten Ordner. Welten, Mods, Plugins und Spielerlisten werden übernommen. Bestehende Panel-Server bleiben erhalten.</InfoNote>
+    <InfoNote>{existingServer ? "Ersetzt die Serverdateien durch das ZIP. Vorher wird ein Sicherheitsbackup des bisherigen Servers erstellt. Besitzer, Zugriffsrechte und Kontingente bleiben erhalten." : "Erstellt einen neuen Server."} Das ZIP muss den vollständigen Serverordner mit server.properties enthalten – direkt oder in einem übergeordneten Ordner. Welten, Mods, Plugins und Spielerlisten werden übernommen. Andere Panel-Server bleiben erhalten.</InfoNote>
     {error && <ErrorNote>{error}</ErrorNote>}
     {created ? <>
       <TaskProgress serverId={created.id} taskId={created.taskId} types={TASKS} onFinished={() => { void queries.invalidateQueries({ queryKey: ['servers'] }); }} />
@@ -62,6 +64,7 @@ export default function ImportServerPage() {
           <Field label="Maximaler Java-Heap"><select className="mc-select" value={memoryMb} onChange={e => setMemoryMb(Number(e.target.value))}>{[2048, 4096, 6144, 8192, 12288, 16384].map(m => <option key={m} value={m}>{m / 1024} GB</option>)}</select></Field>
           <Toggle checked={startAfter} onChange={setStartAfter} label="Nach dem Import starten und Start prüfen" />
           <p className="text-sm text-stone-400">Port und RCON-Zugang werden für das Panel angepasst. Startskripte und JVM-Argumente aus dem ZIP werden nicht automatisch ausgeführt.</p>
+          {existingServer && <label className="flex items-start gap-2 text-sm"><input type="checkbox" required />Ich möchte die Dateien dieses Servers durch den ZIP-Inhalt ersetzen. Der bisherige Stand bleibt im Sicherheitsbackup erhalten.</label>}
           <Button type="submit" variant="primary" loading={busy} icon={<Upload size={16} />}>Server importieren</Button>
         </fieldset>
         {busy && <div className="mt-4 space-y-2" aria-live="polite"><ProgressBar value={progress} /><p className="text-sm text-stone-300">{progress < 100 ? `ZIP wird hochgeladen … ${Math.round(progress)} %` : 'ZIP wird geprüft und neuer Server vorbereitet …'}</p></div>}

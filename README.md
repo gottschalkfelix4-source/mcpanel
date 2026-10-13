@@ -895,3 +895,5 @@ Speicherplatz. Ein externer Reverse-Proxy muss entsprechend große Uploads zulas
 ZIP64 und große einzelne Dateien werden dateiweise verarbeitet. Pfadausbrüche,
 Symlinks, verschlüsselte Archive, doppelte Pfade und falsche CRC-Prüfsummen werden
 abgewiesen. Fortschritt und Fehler stehen im Importdialog und der Serverübersicht.
+
+Besitzer und Mitglieder mit dem Recht **Server neu installieren** können unter **Neuinstallation → ZIP importieren** ihren zugewiesenen Server aus einem ZIP ersetzen. Vorher wird ein Sicherheitsbackup angelegt. Besitzer, Zugriffsrechte und Kontingente bleiben unverändert; das Anlegen zusätzlicher Server bleibt Administratoren vorbehalten.

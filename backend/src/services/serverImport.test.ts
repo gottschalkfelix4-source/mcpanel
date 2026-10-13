@@ -4,12 +4,14 @@ import os from 'node:os';
 import AdmZip from 'adm-zip';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ root: '', state: 'stopped', start: vi.fn(), ready: vi.fn() }));
-vi.mock('../config.js', () => ({ serverDir: (id: string) => path.join(m.root, 'servers', id) }));
-vi.mock('../db.js', () => ({ prisma: { server: { findUniqueOrThrow: async () => ({ id: 'neu', rconPassword: 'neues-panel-passwort' }) } } }));
-vi.mock('./docker.js', () => ({ getState: async () => ({ state: m.state }), start: m.start }));
+const m = vi.hoisted(() => ({ root: '', state: 'stopped', start: vi.fn(), ready: vi.fn(), backup: vi.fn(), recreate: vi.fn(), update: vi.fn(), stop: vi.fn() }));
+vi.mock('../config.js', () => ({ serverDir: (id: string) => path.join(m.root, 'servers', id), serverBackupDir: () => path.join(m.root, 'backups') }));
+vi.mock('../db.js', () => ({ prisma: { server: { update: m.update, findUniqueOrThrow: async () => ({ id: 'neu', rconPassword: 'neues-panel-passwort' }) } } }));
+vi.mock('./docker.js', () => ({ getState: async () => ({ state: m.state }), start: m.start, stop: m.stop, ensureImage: vi.fn(), imageForServer: () => 'java21', recreateContainer: m.recreate }));
 vi.mock('./serverStartup.js', () => ({ waitForServerReady: m.ready }));
 vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));
+vi.mock('./backups.js', () => ({ createBackup: m.backup }));
+vi.mock('./files.js', () => ({ dirSize: async () => 0 }));
 import { inspectServerZip, extractServerZip, importServerZip, importSchema } from './serverImport.js';
 const task = () => ({ id: 'task', update: vi.fn(async () => {}), log: vi.fn(async () => {}), done: vi.fn(async () => {}), fail: vi.fn(async () => {}) });
 const request = () => importSchema.parse({ name: 'Mein Server', type: 'PAPER', mcVersion: '1.20.1' });
@@ -22,7 +24,7 @@ async function fixture(prefix = '', extra: Record<string, string> = {}) {
   const file = path.join(m.root, 'server.zip'); await fs.writeFile(file, zip.toBuffer()); return file;
 }
 beforeEach(async () => {
-  vi.clearAllMocks(); m.state = 'stopped'; m.ready.mockResolvedValue(undefined);
+  vi.clearAllMocks(); m.state = 'stopped'; m.backup.mockResolvedValue({ name: 'Sicherheitsbackup' }); m.recreate.mockResolvedValue(undefined); m.update.mockImplementation(async ({ data }: any) => ({ id: 'neu', ...data })); m.ready.mockResolvedValue(undefined);
   m.root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcpanel-import-'));
   await fs.mkdir(directory(), { recursive: true }); await fs.writeFile(path.join(directory(), 'eula.txt'), 'eula=true\n');
 });
@@ -107,4 +109,34 @@ it('verlangt konkrete Minecraft- und Loader-Versionen ohne administrative Zusatz
   expect(() => importSchema.parse({ name: 'Server', type: 'FORGE', mcVersion: '1.20.1' })).toThrow();
   expect(() => importSchema.parse({ name: 'Server', type: 'PAPER', mcVersion: 'LATEST' })).toThrow();
   expect(() => importSchema.parse({ name: 'Server', type: 'PAPER', mcVersion: '1.20.1', ownerId: 'fremd' })).toThrow();
+});
+
+it('sichert den bisherigen Server vor Import und verändert keine Besitzer oder Rechte', async () => {
+  await fs.writeFile(path.join(directory(), 'alte-welt.dat'), 'Bisherige Welt');
+  m.backup.mockImplementationOnce(async () => {
+    expect(await fs.readFile(path.join(directory(), 'alte-welt.dat'), 'utf8')).toBe('Bisherige Welt');
+    return { name: 'Sicherheitsbackup' };
+  });
+  const file = await fixture();
+  await importServerZip('neu', file, await inspectServerZip(file), request(), task(), { id: 'mitglied', isAdmin: false });
+  expect(m.backup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ createdById: 'mitglied' }));
+  expect(await fs.readFile(path.join(directory(), 'meine-welt/level.dat'), 'utf8')).toBe('Originalwelt');
+  const data = m.update.mock.calls[0][0].data;
+  expect(data).not.toHaveProperty('ownerId'); expect(data).not.toHaveProperty('members'); expect(data).not.toHaveProperty('quotaMemoryMb');
+});
+it('erhält bei Backupfehler sämtliche bisherigen Dateien', async () => {
+  await fs.writeFile(path.join(directory(), 'alte-welt.dat'), 'Bisherige Welt');
+  m.backup.mockRejectedValueOnce(new Error('Sicherung fehlgeschlagen'));
+  const file = await fixture();
+  await expect(importServerZip('neu', file, await inspectServerZip(file), request(), task(), { id: 'mitglied', isAdmin: false })).rejects.toThrow('Sicherung fehlgeschlagen');
+  expect(await fs.readFile(path.join(directory(), 'alte-welt.dat'), 'utf8')).toBe('Bisherige Welt');
+  expect(m.update).not.toHaveBeenCalled();
+});
+it('stellt bei Containerfehler den bisherigen Serverbestand wieder her', async () => {
+  await fs.writeFile(path.join(directory(), 'alte-welt.dat'), 'Bisherige Welt');
+  m.recreate.mockRejectedValueOnce(new Error('Containerfehler'));
+  const file = await fixture();
+  await expect(importServerZip('neu', file, await inspectServerZip(file), request(), task(), { id: 'mitglied', isAdmin: false })).rejects.toThrow('Containerfehler');
+  expect(await fs.readFile(path.join(directory(), 'alte-welt.dat'), 'utf8')).toBe('Bisherige Welt');
+  expect(m.recreate).toHaveBeenCalledTimes(2);
 });

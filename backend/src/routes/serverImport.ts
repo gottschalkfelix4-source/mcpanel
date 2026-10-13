@@ -3,7 +3,9 @@ import { createWriteStream } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
-import { requireAdmin, audit } from '../auth/context.js';
+import { requireAdmin, requireServer, authenticate, audit } from '../auth/context.js';
+import { PERMISSIONS } from '../auth/permissions.js';
+import { assertMemoryAllowed } from '../services/quota.js';
 import { cacheDir } from '../config.js';
 import { badRequest } from '../lib/errors.js';
 import { byteLimit } from '../lib/byteLimit.js';
@@ -13,8 +15,15 @@ import { runTask } from '../services/tasks.js';
 import { IMPORT_UPLOAD_LIMIT, importEnvironment, importSchema, importServerZip, inspectServerZip } from '../services/serverImport.js';
 
 export default async function serverImportRoutes(app: FastifyInstance) {
-  app.post('/import', { preHandler: requireAdmin }, async req => withServerOperation('panel-server-import', 'Ein Server-Upload', async () => {
+  for (const existing of [false, true]) app.post(existing ? '/:id/import' : '/import', { preHandler: existing ? async req => { await requireServer(req, PERMISSIONS.SERVER_REINSTALL); } : requireAdmin }, async (req, reply) => withServerOperation('panel-server-import', 'Ein Server-Upload', async () => {
     const request = importSchema.parse(req.query);
+    const checkAccess = async () => {
+      await authenticate(req, reply);
+      const access = await requireServer(req, PERMISSIONS.SERVER_REINSTALL);
+      assertMemoryAllowed(access.server, request.memoryMb, access.isAdmin);
+      return access;
+    };
+    if (existing) await checkAccess();
     const base = path.join(cacheDir(), 'server-import');
     await fs.mkdir(base, { recursive: true });
     const directory = await fs.mkdtemp(path.join(base, 'upload-'));
@@ -31,11 +40,17 @@ export default async function serverImportRoutes(app: FastifyInstance) {
       }
       if (count !== 1) throw badRequest('Keine ZIP-Datei empfangen.');
       const plan = await inspectServerZip(archive);
-      const server = await createServer({ name: request.name, ownerId: req.user!.id, type: request.type,
+      const access = existing ? await checkAccess() : null;
+      const server = access?.server ?? await createServer({ name: request.name, ownerId: req.user!.id, type: request.type,
         mcVersion: request.mcVersion, memoryMb: request.memoryMb, extraEnv: importEnvironment(request) });
-      await audit(req.user!.id, server.id, 'server.import', 'Neuer Server aus ZIP');
+      await audit(req.user!.id, server.id, 'server.import', existing ? 'ZIP-Import mit Sicherheitsbackup' : 'Neuer Server aus ZIP');
       const taskId = await runTask(server.id, 'server.import', async task => {
-        try { await importServerZip(server.id, archive, plan, request, task); }
+        try {
+          if (existing) {
+            const current = await checkAccess();
+            await importServerZip(server.id, archive, plan, request, task, { id: req.user!.id, isAdmin: current.isAdmin });
+          } else await importServerZip(server.id, archive, plan, request, task);
+        }
         finally { await fs.rm(directory, { recursive: true, force: true }); }
       });
       background = true;
