@@ -345,3 +345,29 @@ it('bricht bei beschädigten FTB-Dateien vor dem Serverstopp ab und erhält die 
   expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
   expect(m.row.modpackVersionId).toBe('old');
 });
+
+
+it.each([
+  ['startserver.sh', 'FORGE_VERSION=47.4.0'],
+  ['startserver.bat', 'set FORGE_VERSION=47.4.0'],
+  ['startserver.bat', 'set "FORGE_VERSION=47.4.0"'],
+  ['start.sh', 'export FORGE_VERSION="47.4.0" # Vorgabe'],
+])('übernimmt die feste Forge-Version aus %s: %s', async (name, assignment) => {
+  const zip = new AdmZip();
+  zip.addFile('paket/mods/server.jar', modJar('servermod', '*'));
+  zip.addFile('paket/' + name, Buffer.from(assignment + '\nINSTALLER="forge-1.20.1-$FORGE_VERSION-installer.jar"\n'));
+  m.archive = zip.toBuffer();
+  await installModpack('a', { ...request, provider: 'curseforge' }, task());
+  expect(m.row.extraEnv).toMatchObject({ TYPE: 'FORGE', FORGE_VERSION: '47.4.0' });
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  await expect(fs.stat(path.join(dir(), name))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('bricht bei widersprüchlichen Loader-Versionen vor dem Serverstopp ab', async () => {
+  const zip = new AdmZip(); zip.addFile('mods/server.jar', modJar('servermod', '*'));
+  zip.addFile('startserver.sh', Buffer.from('FORGE_VERSION=47.4.0\n'));
+  zip.addFile('startserver.bat', Buffer.from('set FORGE_VERSION=47.4.1\n'));
+  m.archive = zip.toBuffer();
+  await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('widersprüchliche');
+  expect(m.stop).not.toHaveBeenCalled();
+});

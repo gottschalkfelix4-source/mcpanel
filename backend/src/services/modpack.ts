@@ -656,6 +656,26 @@ function detectLoaderFromArchive(
     }
   }
 
+  // ATM-Serverpakete hinterlegen die Loader-Version direkt in Startskripten.
+  // Ausschließlich feste Zuweisungen lesen; keinerlei Shell-Auswertung ausführen.
+  const scriptVersions = new Map<string, { loader: Loader; version: string }>();
+  const versionKeys: Record<string, Loader> = {
+    FORGE_VERSION: 'FORGE', NEOFORGE_VERSION: 'NEOFORGE',
+    FABRIC_LOADER_VERSION: 'FABRIC', QUILT_LOADER_VERSION: 'QUILT',
+  };
+  for (const entry of zip.getEntries()) {
+    const relative = entry.entryName.replace(/\\/g, '/').slice(root.length);
+    if (!/^(?:startserver|start|run)\.(?:sh|bat)$/i.test(relative)) continue;
+    const text = entry.getData().toString('utf8');
+    const assignments = /^\s*(?:(?:export|set)\s+)?["']?(FORGE_VERSION|NEOFORGE_VERSION|FABRIC_LOADER_VERSION|QUILT_LOADER_VERSION)["']?\s*=\s*["']?(\d+(?:\.\d+)+(?:[-+][a-z\d._-]+)?)["']?\s*(?:#.*)?$/gim;
+    for (const match of text.matchAll(assignments)) {
+      const loader = versionKeys[match[1].toUpperCase()];
+      scriptVersions.set(`${loader}/${match[2]}`, { loader, version: match[2] });
+    }
+  }
+  if (scriptVersions.size > 1) throw badRequest('Die Startskripte des Serverpakets nennen widersprüchliche Loader-Versionen. Installation abgebrochen.');
+  if (scriptVersions.size === 1) return [...scriptVersions.values()][0];
+
   const patterns: { loader: Loader; regexes: RegExp[] }[] = [
     {
       loader: 'NEOFORGE',
