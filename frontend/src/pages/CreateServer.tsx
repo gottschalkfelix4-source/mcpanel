@@ -4,14 +4,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Boxes, Check, Package, Server as ServerIcon, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
-import type { ProjectSummary, ProjectVersion, ServerSummary, ServerType } from '../lib/types';
+import type { ProjectSummary, ProjectVersion, ServerDetail, ServerSummary, ServerType } from '../lib/types';
 import { ModpackBrowser } from '../components/ModpackBrowser';
-import { Button, ErrorNote, Field, InfoNote, Panel, useToast } from '../components/ui';
+import { Button, ConfirmDialog, ErrorNote, Field, InfoNote, Panel, Toggle, useToast } from '../components/ui';
+import { TaskProgress } from '../components/TaskProgress';
 
 const SERVER_TYPES: { value: ServerType; label: string; hint: string }[] = [
   { value: 'PAPER', label: 'Paper', hint: 'Schnell, Plugin-fähig – die beste Wahl für Vanilla+' },
   { value: 'VANILLA', label: 'Vanilla', hint: 'Original von Mojang, ohne Erweiterungen' },
   { value: 'PURPUR', label: 'Purpur', hint: 'Paper-Fork mit vielen Extra-Optionen' },
+  { value: 'SPIGOT', label: 'Spigot', hint: 'Server mit Bukkit-Plugins' },
   { value: 'FABRIC', label: 'Fabric', hint: 'Leichter Mod-Loader' },
   { value: 'FORGE', label: 'Forge', hint: 'Klassischer Mod-Loader' },
   { value: 'NEOFORGE', label: 'NeoForge', hint: 'Forge-Nachfolger für neue Versionen' },
@@ -20,21 +22,34 @@ const SERVER_TYPES: { value: ServerType; label: string; hint: string }[] = [
 
 const RAM_PRESETS = [2048, 4096, 6144, 8192, 10240, 12288, 16384];
 
-export default function CreateServerPage() {
+type SelectedPack = { project: Pick<ProjectSummary, 'provider' | 'id' | 'name' | 'iconUrl'>; version: Pick<ProjectVersion, 'id' | 'name' | 'gameVersions'> };
+
+export default function CreateServerPage({ existingServer }: { existingServer?: ServerDetail } = {}) {
   const navigate = useNavigate();
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const [mode, setMode] = useState<'plain' | 'modpack'>('plain');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [type, setType] = useState<ServerType>('PAPER');
-  const [mcVersion, setMcVersion] = useState('LATEST');
-  const [memoryMb, setMemoryMb] = useState(4096);
+  const [mode, setMode] = useState<'plain' | 'modpack'>(existingServer?.modpack ? 'modpack' : 'plain');
+  const [name, setName] = useState(existingServer?.name ?? '');
+  const [description, setDescription] = useState(existingServer?.description ?? '');
+  const [type, setType] = useState<ServerType>(existingServer?.type === 'MODPACK' ? 'PAPER' : existingServer?.type ?? 'PAPER');
+  const [mcVersion, setMcVersion] = useState(existingServer?.mcVersion ?? 'LATEST');
+  const [memoryMb, setMemoryMb] = useState(existingServer?.memoryMb ?? 4096);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [pack, setPack] = useState<{ project: ProjectSummary; version: ProjectVersion } | null>(null);
+  const [keepWorld, setKeepWorld] = useState(true);
+  const [startAfter, setStartAfter] = useState(false);
+  const [confirmReinstall, setConfirmReinstall] = useState(false);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [pack, setPack] = useState<SelectedPack | null>(() => {
+    const pack = existingServer?.modpack;
+    return pack?.provider && pack.projectId && pack.versionId ? {
+      project: { provider: pack.provider, id: pack.projectId, name: pack.name ?? 'Installiertes Modpack', iconUrl: pack.iconUrl },
+      version: { id: pack.versionId, name: pack.versionName ?? pack.versionId, gameVersions: [existingServer!.mcVersion] },
+    } : null;
+  });
 
   const versions = useQuery({
     queryKey: ['game-versions'],
@@ -42,19 +57,36 @@ export default function CreateServerPage() {
     staleTime: 3_600_000,
   });
 
-  async function create() {
+  function validSelection() {
     setError(null);
     if (name.trim().length < 2) {
       setError('Bitte gib dem Server einen Namen (mindestens 2 Zeichen).');
-      return;
+      return false;
     }
     if (mode === 'modpack' && !pack) {
       setError('Bitte wähle zuerst ein Modpack aus.');
-      return;
+      return false;
     }
+    return true;
+  }
+
+  async function create() {
+    if (!validSelection()) return;
 
     setBusy(true);
     try {
+      if (existingServer) {
+        const response = await api.post<{ taskId: string }>(`/servers/${existingServer.id}/reinstall`, {
+          name: name.trim(), description: description.trim(), type: mode === 'modpack' ? 'MODPACK' : type,
+          mcVersion: mode === 'modpack' ? pack!.version.gameVersions[0] ?? 'LATEST' : mcVersion,
+          memoryMb, keepWorld, startAfter,
+          ...(mode === 'modpack' ? { modpack: { provider: pack!.project.provider, projectId: pack!.project.id, versionId: pack!.version.id } } : {}),
+        });
+        setTaskId(response.taskId); setRunning(true);
+        toast.success('Neuinstallation gestartet – der Fortschritt wird hier angezeigt.');
+        queryClient.invalidateQueries({ queryKey: ['server-tasks', existingServer.id] });
+        return;
+      }
       const server = await api.post<ServerSummary>('/servers', {
         name: name.trim(),
         description: description.trim(),
@@ -92,15 +124,22 @@ export default function CreateServerPage() {
     <div className="flex flex-col gap-5 animate-fade-in">
       <div className="flex items-center gap-3.5">
         <Link
-          to="/"
+          to={existingServer ? `/servers/${existingServer.id}` : '/'}
           className="grid h-[34px] w-[34px] place-items-center border border-stone-700 bg-stone-900/70 transition hover:border-grass-light hover:bg-grass/[0.18]"
           title="Zurück zur Übersicht"
         >
           <ArrowLeft size={18} className="text-stone-300" />
         </Link>
-        <h1 className="heading-pixel text-base">Neuer Server</h1>
+        <h1 className="heading-pixel text-base">{existingServer ? 'Server neu installieren' : 'Neuer Server'}</h1>
       </div>
 
+      {existingServer && <>
+        <InfoNote>Vor der Neuinstallation wird eine Sicherung erstellt. Alte Mods, Plugins und Loader-Dateien werden ersetzt. Port, Besitzer, Mitglieder und Kontingente bleiben erhalten. Beim Wechsel des Modpacks oder der Minecraft-Version kann eine vorhandene Welt inkompatibel sein.</InfoNote>
+        <TaskProgress serverId={existingServer.id} types={REINSTALL_TASKS} taskId={taskId ?? undefined} onRunningChange={setRunning}
+          onFinished={() => { for (const key of ['server', 'servers', 'modpack', 'modpack-versions', 'environment', 'backups']) void queryClient.invalidateQueries({ queryKey: key === 'servers' ? [key] : [key, existingServer.id] }); }} />
+      </>}
+
+      <fieldset disabled={busy || running} className="contents">
       {/* Modus */}
       <div className="grid gap-3 sm:grid-cols-2">
         <ModeCard
@@ -230,7 +269,7 @@ export default function CreateServerPage() {
                   onChange={(e) => setMcVersion(e.target.value)}
                 >
                   <option value="LATEST">Neueste Version</option>
-                  {(versions.data?.release ?? []).slice(0, 60).map((v) => (
+                  {[...new Set([...(mcVersion === 'LATEST' ? [] : [mcVersion]), ...(versions.data?.release ?? []).slice(0, 60)])].map((v) => (
                     <option key={v} value={v}>
                       {v}
                     </option>
@@ -241,9 +280,10 @@ export default function CreateServerPage() {
 
             <Field label="Maximaler Java-Heap" hint="Java startet mit höchstens 2 GB und wächst bei Bedarf bis zu diesem Maximum. Der Bedarf hängt vom Modpack ab. Der Container erhält zusätzliche JVM-Reserve.">
               <div className="grid grid-cols-3 gap-1.5">
-                {RAM_PRESETS.map((mb) => (
+                {[...new Set([...(existingServer ? [existingServer.memoryMb] : []), ...RAM_PRESETS])].sort((a, b) => a - b).map((mb) => (
                   <button
                     key={mb}
+                    disabled={Boolean(existingServer && !existingServer.isAdmin && existingServer.quota.memoryLimitMb && mb > existingServer.quota.memoryLimitMb)}
                     onClick={() => setMemoryMb(mb)}
                     className={clsx(
                       'border px-2 py-1.5 text-xs font-bold transition',
@@ -258,22 +298,34 @@ export default function CreateServerPage() {
               </div>
             </Field>
 
-            {mode === 'modpack' && (
+            {existingServer && <>
+              <Field label="Weltdaten"><Toggle checked={keepWorld} onChange={setKeepWorld} label="Vorhandene Welt und Spielerdaten behalten" /></Field>
+              {!keepWorld && <InfoNote>Die bisherige Welt bleibt im Sicherheitsbackup. Die Neuinstallation beginnt mit einer neuen Welt.</InfoNote>}
+              <Field label="Nach der Installation"><Toggle checked={startAfter} onChange={setStartAfter} label="Server anschließend starten und Start prüfen" /></Field>
+            </>}
+
+            {mode === 'modpack' && !existingServer && (
               <InfoNote>
                 Die Installation läuft im Hintergrund. Du kannst den Fortschritt danach im
                 Modpack-Tab verfolgen.
               </InfoNote>
             )}
 
-            <Button variant="primary" className="w-full" loading={busy} onClick={create}>
-              Server erstellen
+            <Button variant="primary" className="w-full" loading={busy} disabled={running} onClick={() => existingServer ? validSelection() && setConfirmReinstall(true) : void create()}>
+              {existingServer ? 'Server neu installieren' : 'Server erstellen'}
             </Button>
           </div>
         </Panel>
       </div>
+      </fieldset>
+      {existingServer && <ConfirmDialog open={confirmReinstall} onClose={() => setConfirmReinstall(false)}
+        onConfirm={create} title="Server neu installieren?" confirmLabel="Neuinstallation starten" danger requireText={existingServer.name}
+        message={<div className="space-y-2"><p>Neue Installation: {mode === 'modpack' ? `${pack?.project.name} · ${pack?.version.name}` : `${type} · ${mcVersion}`}.</p><p>{keepWorld ? 'Die vorhandene Welt wird übernommen.' : 'Die aktive Installation erhält eine neue Welt.'} Der bisherige Stand wird vorher gesichert. Schlägt die Installation oder die gewählte Startprüfung fehl, wird der bisherige Stand wiederhergestellt.</p></div>} />}
     </div>
   );
 }
+
+const REINSTALL_TASKS = ['server.reinstall'];
 
 function ModeCard({
   active,

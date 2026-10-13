@@ -144,6 +144,26 @@ Werte erfunden und keine Mods automatisch installiert.
 
 ## Schnellstart
 
+### Bestehenden Server neu installieren
+
+Besitzer und Administratoren können im Server-Tab **Neuinstallation** denselben
+Dialog wie beim Anlegen nutzen: Servertyp, Minecraft-Version oder ein Modpack von
+Modrinth/CurseForge einschließlich Paketversion sowie den Java-Heap auswählen.
+Mitglieder benötigen das unter **Zugriff** vergebene Recht **Server neu installieren**.
+Dieses Recht erlaubt keine zusätzlichen Server und keine Änderung von Kontingenten,
+Besitzer, Ports oder administrativen Laufzeitvorgaben.
+
+Vor jedem Austausch wird zwingend eine Sicherung erstellt. Die Welt bleibt
+standardmäßig erhalten; bei **neuer Welt** liegt der bisherige Stand im Backup.
+Alte Mods, Plugins und Loader-Dateien werden entfernt, das gewählte Paket liefert
+seine neue Konfiguration. OPs, Whitelist und Sperrlisten bleiben erhalten.
+Der Vorgang läuft mit Fortschrittsanzeige und Serversperre. Bei Fehlern werden
+Dateien und Installationseinstellungen zurückgeholt; auch ein unterbrochener
+Austausch wird beim nächsten Panel-Start über das Wiederherstellungsjournal
+zurückgesetzt. **Server anschließend starten** prüft zusätzlich, ob Minecraft
+antwortet. Ein Wechsel von Minecraft-Version oder Modpack kann mit der alten Welt
+inkompatibel sein; für einen unveränderten Rückweg steht das Sicherheitsbackup bereit.
+
 Voraussetzung: Docker mit Compose-Plugin. Sonst nichts.
 
 ```bash

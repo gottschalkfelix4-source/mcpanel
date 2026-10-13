@@ -86,6 +86,7 @@ const AUFGABEN_NAMEN: Record<string, string> = {
   'backup.restore': 'Eine Wiederherstellung',
   'modpack.install': 'Eine Modpack-Installation',
   'modpack.update': 'Ein Modpack-Update',
+  'server.reinstall': 'Eine Neuinstallation',
 };
 
 const aufgabenName = (type: string) => AUFGABEN_NAMEN[type] ?? `Die Aufgabe "${type}"`;

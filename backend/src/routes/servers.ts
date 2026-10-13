@@ -22,6 +22,7 @@ import { withServerOperation, withQueuedOperation } from '../services/operations
 import { cloneServer } from '../services/serverClone.js';
 import { runTask } from '../services/tasks.js';
 import { getTickMetrics } from '../services/tickMetrics.js';
+import reinstallRoutes from './reinstall.js';
 
 import filesRoutes from './files.js';
 import configRoutes from './config.js';
@@ -346,6 +347,7 @@ export default async function serverRoutes(app: FastifyInstance) {
   });
 
   // --- Untergeordnete Bereiche ------------------------------------------
+  await app.register(reinstallRoutes, { prefix: '/:id/reinstall' });
   await app.register(filesRoutes, { prefix: '/:id/files' });
   await app.register(configRoutes, { prefix: '/:id/config' });
   await app.register(backupRoutes, { prefix: '/:id/backups' });

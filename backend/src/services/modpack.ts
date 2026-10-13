@@ -23,6 +23,7 @@ import { badRequest } from '../lib/errors.js';
 import { waitForServerReady } from './serverStartup.js';
 import { describeModFile, compareModDescriptors } from './modpackDiff.js';
 import { serverLoader } from './content.js';
+import { prepareReinstallData, reinstallEnvironment, reinstallMetadata, type ReinstallOptions } from './reinstallationData.js';
 
 export interface InstallRequest {
   provider: ProviderId;
@@ -34,6 +35,9 @@ export interface InstallRequest {
   keepConfig?: boolean;
   /** Nach der Installation direkt starten. */
   startAfter?: boolean;
+  /** Nur die Neuinstallationsroute setzt diese Optionen nach ihrer Rechteprüfung. */
+  reinstall?: ReinstallOptions;
+  createdById?: string;
 }
 
 type Loader = 'FORGE' | 'NEOFORGE' | 'FABRIC' | 'QUILT' | 'VANILLA';
@@ -134,9 +138,9 @@ async function installModpackImpl(
     await task.update(22, 'Sicherheitsbackup wird erstellt …');
     await task.log('Backup vor der Installation …');
     await createBackup(server, {
-      name: `Vor ${isUpdate ? 'Update' : 'Installation'} ${new Date().toISOString().slice(0, 16)}`,
+      name: `Vor ${request.reinstall ? 'Neuinstallation' : isUpdate ? 'Update' : 'Installation'} ${new Date().toISOString().slice(0, 16)}`,
       note: 'Automatisch vor Modpack-Installation',
-      createdById: null,
+      createdById: request.createdById ?? null,
     });
   }
 
@@ -148,7 +152,8 @@ async function installModpackImpl(
   // Reflink where supported; otherwise copy. Hardlinks would compromise rollback.
   // Old mods/scripts are discarded on updates, so never copy them just to delete them.
   const replaced = new Set(['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']);
-  await fs.cp(original, dir, {
+  if (request.reinstall) await prepareReinstallData(server, dir, request.reinstall.keepWorld);
+  else await fs.cp(original, dir, {
     recursive: true, mode: fsConstants.COPYFILE_FICLONE,
     filter: source => !isUpdate || !replaced.has(path.relative(original, source).split(path.sep).join('/')),
   });
@@ -262,7 +267,7 @@ async function installModpackImpl(
   // --- 7. Server-Datensatz aktualisieren ----------------------------------
   await task.update(94, 'Servereinstellungen werden gespeichert …');
   const extraEnv: Record<string, string> = {
-    ...((server.extraEnv ?? {}) as Record<string, string>),
+    ...(request.reinstall ? reinstallEnvironment(server) : (server.extraEnv ?? {}) as Record<string, string>),
     TYPE: plan.loader,
   };
   delete extraEnv.FORGE_VERSION;
@@ -278,7 +283,7 @@ async function installModpackImpl(
   }
 
   if (server.quotaDiskMb > 0 && await dirSize(dir) + await dirSize(serverBackupDir(serverId)) > server.quotaDiskMb * 1024 * 1024) throw new Error('Modpack überschreitet das Speicherkontingent');
-  await saveRestoreMetadata(serverId, {
+  await saveRestoreMetadata(serverId, request.reinstall ? reinstallMetadata(server) : {
     type: server.type, mcVersion: server.mcVersion, extraEnv: server.extraEnv,
     modpackProvider: server.modpackProvider, modpackProjectId: server.modpackProjectId,
     modpackVersionId: server.modpackVersionId, modpackName: server.modpackName,
@@ -288,6 +293,7 @@ async function installModpackImpl(
     where: { id: serverId },
     data: {
       type: 'MODPACK',
+      ...(request.reinstall ? { name: request.reinstall.name, description: request.reinstall.description, memoryMb: request.reinstall.memoryMb } : {}),
       mcVersion: plan.minecraftVersion,
       extraEnv,
       modpackProvider: request.provider,

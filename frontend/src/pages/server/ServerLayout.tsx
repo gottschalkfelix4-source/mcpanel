@@ -41,6 +41,7 @@ const TABS = [
   { to: 'automation', label: 'Automation', icon: AlarmClock, permission: null },
   { to: 'access', label: 'Zugriff', icon: Zap, permission: null },
   { to: 'settings', label: 'Einstellungen', icon: Settings2, permission: 'settings.edit' },
+  { to: 'reinstall', label: 'Neuinstallation', icon: RotateCw, permission: 'server.reinstall' },
 ] as const;
 
 export default function ServerLayout() {

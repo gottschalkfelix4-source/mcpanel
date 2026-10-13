@@ -21,6 +21,7 @@ const TYPE_LABELS: Record<string, string> = {
   'modpack.update': 'Modpack wird aktualisiert',
   'backup.create': 'Backup wird erstellt',
   'backup.restore': 'Backup wird eingespielt',
+  'server.reinstall': 'Server wird neu installiert',
 };
 
 /**
@@ -32,12 +33,14 @@ export function TaskProgress({
   types,
   onFinished,
   onRunningChange,
+  taskId,
 }: {
   serverId: string;
   types?: string[];
   onFinished?: (task: LiveTask) => void;
   /** Meldet, ob gerade ein passender Task läuft. */
   onRunningChange?: (running: boolean) => void;
+  taskId?: string;
 }) {
   const queryClient = useQueryClient();
   const [task, setTask] = useState<LiveTask | null>(null);
@@ -49,11 +52,20 @@ export function TaskProgress({
   const existing = useQuery({
     queryKey: ['server-tasks', serverId],
     queryFn: () => api.get<TaskInfo[]>(`/servers/${serverId}/tasks`),
-    refetchInterval: task?.status === 'RUNNING' ? false : 15_000,
+    refetchInterval: task?.status === 'RUNNING' || taskId ? 5000 : 15_000,
   });
 
   useEffect(() => {
-    if (task || !existing.data) return;
+    if (!existing.data) return;
+    const selected = existing.data.find(t => t.id === (taskId ?? task?.id));
+    if (selected) {
+      setTask(previous => previous?.id === selected.id && previous.status === selected.status && previous.progress === selected.progress && previous.message === selected.message && previous.error === (selected.error ?? undefined) && previous.log.join('\n') === selected.log.trimEnd() ? previous : {
+        id: selected.id, type: selected.type, status: selected.status === 'PENDING' ? 'RUNNING' : selected.status, progress: selected.progress,
+        message: selected.message, error: selected.error ?? undefined, log: selected.log ? selected.log.split('\n').filter(Boolean) : [],
+      });
+      return;
+    }
+    if (task) return;
     const running = existing.data.find(
       (t) => t.status === 'RUNNING' && (!types || types.includes(t.type)),
     );
@@ -68,7 +80,7 @@ export function TaskProgress({
       });
       setExpanded(true);
     }
-  }, [existing.data, task, types]);
+  }, [existing.data, taskId, types]);
 
   useEffect(() => {
     const socket = getSocket();
@@ -113,8 +125,8 @@ export function TaskProgress({
   }, [serverId, types, queryClient]);
 
   useEffect(() => {
-    onRunningChange?.(task?.status === 'RUNNING');
-  }, [task?.status, onRunningChange]);
+    onRunningChange?.(task?.status === 'RUNNING' || Boolean(taskId && (!task || task.id !== taskId)));
+  }, [task?.status, task?.id, taskId, onRunningChange]);
 
   useEffect(() => {
     if (!task || task.status === 'RUNNING') return;

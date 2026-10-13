@@ -78,6 +78,36 @@ it('BUG-35: downloads and overrides cannot overwrite the configured world or pre
   await expect(fs.stat(path.join(dir(), 'mods/old.jar'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(m.row.modpackVersionId).toBe('new');
 });
+
+it('installiert ein Modpack frisch ohne Altmods, Plugins oder alte Loader-Dateien und erhält die Welt', async () => {
+  await fs.mkdir(path.join(dir(), 'plugins'));
+  await fs.writeFile(path.join(dir(), 'plugins/alt.jar'), 'altes Plugin');
+  await fs.writeFile(path.join(dir(), 'server.jar'), 'alter Loader');
+  m.row.extraEnv = { TYPE: 'PAPER', PAPER_BUILD: 'alt', JVM_OPTS: 'Admin-Vorgabe' };
+  archive([], { 'config/neu.conf': 'neue Konfiguration' });
+  await installModpack('a', { ...request, backupFirst: true, keepConfig: false, startAfter: false,
+    reinstall: { name: 'Neu installiert', description: 'Neue Beschreibung', memoryMb: 2048, keepWorld: true } }, task());
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  expect(await fs.readFile(path.join(dir(), 'config/neu.conf'), 'utf8')).toBe('neue Konfiguration');
+  for (const name of ['plugins', 'server.jar', 'mods/old.jar', 'config/user.conf']) await expect(fs.stat(path.join(dir(), name))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(m.row).toMatchObject({ name: 'Neu installiert', memoryMb: 2048, type: 'MODPACK', extraEnv: { TYPE: 'FABRIC', JVM_OPTS: 'Admin-Vorgabe' } });
+});
+
+it('stellt bei einer fehlgeschlagenen Modpack-Neuinstallation auch Name, RAM und alte Dateien wieder her', async () => {
+  archive(); m.row.memoryMb = 4096; m.recreate.mockRejectedValueOnce(new Error('Containerfehler'));
+  await expect(installModpack('a', { ...request, backupFirst: true, startAfter: false,
+    reinstall: { name: 'Neue Auswahl', description: 'Neu', memoryMb: 2048, keepWorld: true } }, task())).rejects.toThrow('Containerfehler');
+  expect(m.row).toMatchObject({ name: 'Test', memoryMb: 4096, modpackVersionId: 'old' });
+  expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
+});
+
+it('beginnt eine Modpack-Neuinstallation auf Wunsch mit einer neuen Welt', async () => {
+  archive([], { 'world/level.dat': 'vorgefertigte fremde Welt' });
+  await installModpack('a', { ...request, backupFirst: true, startAfter: false,
+    reinstall: { name: 'Neue Welt', description: '', memoryMb: 2048, keepWorld: false } }, task());
+  await expect(fs.stat(path.join(dir(), 'customworld'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(fs.stat(path.join(dir(), 'world'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
 it('rolls files and metadata back if container recreation fails after the swap', async () => {
   archive([{ path: 'mods/new.jar', downloads: ['https://fixture.test/mod'] }]);
   m.recreate.mockRejectedValueOnce(new Error('Docker recreation failed'));

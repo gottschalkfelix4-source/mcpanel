@@ -12,6 +12,7 @@ export const PERMISSIONS = {
   MODPACK_MANAGE: 'modpack.manage',
   MEMBERS_MANAGE: 'members.manage',
   SETTINGS_EDIT: 'settings.edit',
+  SERVER_REINSTALL: 'server.reinstall',
   AUTOMATION_MANAGE: 'automation.manage',
 } as const;
 
@@ -39,5 +40,6 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   'modpack.manage': 'Modpacks verwalten',
   'members.manage': 'Mitglieder verwalten',
   'settings.edit': 'Servereinstellungen',
+  'server.reinstall': 'Server neu installieren',
   'automation.manage': 'Automatisierungen verwalten',
 };
