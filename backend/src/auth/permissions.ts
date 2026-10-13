@@ -1,4 +1,4 @@
-/** Alle Rechte, die einem Server-Mitglied einzeln zugewiesen werden können. */
+/** Serverrechte; members.manage bleibt ausschließlich Administratoren vorbehalten. */
 export const PERMISSIONS = {
   CONSOLE_READ: 'console.read',
   CONSOLE_COMMAND: 'console.command',

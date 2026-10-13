@@ -84,7 +84,7 @@ export default function AccessTab() {
   if (data.isLoading) return <LoadingBlock />;
   if (!data.data) return <LoadErrorBlock error={data.error} onRetry={() => void data.refetch()} />;
   const response = data.data;
-  const canManage = response.canManage;
+  const canManage = server.isAdmin && response.canManage;
 
   function openAdd() {
     setNewPermissions(response.defaultPermissions);
@@ -96,7 +96,7 @@ export default function AccessTab() {
       <Panel
         title="Zugriff & Rechte"
         icon={<KeyRound size={16} />}
-        subtitle="Lade Freunde ein und lege genau fest, was sie dürfen."
+        subtitle="Nur Administratoren dürfen Zugriff erteilen und Serverrechte ändern."
         actions={
           canManage && (
             <Button
@@ -124,14 +124,14 @@ export default function AccessTab() {
             </p>
             <p className="truncate text-xs text-stone-350">{response.owner?.email}</p>
           </div>
-          <Badge tone="gold">Besitzer · alle Rechte</Badge>
+          <Badge tone="gold">Besitzer</Badge>
         </div>
 
         {response.members.length === 0 ? (
           <EmptyState
             icon={<UserPlus size={38} />}
             title="Noch niemand eingeladen"
-            description="Füge Freunde hinzu, damit sie den Server starten, die Konsole sehen oder Dateien bearbeiten können."
+            description="Ein Administrator kann weiteren Personen Zugriff auf diesen Server geben."
             action={
               canManage && (
                 <Button variant="primary" icon={<UserPlus size={16} />} onClick={openAdd}>
@@ -159,7 +159,7 @@ export default function AccessTab() {
 
       {/* Hinzufügen */}
       <Modal
-        open={showAdd}
+        open={canManage && showAdd}
         onClose={() => setShowAdd(false)}
         title="Person hinzufügen"
         footer={
@@ -216,7 +216,7 @@ export default function AccessTab() {
       </Modal>
 
       <ConfirmDialog
-        open={Boolean(removeTarget)}
+        open={canManage && Boolean(removeTarget)}
         onClose={() => setRemoveTarget(null)}
         onConfirm={() => removeTarget && remove.mutateAsync(removeTarget)}
         title="Zugriff entziehen?"

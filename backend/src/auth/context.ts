@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Server, User } from '@prisma/client';
 import { prisma } from '../db.js';
 import { verifyToken } from './jwt.js';
-import { ALL_PERMISSIONS, type Permission } from './permissions.js';
+import { ALL_PERMISSIONS, PERMISSIONS, type Permission } from './permissions.js';
 import { forbidden, notFound, unauthorized } from '../lib/errors.js';
 
 declare module 'fastify' {
@@ -68,6 +68,10 @@ export async function getServerAccess(user: User, serverId: string): Promise<Ser
     if (!member) throw notFound('Server nicht gefunden');
     permissions = member.permissions as Permission[];
   }
+
+  // Mitgliederverwaltung ist nicht delegierbar, auch nicht an Besitzer oder
+  // Mitglieder mit einem früher gespeicherten members.manage-Recht.
+  if (!isAdmin) permissions = permissions.filter((p) => p !== PERMISSIONS.MEMBERS_MANAGE);
 
   return {
     server,

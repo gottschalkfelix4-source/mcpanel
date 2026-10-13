@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { audit, requireServer } from '../auth/context.js';
+import { audit, requireAdmin, requireServer } from '../auth/context.js';
 import {
   ALL_PERMISSIONS,
   DEFAULT_MEMBER_PERMISSIONS,
@@ -10,7 +10,8 @@ import {
 } from '../auth/permissions.js';
 import { badRequest, notFound } from '../lib/errors.js';
 
-const permissionSchema = z.array(z.enum(ALL_PERMISSIONS as [string, ...string[]]));
+const assignablePermissions = ALL_PERMISSIONS.filter((p) => p !== PERMISSIONS.MEMBERS_MANAGE);
+const permissionSchema = z.array(z.enum(assignablePermissions as [string, ...string[]]));
 
 export default async function memberRoutes(app: FastifyInstance) {
   app.get('/', async (req) => {
@@ -32,16 +33,16 @@ export default async function memberRoutes(app: FastifyInstance) {
       members: members.map((m) => ({
         id: m.id,
         user: m.user,
-        permissions: m.permissions,
+        permissions: m.permissions.filter((p) => p !== PERMISSIONS.MEMBERS_MANAGE),
         createdAt: m.createdAt,
       })),
-      availablePermissions: ALL_PERMISSIONS.map((p) => ({ key: p, label: PERMISSION_LABELS[p] })),
+      availablePermissions: assignablePermissions.map((p) => ({ key: p, label: PERMISSION_LABELS[p] })),
       defaultPermissions: DEFAULT_MEMBER_PERMISSIONS,
-      canManage: access.can(PERMISSIONS.MEMBERS_MANAGE),
+      canManage: access.isAdmin,
     };
   });
 
-  app.post('/', async (req) => {
+  app.post('/', { preHandler: requireAdmin }, async (req) => {
     const access = await requireServer(req, PERMISSIONS.MEMBERS_MANAGE);
     const body = z
       .object({
@@ -74,7 +75,7 @@ export default async function memberRoutes(app: FastifyInstance) {
     return { id: member.id, user: member.user, permissions: member.permissions };
   });
 
-  app.patch('/:memberId', async (req) => {
+  app.patch('/:memberId', { preHandler: requireAdmin }, async (req) => {
     const access = await requireServer(req, PERMISSIONS.MEMBERS_MANAGE);
     const { memberId } = req.params as { memberId: string };
     const body = z.object({ permissions: permissionSchema }).parse(req.body);
@@ -94,7 +95,7 @@ export default async function memberRoutes(app: FastifyInstance) {
     return { id: updated.id, user: updated.user, permissions: updated.permissions };
   });
 
-  app.delete('/:memberId', async (req) => {
+  app.delete('/:memberId', { preHandler: requireAdmin }, async (req) => {
     const access = await requireServer(req, PERMISSIONS.MEMBERS_MANAGE);
     const { memberId } = req.params as { memberId: string };
 
