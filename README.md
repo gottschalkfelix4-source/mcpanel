@@ -113,6 +113,7 @@ das Panel steuert sie über den Docker-Socket.
 - Rollen: Administrator und Benutzer
 - Pro Server: Besitzer + eingeladene Mitglieder
 - Zugriff und Mitgliedsrechte dürfen ausschließlich Administratoren vergeben, ändern oder entziehen. Auch Besitzer und Mitglieder mit alten Verwaltungsrechten können weder eigene noch fremde Rechte ändern.
+- Automationen benötigen neben dem Verwaltungsrecht auch die Rechte ihrer Aktion. Geplante Läufe prüfen den zuletzt verantwortlichen Benutzer erneut; nach Entzug der Rechte oder Deaktivierung des Kontos wird die Aktion verweigert. Eine berechtigte Person kann die Regel bearbeiten oder erneut aktivieren und damit übernehmen.
 - 13 einzeln vergebbare Rechte, z. B. „Konsole lesen“, „Befehle senden“, „Starten / Stoppen“,
   „Dateien bearbeiten“, „Backups einspielen“, „Modpacks verwalten“, „Automatisierungen verwalten“, „Mitglieder verwalten“
 - Aktivitätsprotokoll für Administratoren

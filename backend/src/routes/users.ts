@@ -32,8 +32,8 @@ const publicUser = {
 export default async function userRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
-  /** Schlanke Liste für Mitglieder-Auswahl – für alle angemeldeten Nutzer. */
-  app.get('/directory', async () => {
+  /** Mitglieder dürfen ausschließlich Administratoren auswählen. */
+  app.get('/directory', { preHandler: requireAdmin }, async () => {
     const users = await prisma.user.findMany({
       where: { active: true },
       select: { id: true, username: true },

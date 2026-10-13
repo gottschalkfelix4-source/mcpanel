@@ -21,8 +21,8 @@ const searchSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
   sort: z.enum(['relevance', 'downloads', 'updated', 'newest']).default('relevance'),
-  // Standardmäßig ausdrücklich reine Client-Projekte ausblenden.
-  serverOnly: z.enum(['true', 'false']).default('true'),
+  // Die Oberfläche zeigt standardmäßig alle Packs ohne Seitenfilter.
+  serverOnly: z.enum(['true', 'false']).default('false'),
 });
 
 export default async function catalogRoutes(app: FastifyInstance) {

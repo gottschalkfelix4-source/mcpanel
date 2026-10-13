@@ -1,7 +1,9 @@
 import { withServerOperation } from './operations.js';
 import type { Automation, Server } from '@prisma/client';
 import { prisma } from '../db.js';
-import { audit } from '../auth/context.js';
+import { audit, getServerAccess } from '../auth/context.js';
+import { assertAutomationAccess } from '../auth/automationAccess.js';
+import { forbidden } from '../lib/errors.js';
 import * as dockerSvc from './docker.js';
 import { rconCommand } from './rcon.js';
 import { createBackup } from './backups.js';
@@ -44,6 +46,7 @@ interface AutomationConfig {
 export async function runAutomation(
   automation: Automation,
   origin: 'zeitplan' | 'ereignis' | 'manuell',
+  actorId?: string,
 ): Promise<{ status: RunStatus; message: string }> {
   const server = await prisma.server.findUnique({ where: { id: automation.serverId } });
   if (!server) return finish(automation, 'FEHLER', 'Server existiert nicht mehr');
@@ -51,6 +54,14 @@ export async function runAutomation(
   const config = (automation.config ?? {}) as AutomationConfig;
 
   try {
+    const authorize = async () => {
+      const userId = origin === 'manuell' ? actorId : automation.createdById;
+      const user = userId ? await prisma.user.findUnique({ where: { id: userId } }) : null;
+      if (!user?.active) throw forbidden('Automatisierung hat keinen aktiven berechtigten Benutzer');
+      assertAutomationAccess(await getServerAccess(user, server.id), automation.action, config);
+      return user.id;
+    };
+    await authorize();
     const { state } = await dockerSvc.getState(server);
     const running = state === 'running';
 
@@ -58,8 +69,11 @@ export async function runAutomation(
       return finish(automation, 'UEBERSPRUNGEN', 'Server läuft nicht – Aktion ausgelassen');
     }
 
-    const message = await withServerOperation(server.id, 'Automatisierung', () => execute(automation.action as ActionType, server, config, running));
-    await audit(automation.createdById, server.id, `automation.${automation.action.toLowerCase()}`,
+    const message = await withServerOperation(server.id, 'Automatisierung', async () => {
+      await authorize();
+      return execute(automation.action as ActionType, server, config, running);
+    });
+    await audit(origin === 'manuell' ? actorId! : automation.createdById, server.id, `automation.${automation.action.toLowerCase()}`,
       `${automation.name} (${origin})`);
 
     // Bei BACKUP meldet createBackup den Erfolg bereits selbst – sonst käme

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Download, ExternalLink, Package, Search, Server as ServerIcon, User } from 'lucide-react';
+import { Download, ExternalLink, Package, Search, User } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatCompact, formatDate } from '../lib/format';
 import type { ProjectSummary, ProjectVersion } from '../lib/types';
-import { Badge, Button, EmptyState, ErrorNote, InfoNote, LoadingBlock, Modal, Spinner } from './ui';
+import { Badge, Button, EmptyState, ErrorNote, LoadingBlock, Modal, Spinner } from './ui';
 
 type Provider = 'all' | 'modrinth' | 'curseforge';
 type CatalogType = 'modpack' | 'mod' | 'plugin';
@@ -73,24 +73,18 @@ export function ModpackBrowser({
   /** Minecraft-Version des Servers, als Vorauswahl des Filters. */
   defaultGameVersion?: string;
 }) {
-  // Plugins laufen per Definition auf dem Server – der Servertauglichkeits-
-  // filter und seine Abzeichen sagen dort nichts aus.
+  // Plugins laufen per Definition auf dem Server; die Abzeichen entfallen.
   const isPlugin = type === 'plugin';
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState<Provider>('all');
   const [gameVersion, setGameVersion] = useState(defaultGameVersion);
   const [sort, setSort] = useState<'relevance' | 'downloads' | 'updated'>('relevance');
-  const [serverOnly, setServerOnly] = useState(true);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<ProjectSummary | null>(null);
 
   const debouncedQuery = useDebounced(query);
 
-  // Ohne diesen Parameter filtert die Schnittstelle von sich aus auf
-  // servertaugliche Projekte – bei Plugins waere das eine leere Aussage.
-  const effectiveServerOnly = isPlugin ? false : serverOnly;
-
-  useEffect(() => setPage(1), [debouncedQuery, provider, gameVersion, sort, effectiveServerOnly]);
+  useEffect(() => setPage(1), [debouncedQuery, provider, gameVersion, sort]);
 
   const providers = useQuery({
     queryKey: ['catalog-providers'],
@@ -109,7 +103,7 @@ export function ModpackBrowser({
 
   const search = useQuery({
     queryKey: [
-      'catalog-search', type, debouncedQuery, provider, gameVersion, sort, page, effectiveServerOnly, loader,
+      'catalog-search', type, debouncedQuery, provider, gameVersion, sort, page, loader,
     ],
     queryFn: () => {
       const params = new URLSearchParams({
@@ -118,7 +112,7 @@ export function ModpackBrowser({
         sort,
         page: String(page),
         pageSize: '24',
-        serverOnly: String(effectiveServerOnly),
+        serverOnly: 'false',
       });
       if (debouncedQuery) params.set('q', debouncedQuery);
       if (gameVersion) params.set('gameVersion', gameVersion);
@@ -198,40 +192,7 @@ export function ModpackBrowser({
           );
         })}
 
-        {!isPlugin && (
-          <button
-            onClick={() => setServerOnly((v) => !v)}
-            className={clsx(
-              'ml-auto flex items-center gap-1.5 border px-3 py-1 text-xs font-bold uppercase tracking-wider transition',
-              serverOnly
-                ? 'border-grass-dark bg-grass/25 text-white'
-                : 'border-stone-700 bg-stone-800/60 text-stone-400 hover:text-stone-100',
-            )}
-            title={
-              serverOnly
-                ? 'Reine Client-Packs laut Anbieter werden ausgeblendet. Ungeprüfte Packs bleiben sichtbar.'
-                : 'Es werden alle Packs gezeigt – auch reine Client-Packs.'
-            }
-          >
-            <ServerIcon size={12} />
-            {serverOnly ? 'Client-Packs ausblenden' : 'alle Packs'}
-          </button>
-        )}
       </div>
-
-      {effectiveServerOnly && !isPlugin && (
-        <InfoNote>
-          Ungeprüfte Packs bleiben sichtbar: Ein fehlendes Serverpaket bei CurseForge bedeutet
-          nicht, dass das Pack nur für Clients ist. Manche Anbieter stellen Serverdateien separat bereit.
-        </InfoNote>
-      )}
-
-      {!effectiveServerOnly && !isPlugin && (
-        <InfoNote>
-          Reine Client-Packs sind eingeblendet. Die laufen auf einem Server oft nicht oder
-          nur nach Handarbeit – siehe das Abzeichen an den Treffern.
-        </InfoNote>
-      )}
 
       {sourceErrors.map((s) => (
         <ErrorNote key={s.provider}>

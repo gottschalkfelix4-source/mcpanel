@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
+import { assertAutomationAccess } from '../auth/automationAccess.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { ACTIONS, TRIGGERS, runAutomation } from '../services/automation.js';
 import { describeCron, isValidCron, nextRun } from '../services/cron.js';
@@ -90,6 +91,7 @@ export default async function automationRoutes(app: FastifyInstance) {
   app.post('/', async (req, reply) => {
     const access = await requireServer(req, PERMISSIONS.AUTOMATION_MANAGE);
     const body = bodySchema.parse(req.body);
+    assertAutomationAccess(access, body.action, body.config);
 
     const automation = await prisma.automation.create({
       data: {
@@ -122,9 +124,10 @@ export default async function automationRoutes(app: FastifyInstance) {
     // Teilaktualisierung: nur "enabled" umschalten ist ausdrücklich erlaubt.
     const toggle = z.object({ enabled: z.boolean() }).safeParse(req.body);
     if (toggle.success && Object.keys(req.body as object).length === 1) {
+      if (toggle.data.enabled) assertAutomationAccess(access, existing.action, existing.config);
       const updated = await prisma.automation.update({
         where: { id: automationId },
-        data: { enabled: toggle.data.enabled },
+        data: { enabled: toggle.data.enabled, ...(toggle.data.enabled ? { createdById: req.user!.id } : {}) },
       });
       await audit(
         req.user!.id,
@@ -136,6 +139,7 @@ export default async function automationRoutes(app: FastifyInstance) {
     }
 
     const body = bodySchema.parse(req.body);
+    assertAutomationAccess(access, body.action, body.config);
     const updated = await prisma.automation.update({
       where: { id: automationId },
       data: {
@@ -146,6 +150,7 @@ export default async function automationRoutes(app: FastifyInstance) {
         action: body.action,
         config: body.config,
         onlyWhenRunning: body.onlyWhenRunning,
+        createdById: req.user!.id,
       },
     });
 
@@ -180,7 +185,8 @@ export default async function automationRoutes(app: FastifyInstance) {
       throw badRequest('Kein Befehl hinterlegt');
     }
 
-    const result = await runAutomation(automation, 'manuell');
+    assertAutomationAccess(access, automation.action, automation.config);
+    const result = await runAutomation(automation, 'manuell', req.user!.id);
     return { ok: result.status !== 'FEHLER', ...result };
   });
 }
