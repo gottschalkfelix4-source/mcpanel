@@ -17,6 +17,7 @@ interface LiveTask {
 }
 
 const TYPE_LABELS: Record<string, string> = {
+  'server.import': 'Server wird aus ZIP importiert',
   'modpack.install': 'Modpack wird installiert',
   'modpack.update': 'Modpack wird aktualisiert',
   'backup.create': 'Backup wird erstellt',

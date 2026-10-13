@@ -82,6 +82,7 @@ export async function createTask(
 
 
 const AUFGABEN_NAMEN: Record<string, string> = {
+  'server.import': 'Ein ZIP-Import',
   'backup.create': 'Eine Sicherung',
   'backup.restore': 'Eine Wiederherstellung',
   'modpack.install': 'Eine Modpack-Installation',

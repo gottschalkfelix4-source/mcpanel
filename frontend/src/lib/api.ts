@@ -91,15 +91,15 @@ export function authedUrl(path: string): string {
   return `/api${path}${token ? `${sep}token=${encodeURIComponent(token)}` : ''}`;
 }
 
-export async function uploadFiles(
+export async function uploadFiles<T = void>(
   path: string,
   files: FileList | File[],
   onProgress?: (percent: number) => void,
-): Promise<void> {
+): Promise<T> {
   const form = new FormData();
   for (const file of Array.from(files)) form.append('files', file, file.name);
 
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api${path}`);
     const token = tokenStore.get();
@@ -109,7 +109,10 @@ export async function uploadFiles(
       if (e.lengthComputable) onProgress?.((e.loaded / e.total) * 100);
     };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(xhr.responseText ? JSON.parse(xhr.responseText) : undefined); }
+        catch { reject(new ApiError(xhr.status, 'Ungültige Antwort beim Upload')); }
+      }
       else {
         let message = `Upload fehlgeschlagen (${xhr.status})`;
         try {

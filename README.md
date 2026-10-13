@@ -872,3 +872,26 @@ Server werden beim nächsten Start mit der neuen Einstellung neu aufgesetzt.
 
 MIT – siehe [LICENSE](LICENSE). Benutzen, ändern und weitergeben ist erlaubt;
 Gewährleistung gibt es keine.
+
+
+### Bestehenden Server als ZIP importieren
+
+Administratoren können unter **Serverübersicht → ZIP importieren** einen neuen
+Server aus einem vollständigen Serververzeichnis anlegen. Der Quellserver sollte
+beim Erstellen des ZIPs gestoppt sein. `server.properties` muss direkt im ZIP oder
+in einem eindeutigen übergeordneten Serverordner liegen. Welten, Mod-/Plugin-Dateien,
+Konfiguration und Spielerlisten werden übernommen. Vorhandene Panel-Server werden
+nicht überschrieben.
+
+Die bisherige Minecraft-Version, der Servertyp und bei Mod-Loadern die genaue
+Loader-Version müssen angegeben werden. Port, Bind-Adresse und RCON werden an
+das Panel angepasst. Alte Startskripte und `user_jvm_args.txt` werden in einen
+Ordner `import-startdateien-*` verschoben und bleiben dort erhalten. Der Container
+übernimmt den Start. Ein automatischer Start mit Bereitschaftsprüfung ist optional;
+bei einem Startfehler bleiben die importierten Daten zur Korrektur erhalten.
+
+Grenzen: 4 GiB ZIP, 64 GiB entpackte Daten, 100.000 Archiveinträge sowie verfügbarer
+Speicherplatz. Ein externer Reverse-Proxy muss entsprechend große Uploads zulassen.
+ZIP64 und große einzelne Dateien werden dateiweise verarbeitet. Pfadausbrüche,
+Symlinks, verschlüsselte Archive, doppelte Pfade und falsche CRC-Prüfsummen werden
+abgewiesen. Fortschritt und Fehler stehen im Importdialog und der Serverübersicht.

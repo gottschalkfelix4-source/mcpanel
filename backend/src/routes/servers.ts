@@ -23,6 +23,7 @@ import { cloneServer } from '../services/serverClone.js';
 import { runTask } from '../services/tasks.js';
 import { getTickMetrics } from '../services/tickMetrics.js';
 import reinstallRoutes from './reinstall.js';
+import serverImportRoutes from './serverImport.js';
 
 import filesRoutes from './files.js';
 import configRoutes from './config.js';
@@ -95,6 +96,7 @@ const commandSchema = z.object({
 
 export default async function serverRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
+  await app.register(serverImportRoutes);
 
   // --- Liste -------------------------------------------------------------
   app.get('/', async (req) => {

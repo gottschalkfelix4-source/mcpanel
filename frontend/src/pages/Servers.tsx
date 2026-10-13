@@ -69,6 +69,9 @@ export default function ServersPage() {
             />
           </div>
           {canCreate && (
+            <Link to="/servers/import"><Button>ZIP importieren</Button></Link>
+          )}
+          {canCreate && (
             <Link to="/servers/new">
               <Button variant="primary" icon={<Plus size={16} />}>
                 Neuer Server

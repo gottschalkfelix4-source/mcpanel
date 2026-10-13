@@ -12,6 +12,7 @@ import { BarChart, PixelBar, PixelHead, useCountUp, useHistory } from '../../com
 import { useServer } from './ServerLayout';
 import { serverStatus } from '../../lib/serverStatus';
 import TickMetrics from '../../components/TickMetrics';
+import { TaskProgress } from '../../components/TaskProgress';
 
 export default function OverviewTab() {
   const { server, liveState, liveHealth, liveStats, players, can } = useServer();
@@ -45,6 +46,7 @@ export default function OverviewTab() {
 
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
+      <TaskProgress serverId={server.id} types={IMPORT_TASKS} />
       {/* Kennzahlen */}
       <div className="grid gap-[18px] [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
         <Stat
@@ -321,3 +323,5 @@ function Detail({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+const IMPORT_TASKS = ['server.import'];

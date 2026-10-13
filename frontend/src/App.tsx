@@ -9,6 +9,7 @@ import LoginPage from './pages/Login';
 import SetupPage from './pages/Setup';
 import ServersPage from './pages/Servers';
 import CreateServerPage from './pages/CreateServer';
+import ImportServerPage from './pages/ImportServer';
 import ServerLayout from './pages/server/ServerLayout';
 import OverviewTab from './pages/server/OverviewTab';
 import ConsoleTab from './pages/server/ConsoleTab';
@@ -90,6 +91,7 @@ export default function App() {
         {user.role === 'ADMIN' && (
           <Route path="/servers/new" element={<CreateServerPage />} />
         )}
+        {user.role === 'ADMIN' && <Route path="/servers/import" element={<ImportServerPage />} />}
         <Route path="/servers/:id" element={<ServerLayout />}>
           <Route index element={<OverviewTab />} />
           <Route path="console" element={<ConsoleTab />} />
