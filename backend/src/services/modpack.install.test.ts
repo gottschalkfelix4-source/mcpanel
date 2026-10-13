@@ -241,6 +241,29 @@ it('deaktiviert die beiden weiteren nachgewiesenen Client-Mods vor dem Start', a
   for (const file of ['tooltips.jar.disabled', 'freezefix.jar.disabled']) expect((await fs.stat(path.join(dir(), 'mods', file))).isFile()).toBe(true);
 });
 
+it('erkennt OceanBlock-Client-Mods bei NeoForge an der Mod-ID und erhält ihre Dateien sowie die Welt', async () => {
+  const zip = new AdmZip();
+  const originals = new Map<string, Buffer>();
+  for (const [file, id] of [['beliebig-a.jar', 'collapsible_groups'], ['beliebig-b.jar', 'euphoria_patcher'], ['server.jar', 'servermod']]) {
+    const jar = new AdmZip();
+    jar.addFile('META-INF/neoforge.mods.toml', Buffer.from(`[[mods]]\nmodId="${id}"\nversion="1.0"\n`));
+    const data = jar.toBuffer(); originals.set(file, data); zip.addFile('mods/' + file, data);
+  }
+  zip.addFile('modrinth.index.json', Buffer.from(JSON.stringify({ formatVersion: 1, game: 'minecraft', name: 'NeoForge-Test', versionId: 'new', files: [], dependencies: { minecraft: '1.21.1', neoforge: '21.1.248' } })));
+  for (const [file, data] of originals) {
+    zip.deleteFile('mods/' + file);
+    zip.addFile('overrides/mods/' + file, data);
+  }
+  m.archive = zip.toBuffer();
+  await installModpack('a', request, task());
+  for (const file of ['beliebig-a.jar', 'beliebig-b.jar']) {
+    expect(await fs.readFile(path.join(dir(), 'mods', file + '.disabled'))).toEqual(originals.get(file));
+    await expect(fs.stat(path.join(dir(), 'mods', file))).rejects.toMatchObject({ code: 'ENOENT' });
+  }
+  expect(await fs.readFile(path.join(dir(), 'mods/server.jar'))).toEqual(originals.get('server.jar'));
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+});
+
 it('wartet vor dem erfolgreichen Abschluss auf Minecraft und rollt einen Fehlstart zurück', async () => {
   archive([], { 'mods/new.jar': modJar('neu', '*') });
   m.ready.mockRejectedValueOnce(new Error('Minecraft-Start fehlgeschlagen'));

@@ -790,6 +790,8 @@ const CLIENT_ONLY_MOD_IDS: Record<string, string> = {
   miningspeedtooltips: 'verwendet beim Serverstart eine ausschließlich clientseitige Tooltip-API',
   // Als beidseitig deklariert; die leere Sprachdatei bricht Minecraft 1.20.1 ab.
   ftbquestsfreezefix: 'Client-Menü-Erweiterung mit einer leeren Sprachdatei, die den Serverstart abbricht',
+  collapsible_groups: 'Client-Oberfläche greift beim Laden auf Minecraft-Screen-Klassen zu',
+  euphoria_patcher: 'Shader-Patcher lädt ClientLevel-Klassen auf dem dedizierten Server',
 };
 
 const supplementarySchema = z.array(z.object({
@@ -1028,8 +1030,10 @@ async function disableClientOnlyMods(serverPath: string): Promise<ClientModFilte
     /\.jar$/i.test(f),
   );
 
+  const infoByFile = new Map(files.map((file) => [file, readForgeModInfo(path.join(modsDir, file))]));
   const candidates = files.filter((file) =>
-    CLIENT_ONLY_PREFIXES.some((prefix) => normalizeModName(file).startsWith(prefix)),
+    CLIENT_ONLY_PREFIXES.some((prefix) => normalizeModName(file).startsWith(prefix)) ||
+    infoByFile.get(file)?.provides.some((id) => Boolean(CLIENT_ONLY_MOD_IDS[id])),
   );
   if (candidates.length === 0) return { disabled: [], keptAsDependency: [] };
 
@@ -1037,7 +1041,7 @@ async function disableClientOnlyMods(serverPath: string): Promise<ClientModFilte
   const required = new Map<string, string>(); // modId -> Datei, die sie braucht
   for (const file of files) {
     if (candidates.includes(file)) continue;
-    const info = readForgeModInfo(path.join(modsDir, file));
+    const info = infoByFile.get(file);
     for (const modId of info?.requires ?? []) {
       if (!required.has(modId)) required.set(modId, file);
     }
@@ -1046,7 +1050,7 @@ async function disableClientOnlyMods(serverPath: string): Promise<ClientModFilte
   const result: ClientModFilterResult = { disabled: [], keptAsDependency: [] };
 
   for (const file of candidates) {
-    const info = readForgeModInfo(path.join(modsDir, file));
+    const info = infoByFile.get(file);
     const neededFor = (info?.provides ?? []).find((modId) => required.has(modId));
 
     if (neededFor) {
@@ -1056,7 +1060,7 @@ async function disableClientOnlyMods(serverPath: string): Promise<ClientModFilte
 
     await fs
       .rename(path.join(modsDir, file), path.join(modsDir, `${file}.disabled`))
-      .then(() => result.disabled.push({ file, reason: 'bekannte Client-Renderer-Mod' }))
+      .then(() => result.disabled.push({ file, reason: (info?.provides.map((id) => CLIENT_ONLY_MOD_IDS[id]).find(Boolean)) ?? 'bekannte Client-Renderer-Mod' }))
       .catch(() => {});
   }
 
