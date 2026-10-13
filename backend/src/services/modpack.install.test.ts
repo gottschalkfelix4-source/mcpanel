@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import AdmZip from 'adm-zip';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-const m = vi.hoisted(() => ({ root: '', archive: Buffer.alloc(0) as Buffer, row: {} as any, download: vi.fn(), recreate: vi.fn(), start: vi.fn(), stop: vi.fn(), ready: vi.fn(), cfVersion: {} as any }));
+const m = vi.hoisted(() => ({ root: '', archive: Buffer.alloc(0) as Buffer, row: {} as any, download: vi.fn(), recreate: vi.fn(), start: vi.fn(), stop: vi.fn(), ready: vi.fn(), ftb: vi.fn(), cfFind: vi.fn(), cfVersion: {} as any }));
 vi.mock('../config.js', () => ({
   serverDir: (id: string) => path.join(m.root, 'servers', id),
   serverBackupDir: (id: string) => path.join(m.root, 'backups', id), cacheDir: () => path.join(m.root, 'cache'),
@@ -19,8 +20,9 @@ vi.mock('./serverStartup.js', () => ({ waitForServerReady: m.ready }));
 vi.mock('../providers/curseforge.js', () => ({
   getVersion: async () => m.cfVersion,
   getProject: async () => ({ name: 'Pack', iconUrl: null }),
-  findServerPack: async () => null,
+  findServerPack: m.cfFind,
 }));
+vi.mock('../providers/ftb.js', () => ({ findServerPack: m.ftb }));
 vi.mock('../providers/modrinth.js', () => ({
   getVersion: async () => ({ id: 'new', name: 'new pack', filename: 'fixture.mrpack', downloadUrl: 'https://fixture.test/archive' }),
   getProject: async () => ({ name: 'Pack', iconUrl: null }), modrinthHeaders: () => ({}),
@@ -40,6 +42,7 @@ function archive(downloads: { path: string; downloads: string[] }[] = [], overri
 beforeEach(async () => {
   vi.resetAllMocks();
   m.ready.mockResolvedValue(undefined);
+  m.ftb.mockResolvedValue(null); m.cfFind.mockResolvedValue(null);
   m.cfVersion = { id: 'new', name: 'Serverpaket', filename: 'server.zip', downloadUrl: 'https://fixture.test/archive', isServerPack: true, gameVersions: ['1.20.1'], loaders: ['fabric'] };
   m.root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcpanel-modpack-test-'));
   m.row = { id: 'a', name: 'Test', type: 'PAPER', mcVersion: '1.20.1', extraEnv: {}, modpackProjectId: 'pack', modpackVersionId: 'old', quotaDiskMb: 0 };
@@ -291,4 +294,54 @@ it('übernimmt die Fabric-Version des offiziellen Serverpakets und erhält Welt 
   expect(m.row.extraEnv).toMatchObject({ TYPE: 'FABRIC', FABRIC_LOADER_VERSION: '0.18.4' });
   expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
   expect(await fs.readFile(path.join(dir(), 'config/user.conf'), 'utf8')).toBe('config original');
+});
+
+
+it('verweigert CurseForge-Client-Pakete ohne Serverpaket vor jedem Serverstopp', async () => {
+  m.cfVersion.isServerPack = false;
+  await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('Client-Pakete werden nicht installiert');
+  expect(m.download).not.toHaveBeenCalled();
+  expect(m.stop).not.toHaveBeenCalled();
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  expect(m.row.modpackVersionId).toBe('old');
+});
+
+it('weicht bei einem CurseForge-Ausfall nicht auf Client-Pakete oder FTB aus', async () => {
+  m.cfVersion.isServerPack = false; m.cfFind.mockRejectedValue(new Error('HTTP 503'));
+  await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('503');
+  expect(m.ftb).not.toHaveBeenCalled(); expect(m.stop).not.toHaveBeenCalled(); expect(m.download).not.toHaveBeenCalled();
+});
+
+it('verweigert ein als Serverpaket verknüpftes Client-Archiv vor dem Serverstopp', async () => {
+  const zip = new AdmZip(); zip.addFile('manifest.json', Buffer.from('{}')); m.archive = zip.toBuffer();
+  await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('Client-Manifest');
+  expect(m.stop).not.toHaveBeenCalled();
+});
+
+function ftbPlan(sha1 = createHash('sha1').update('new mod').digest('hex')) {
+  m.cfVersion.isServerPack = false;
+  m.ftb.mockResolvedValue({ projectId: 128, versionId: 100482, name: 'FTB OceanBlock 2', version: '1.21.1',
+    minecraftVersion: '1.21.1', loader: 'NEOFORGE', loaderVersion: '21.1.248', excludedClientFiles: 2,
+    downloads: [{ path: 'mods/server.jar', urls: ['https://fixture.test/mod'], size: 7, sha1 }] });
+}
+
+it('installiert das offizielle FTB-Manifest ohne Client-Archiv und erhält Welt, Konfiguration und Spielerdaten', async () => {
+  ftbPlan();
+  await fs.writeFile(path.join(dir(), 'ops.json'), '[{"name":"Spieler"}]');
+  await installModpack('a', { ...request, provider: 'curseforge', startAfter: true }, task());
+  expect(m.download.mock.calls.map(args => args[0])).toEqual(['https://fixture.test/mod']);
+  expect(await fs.readdir(path.join(dir(), 'mods'))).toEqual(['server.jar']);
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  expect(await fs.readFile(path.join(dir(), 'config/user.conf'), 'utf8')).toBe('config original');
+  expect(await fs.readFile(path.join(dir(), 'ops.json'), 'utf8')).toBe('[{"name":"Spieler"}]');
+  expect(m.row.extraEnv).toMatchObject({ TYPE: 'NEOFORGE', NEOFORGE_VERSION: '21.1.248' });
+  expect(m.start).toHaveBeenCalled(); expect(m.ready).toHaveBeenCalled();
+});
+
+it('bricht bei beschädigten FTB-Dateien vor dem Serverstopp ab und erhält die alte Installation', async () => {
+  ftbPlan('0'.repeat(40));
+  await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('Pflichtdatei');
+  expect(m.stop).not.toHaveBeenCalled();
+  expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
+  expect(m.row.modpackVersionId).toBe('old');
 });

@@ -54,8 +54,8 @@ das Panel steuert sie über den Docker-Socket.
 
 **Modpacks**
 - Suche über Modrinth und CurseForge (gemeinsam oder einzeln), Filter nach MC-Version und Sortierung
-- Installer für `.mrpack` (Modrinth) und `manifest.json`-Archive (CurseForge), inkl. Serverpaketen ohne Manifest
-- **Serverpakete haben immer Vorrang** – siehe [Client- und Serverpakete](#client--und-serverpakete)
+- Installer für `.mrpack` (Modrinth), offizielle CurseForge-Serverarchive und FTB-Serverdateien
+- **Kein Rückfall auf CurseForge-Client-Pakete** – siehe [Client- und Serverpakete](#client--und-serverpakete)
 - Loader (Forge / NeoForge / Fabric / Quilt) und Minecraft-Version werden automatisch gesetzt
 - Updater mit Versionsvergleich, automatischem Backup und optionalem Schutz für eigene `config/`-Änderungen
 - Welt, `server.properties`, Whitelist, OP- und Bannlisten bleiben bei Updates immer erhalten
@@ -434,26 +434,37 @@ listet auch reine Client-Mods wie Sodium, Iris oder OptiFine. Auf einem dedizier
 Server stürzen die beim Start ab, weil sie OpenGL/LWJGL erwarten
 (`ClassNotFoundException: org.lwjgl.Version`).
 
-Der Installer geht deshalb in dieser Reihenfolge vor:
+Der Installer verwendet für eine CurseForge-Auswahl:
 
-1. **Serverpaket des Autors**, wenn CurseForge eines verknüpft hat (`serverPackFileId`).
-2. **Serverpaket über die Versionskennung**, wenn der Autor eines hochgeladen, aber
-   nicht verknüpft hat. Zugeordnet wird nur bei übereinstimmender Versionsnummer
-   *und* passender Minecraft-Version.
-3. **Client-Paket**, wenn es kein Serverpaket gibt. Ob danach gefiltert wird,
-   hängt vom Loader ab (siehe unten).
+1. **Ein ausdrücklich zugeordnetes CurseForge-Serverpaket** (`serverPackFileId`
+   oder `parentProjectFileId`). Ähnliche Dateinamen allein gelten nicht als Zuordnung.
+2. **Das offizielle FTB-Servermanifest**, falls kein CurseForge-Serverpaket
+   zugeordnet ist. FTB muss die ausgewählte CurseForge-Projekt-ID bestätigen.
+   Pack-Version, Minecraft-Version und Loader müssen eindeutig passen. Dies
+   funktioniert beispielsweise für FTB OceanBlock 2 direkt aus der CurseForge-Suche.
+   Eine zusätzliche FTB-Anmeldung oder ein API-Schlüssel ist nicht nötig.
+3. **Abbruch**, wenn keine eindeutige Serverquelle verfügbar ist oder deren Abruf
+   fehlschlägt. Es wird weder eine andere Pack-Version noch ein CurseForge-Client-Paket
+   als Ersatz installiert. Der bestehende Server bleibt bis zur vollständigen
+   Vorbereitung des Pakets unverändert und läuft weiter.
 
-Welcher Weg genommen wurde, steht im Installationsprotokoll des Tasks. In der
-Versionsauswahl zeigt ein Abzeichen „Serverpaket" bzw. „nur Client-Paket", was
-dich erwartet.
+FTB-Dateien mit `clientonly: true` werden nicht heruntergeladen. Alle übrigen
+Dateien werden anhand ihrer offiziellen Größe und SHA-1-Prüfsumme geprüft. Den
+Loader installiert der Minecraft-Container in der exakt angegebenen Version.
+Quelle und FTB-Projekt-/Versions-ID stehen im Installationsprotokoll.
+
+Bei Updates bleiben Welt und Spielerdaten erhalten; mit `keepConfig` zusätzlich
+bestehende Konfigurationen. Vor dem Austausch wird standardmäßig ein Backup
+angelegt. Die bestehende transaktionale Installation mit Rücknahme bei Fehlern
+wird auch für FTB verwendet.
 
 #### Wer sortiert die Client-Mods aus
 
 | Quelle / Loader | Vorgehen |
 |---|---|
 | Modrinth (`.mrpack`) | Das Archiv markiert pro Datei, ob sie serverseitig läuft (`env.server`). Der Installer lädt Client-Only-Dateien gar nicht erst herunter und wertet `server-overrides/` aus. |
-| CurseForge + **Fabric/Quilt** | Mods mit `"environment": "client"` bleiben **unangetastet** — der Loader überspringt sie selbst, und die Jars werden noch für die Abhängigkeitsauflösung anderer Mods gebraucht. Deaktiviert wird nur, was faktisch clientseitig ist, das aber nicht angibt (siehe unten). |
-| CurseForge + **Forge/NeoForge** | Es gibt keine standardisierte Seiten-Angabe. Deshalb greift eine kurze Liste bekannter Renderer (Sodium, Iris, Oculus, Rubidium, Embeddium, OptiFine …), die serverseitig auf LWJGL zugreifen und den Start abbrechen. |
+| Modrinth + **Fabric/Quilt** | Mods mit `"environment": "client"` bleiben **unangetastet** — der Loader überspringt sie selbst, und die Jars werden noch für die Abhängigkeitsauflösung anderer Mods gebraucht. Deaktiviert wird nur, was faktisch clientseitig ist, das aber nicht angibt (siehe unten). |
+| Modrinth + **Forge/NeoForge** | Es gibt keine standardisierte Seiten-Angabe. Deshalb greift eine kurze Liste bekannter Renderer (Sodium, Iris, Oculus, Rubidium, Embeddium, OptiFine …), die serverseitig auf LWJGL zugreifen und den Start abbrechen. |
 
 **Fabric/Quilt – falsch deklarierte Client-Mods.** Der Loader erkennt nicht, dass
 eine als beidseitig deklarierte Mod nur wegen einer Client-Mod existiert. Sie

@@ -4,6 +4,7 @@ import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths, 
 import { parseProperties } from './properties.js';
 import { withServerOperation } from './operations.js';
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
@@ -14,6 +15,7 @@ import { prisma } from '../db.js';
 import { downloadToFile } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
 import * as curseforge from '../providers/curseforge.js';
+import * as ftb from '../providers/ftb.js';
 import type { ProjectVersion, ProviderId } from '../providers/types.js';
 import type { TaskHandle } from './tasks.js';
 import * as dockerSvc from './docker.js';
@@ -49,7 +51,7 @@ interface PackPlan {
   loader: Loader;
   loaderVersion: string | null;
   /** Dateien, die heruntergeladen werden müssen (Pfad relativ zu /data). */
-  downloads: { path: string; urls: string[]; size: number }[];
+  downloads: { path: string; urls: string[]; size: number; sha1?: string }[];
   /** Ordner im Archiv, deren Inhalt nach /data kopiert wird. */
   overrideDirs: string[];
   /**
@@ -336,38 +338,32 @@ async function loadPackPlan(server: Server, request: InstallRequest, task: TaskH
       : await curseforge.getProject(request.projectId);
 
   await task.log(`Modpack: ${project.name} – ${version.name}`);
+  if (project.serverSupport === 'unsupported') {
+    throw badRequest('Dieses Modpack ist vom Anbieter ausdrücklich als reines Client-Paket markiert und kann nicht als Server installiert werden.');
+  }
 
-  // --- Serverpaket bevorzugen ---------------------------------------------
-  // CurseForge-Modpacks sind Client-Pakete: das Manifest enthält auch reine
-  // Client-Mods (Sodium & Co.), die einen Server beim Start abstürzen lassen.
-  // Bieten die Autoren ein Serverpaket an, nehmen wir immer das.
+  // Nur ein nachweislich zugeordnetes Serverpaket verwenden. Abruffehler sind
+  // keine Erlaubnis, stattdessen ein Client-Paket zu installieren.
   let archiveSource = version;
-
   if (request.provider === 'curseforge' && !version.isServerPack) {
-    try {
-      const found = await curseforge.findServerPack(request.projectId, version);
-      if (found) {
-        archiveSource = found.pack;
-        const source =
-          found.route === 'linked'
-            ? 'Serverpaket des Autors'
-            : 'Passendes Serverpaket über die Versionskennung gefunden';
-        await task.log(
-          `${source}: ${found.pack.filename} ` +
-            `(${(found.pack.fileSize / 1024 / 1024).toFixed(0)} MB) – wird statt des Client-Pakets verwendet.`,
-        );
-      } else {
-        // Wie mit Client-Mods umgegangen wird, hängt vom Loader ab – das steht
-        // weiter unten im Protokoll, sobald das Archiv analysiert ist.
-        await task.log(
-          'HINWEIS: Dieses Modpack bietet kein Serverpaket an – es wird das Client-Paket installiert.',
-        );
+    const found = await curseforge.findServerPack(request.projectId, version);
+    if (found) {
+      archiveSource = found.pack;
+      const minecraft = pickMinecraftVersion(version);
+      if ((minecraft && !found.pack.gameVersions.includes(minecraft))
+        || (version.loaders.length > 0 && found.pack.loaders.length > 0
+          && !version.loaders.some(loader => found.pack.loaders.includes(loader)))) {
+        throw badRequest('Minecraft-Version oder Loader des verknüpften CurseForge-Serverpakets passen nicht zur Auswahl.');
       }
-    } catch (err) {
-      await task.log(
-        `WARNUNG: Serverpaket nicht abrufbar (${err instanceof Error ? err.message : err}) – ` +
-          'nutze das Client-Paket und sortiere Client-Mods selbst aus.',
-      );
+      await task.log(`Serverpaket des Autors: ${found.pack.filename} (Datei ${found.pack.id}).`);
+    } else {
+      const official = await ftb.findServerPack(project, version);
+      if (!official) throw badRequest('Für diese Version wurde kein eindeutig zugeordnetes Serverpaket bei CurseForge oder FTB gefunden. Client-Pakete werden nicht installiert.');
+      const plan: PackPlan = { ...official, overrideDirs: [], isServerPack: true, zip: new AdmZip() };
+      await task.log(`Offizielles FTB-Serverpaket: ${official.name} ${official.version} · Projekt ${official.projectId} · Version ${official.versionId}.`);
+      await task.log(`${official.downloads.length} Serverdateien mit SHA-1-Prüfung; ${official.excludedClientFiles} von FTB als clientseitig markierte Dateien werden nicht heruntergeladen.`);
+      await task.log(`Minecraft ${plan.minecraftVersion} · ${plan.loader} ${plan.loaderVersion ?? ''}`);
+      return { plan, version, project };
     }
   }
 
@@ -463,6 +459,12 @@ async function prefetchDownloads(plan: PackPlan, dir: string, server: Server, ta
       for (const candidate of item.urls) {
         try {
           const size = await downloadToFile(candidate, archiveEntryPath(dir, item.path), { retries: 2, maxBytes: remaining });
+          if (item.sha1) {
+            const bytes = await fs.readFile(archiveEntryPath(dir, item.path));
+            if (bytes.length !== item.size || createHash('sha1').update(bytes).digest('hex') !== item.sha1) {
+              throw badRequest(`Prüfsumme oder Größe der FTB-Datei stimmt nicht: ${item.path}`);
+            }
+          }
           remaining -= size;
           ok = true;
           break;
@@ -576,14 +578,6 @@ async function planFromMrpack(archivePath: string): Promise<PackPlan> {
 // CurseForge (manifest.json oder fertiges Serverpaket)
 // ---------------------------------------------------------------------------
 
-interface CfManifest {
-  minecraft: { version: string; modLoaders: { id: string; primary?: boolean }[] };
-  name: string;
-  version: string;
-  files: { projectID: number; fileID: number; required?: boolean }[];
-  overrides?: string;
-}
-
 interface CfHint {
   minecraftVersion: string;
   loader: Loader;
@@ -627,58 +621,7 @@ async function planFromCurseforge(
     };
   }
 
-  // --- Client-Paket mit Manifest ------------------------------------------
-  const manifest = JSON.parse(entry.getData().toString('utf8')) as CfManifest;
-  const primary =
-    manifest.minecraft.modLoaders.find((l) => l.primary) ?? manifest.minecraft.modLoaders[0];
-
-  let loader: Loader = 'FORGE';
-  let loaderVersion: string | null = null;
-  if (primary?.id) {
-    const [rawName, ...rest] = primary.id.split('-');
-    const name = rawName.toLowerCase();
-    loaderVersion = rest.join('-') || null;
-    if (name === 'neoforge') loader = 'NEOFORGE';
-    else if (name === 'fabric') loader = 'FABRIC';
-    else if (name === 'quilt') loader = 'QUILT';
-    else loader = 'FORGE';
-  }
-
-  await task.update(22, `Mod-Metadaten werden geladen (${manifest.files.length}) …`);
-  const files = await curseforge.getFilesBulk(manifest.files.map((f) => f.fileID));
-  const byId = new Map(files.map((f) => [f.id, f]));
-
-  const downloads: PackPlan['downloads'] = [];
-  for (const wanted of manifest.files) {
-    const file = byId.get(wanted.fileID);
-    if (!file) {
-      throw new Error(`Pflichtdatei ${wanted.fileID} fehlt im Katalog`);
-    }
-    const urls: string[] = [];
-    if (file.downloadUrl) urls.push(file.downloadUrl);
-    const fallback = await curseforge.resolveDownloadUrl(
-      wanted.projectID,
-      wanted.fileID,
-      file.fileName,
-    );
-    if (fallback && !urls.includes(fallback)) urls.push(fallback);
-    if (urls.length === 0) {
-      throw new Error(`Kein Download für Pflichtdatei ${file.fileName} verfügbar`);
-    }
-    downloads.push({ path: `mods/${file.fileName}`, urls, size: file.fileLength });
-  }
-
-  return {
-    name: manifest.name,
-    version: manifest.version,
-    minecraftVersion: manifest.minecraft.version,
-    loader,
-    loaderVersion,
-    downloads,
-    overrideDirs: [manifest.overrides ?? 'overrides'],
-    isServerPack: false,
-    zip,
-  };
+  throw badRequest('Die ausgewählte CurseForge-Datei enthält ein Client-Manifest statt eines fertigen Serverpakets. Installation abgebrochen; vorhandene Daten bleiben erhalten.');
 }
 
 /** Serverpakete packen ihren Inhalt oft in einen einzelnen Wurzelordner. */

@@ -1,4 +1,5 @@
 import { fetchJson } from '../lib/download.js';
+import { badRequest } from '../lib/errors.js';
 import { getCurseforgeKey } from '../services/settings.js';
 import type {
   ProjectSummary,
@@ -104,6 +105,7 @@ interface CfFile {
   gameVersions: string[];
   isServerPack?: boolean;
   serverPackFileId?: number;
+  parentProjectFileId?: number;
 }
 
 export async function search(q: SearchQuery): Promise<SearchResponse> {
@@ -163,85 +165,41 @@ export async function getVersions(modId: string, page = 1): Promise<ProjectVersi
     { headers: await headers() },
     'CurseForge',
   );
-  return linkServerPacks(data.data.map(toVersion));
+  const parents = new Set(data.data.filter(f => !f.isServerPack).map(f => f.id));
+  return data.data.filter(f => !f.isServerPack || !parents.has(f.parentProjectFileId ?? 0)).map(f => {
+    const linked = data.data.filter(candidate => candidate.isServerPack && candidate.parentProjectFileId === f.id);
+    return toVersion(!f.serverPackFileId && linked.length === 1 ? { ...f, serverPackFileId: linked[0].id } : f);
+  });
 }
 
-/**
- * CurseForge listet Serverpakete als ganz normale Dateien. Für die
- * Versionsauswahl sind sie aber kein eigener Stand, sondern gehören zu einer
- * Version. Deshalb blenden wir sie aus der Liste aus und hängen sie an die
- * passende Datei – auch dann, wenn der Autor sie nicht offiziell verknüpft hat.
- */
-function linkServerPacks(versions: ProjectVersion[]): ProjectVersion[] {
-  // Kandidaten: offiziell markiert oder am Namen erkennbar.
-  const candidates = versions.filter((v) => v.isServerPack || looksLikeServerPack(v));
-  if (candidates.length === 0) return versions;
-
-  const mains = versions.filter((v) => !candidates.includes(v));
-
-  const sameVersion = (a: ProjectVersion, b: ProjectVersion) => {
-    const token = versionToken(a);
-    return (
-      token !== null &&
-      token === versionToken(b) &&
-      // Zusätzlich die Minecraft-Version abgleichen, damit nichts Fremdes passt.
-      (a.gameVersions.length === 0 ||
-        b.gameVersions.length === 0 ||
-        b.gameVersions.some((g) => a.gameVersions.includes(g)))
-    );
-  };
-
-  // Ein Kandidat gilt nur dann als Serverpaket, wenn es eine passende
-  // Hauptdatei gibt – sonst ist es eine eigenständige Version und bleibt stehen.
-  const packs = candidates.filter((pack) => mains.some((main) => sameVersion(main, pack)));
-
-  return versions
-    .filter((v) => !packs.includes(v))
-    .map((version) => {
-      if (version.serverPackFileId) return version;
-      const match = packs.find((pack) => sameVersion(version, pack));
-      return match ? { ...version, serverPackFileId: Number(match.id) } : version;
-    });
-}
-
-/** Serverpakete heißen fast immer "ServerFiles…", "…-server.zip" o. Ä. */
-function looksLikeServerPack(version: ProjectVersion): boolean {
-  const text = `${version.name} ${version.filename}`.toLowerCase();
-  return /server[\s_-]*(files|pack)/.test(text) || /[-_ ]server\.(zip|jar)$/.test(text);
-}
-
-/** Zieht die Versionskennung (z. B. "8.0") aus Anzeigename und Dateiname. */
-function versionToken(version: ProjectVersion): string | null {
-  const match = `${version.name} ${version.filename}`.match(/(\d+\.\d+(?:\.\d+)*)/);
-  return match ? match[1] : null;
-}
-
-export type ServerPackRoute = 'linked' | 'matched';
-
-/**
- * Sucht das zu einer Datei gehörende Serverpaket.
- * `linked` = vom Autor offiziell verknüpft, `matched` = über die
- * Versionskennung zugeordnet (wird beim Installieren protokolliert).
- */
+/** Nur vom Anbieter ausdrücklich zugeordnete Dateien gelten als Serverpakete. */
 export async function findServerPack(
   modId: string,
   version: ProjectVersion,
-): Promise<{ pack: ProjectVersion; route: ServerPackRoute } | null> {
+): Promise<{ pack: ProjectVersion; route: 'linked' } | null> {
   if (version.serverPackFileId) {
     const pack = await getVersion(modId, String(version.serverPackFileId));
+    if (pack.projectId !== modId || !pack.isServerPack) {
+      throw badRequest('Die verknüpfte CurseForge-Datei ist kein bestätigtes Serverpaket dieses Projekts.');
+    }
     return { pack, route: 'linked' };
   }
-
-  // Nicht verknüpft: über die Dateiliste suchen. getVersions() hat die
-  // Zuordnung bereits versucht, also dort nachsehen.
-  const versions = await getVersions(modId);
-  const enriched = versions.find((v) => v.id === version.id);
-  if (enriched?.serverPackFileId) {
-    const pack = await getVersion(modId, String(enriched.serverPackFileId));
-    return { pack, route: 'matched' };
+  // Auch ältere Versionen und separat gelistete Serverdateien prüfen.
+  const candidates: CfFile[] = [];
+  for (let index = 0; index < 10000; index += 50) {
+    const result = await fetchJson<{ data: CfFile[]; pagination: { totalCount: number } }>(
+      `${API}/v1/mods/${modId}/files?index=${index}&pageSize=50`,
+      { headers: await headers() }, 'CurseForge',
+    );
+    candidates.push(...result.data.filter(f => f.isServerPack && f.parentProjectFileId === Number(version.id)));
+    if (result.data.length < 50 || index + result.data.length >= result.pagination.totalCount) break;
+    if (index === 9950) throw badRequest('Die CurseForge-Dateiliste ist zu groß für eine eindeutige Serverpaket-Zuordnung.');
   }
-
-  return null;
+  if (candidates.length > 1) throw badRequest('CurseForge meldet mehrere Serverpakete für diese Version. Installation abgebrochen.');
+  if (!candidates.length) return null;
+  const pack = toVersion(candidates[0]);
+  if (pack.projectId !== modId) throw badRequest('Das CurseForge-Serverpaket gehört zu einem anderen Projekt.');
+  return { pack, route: 'linked' };
 }
 
 export async function getVersion(modId: string, fileId: string): Promise<ProjectVersion> {
