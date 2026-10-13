@@ -52,7 +52,10 @@ it('blendet bei Modrinth nur ausdrücklich reine Client-Projekte aus', async () 
   vi.mocked(fetchJson).mockResolvedValue({ hits: [], total_hits: 0 });
   await modrinth.search({ serverOnly: true });
   const params = new URL(String(vi.mocked(fetchJson).mock.calls[0][0])).searchParams;
-  expect(JSON.parse(params.get('facets')!)).toContainEqual(['server_side:required', 'server_side:optional', 'server_side:unknown']);
+  const facets = JSON.parse(params.get('facets')!);
+  expect(facets[1]).toEqual(expect.arrayContaining(['environment:dedicated_server_only', 'environment:client_and_server', 'environment:unknown']));
+  expect(facets[1]).not.toContain('environment:client_only');
+  expect(facets[1]).not.toContain('environment:singleplayer_only');
 });
 
 it.each([{ serverOnly: false }, { serverOnly: true, type: 'plugin' as const }])('lässt alle Projekte beziehungsweise Plugins ohne Seitenfilter suchen: %j', async (query) => {
@@ -60,4 +63,18 @@ it.each([{ serverOnly: false }, { serverOnly: true, type: 'plugin' as const }])(
   await modrinth.search(query);
   const params = new URL(String(vi.mocked(fetchJson).mock.calls[0][0])).searchParams;
   expect(params.get('facets')).not.toContain('server_side:');
+  expect(params.get('facets')).not.toContain('environment:');
+});
+
+it.each([
+  [['client_only', 'dedicated_server_only'], 'supported'],
+  [['client_only', 'unknown'], 'unknown'],
+  [['client_only', 'singleplayer_only'], 'unsupported'],
+  [['neue_unbekannte_umgebung'], 'unknown'],
+  [undefined, 'unsupported'],
+])('wertet mehrere Modrinth-Einsatzumgebungen vor dem veralteten Seitenfeld aus: %j', async (environment, expected) => {
+  vi.mocked(fetchJson).mockResolvedValue({ hits: [{ project_id: 'paket', server_side: 'unsupported', environment }], total_hits: 1 });
+  expect((await modrinth.search({})).hits[0].serverSupport).toBe(expected);
+  vi.mocked(fetchJson).mockResolvedValue({ id: 'paket', server_side: 'unsupported', environment });
+  expect((await modrinth.getProject('paket')).serverSupport).toBe(expected);
 });

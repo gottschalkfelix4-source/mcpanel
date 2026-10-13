@@ -24,6 +24,7 @@ interface MrHit {
   date_modified: string;
   /** "required" | "optional" | "unsupported" | "unknown" */
   server_side?: string;
+  environment?: string[];
 }
 
 interface MrFile {
@@ -54,6 +55,12 @@ const SORT_MAP: Record<string, string> = {
 const PROJECT_TYPES = new Set(['mod', 'plugin', 'modpack']);
 const projectType = (type?: string) => (type && PROJECT_TYPES.has(type) ? type : 'modpack');
 
+const SERVER_ENVIRONMENTS = [
+  'client_and_server', 'client_only_server_optional', 'server_only',
+  'server_only_client_optional', 'dedicated_server_only', 'client_or_server',
+  'client_or_server_prefers_both',
+];
+
 export async function search(q: SearchQuery): Promise<SearchResponse> {
   const type = projectType(q.type);
   const facets: string[][] = [[`project_type:${type}`]];
@@ -62,7 +69,9 @@ export async function search(q: SearchQuery): Promise<SearchResponse> {
   // Ein Plugin laeuft ausschliesslich serverseitig; die Facette wuerde hier
   // nur Projekte aussieben, die ihre Seite gar nicht erst angeben.
   // Sonst filtert Modrinth selbst - die Facette wirkt als ODER in der Gruppe.
-  if (q.serverOnly && type !== 'plugin') facets.push(['server_side:required', 'server_side:optional', 'server_side:unknown']);
+  if (q.serverOnly && type !== 'plugin') {
+    facets.push([...SERVER_ENVIRONMENTS, 'unknown'].map((value) => `environment:${value}`));
+  }
 
   const pageSize = q.pageSize ?? 20;
   const params = new URLSearchParams({
@@ -95,13 +104,20 @@ export async function search(q: SearchQuery): Promise<SearchResponse> {
         gameVersions: h.versions,
         websiteUrl: `https://modrinth.com/${type}/${h.slug}`,
         updatedAt: h.date_modified,
-        serverSupport: toServerSupport(h.server_side),
+        serverSupport: toServerSupport(h.server_side, h.environment),
       }),
     ),
   };
 }
 
-function toServerSupport(serverSide: string | undefined) {
+function toServerSupport(serverSide: string | undefined, environments?: string[]) {
+  // Ein Projekt kann getrennte Client- und Serverversionen enthalten. Das alte
+  // server_side-Feld beschreibt dann unter Umständen nur die Clientvariante.
+  if (environments?.length) {
+    if (environments.some((value) => SERVER_ENVIRONMENTS.includes(value))) return 'supported' as const;
+    if (environments.every((value) => ['client_only', 'singleplayer_only'].includes(value))) return 'unsupported' as const;
+    return 'unknown' as const;
+  }
   if (serverSide === 'required' || serverSide === 'optional') return 'supported' as const;
   if (serverSide === 'unsupported') return 'unsupported' as const;
   return 'unknown' as const;
@@ -120,6 +136,7 @@ export async function getProject(id: string): Promise<ProjectSummary> {
     updated: string;
     project_type: string;
     server_side?: string;
+    environment?: string[];
   }>(`${API}/project/${id}`, { headers: headers() }, 'Modrinth');
 
   return {
@@ -135,7 +152,7 @@ export async function getProject(id: string): Promise<ProjectSummary> {
     gameVersions: p.game_versions,
     websiteUrl: `https://modrinth.com/${p.project_type}/${p.slug}`,
     updatedAt: p.updated,
-    serverSupport: toServerSupport(p.server_side),
+    serverSupport: toServerSupport(p.server_side, p.environment),
   };
 }
 
