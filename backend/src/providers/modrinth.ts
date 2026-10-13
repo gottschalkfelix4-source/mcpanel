@@ -62,7 +62,7 @@ export async function search(q: SearchQuery): Promise<SearchResponse> {
   // Ein Plugin laeuft ausschliesslich serverseitig; die Facette wuerde hier
   // nur Projekte aussieben, die ihre Seite gar nicht erst angeben.
   // Sonst filtert Modrinth selbst - die Facette wirkt als ODER in der Gruppe.
-  if (q.serverOnly && type !== 'plugin') facets.push(['server_side:required', 'server_side:optional']);
+  if (q.serverOnly && type !== 'plugin') facets.push(['server_side:required', 'server_side:optional', 'server_side:unknown']);
 
   const pageSize = q.pageSize ?? 20;
   const params = new URLSearchParams({

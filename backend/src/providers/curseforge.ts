@@ -90,7 +90,7 @@ interface CfMod {
   dateModified: string;
   latestFilesIndexes?: { gameVersion: string }[];
   /** Die Suche liefert die neuesten Dateien gleich mit – inkl. Serverpaket-ID. */
-  latestFiles?: { serverPackFileId?: number }[];
+  latestFiles?: { serverPackFileId?: number; isServerPack?: boolean }[];
 }
 
 interface CfFile {
@@ -109,10 +109,10 @@ interface CfFile {
 export async function search(q: SearchQuery): Promise<SearchResponse> {
   const pageSize = q.pageSize ?? 20;
 
-  // CurseForge kennt keinen Filter für Serverpakete – wir müssen nach dem
-  // Abruf aussortieren. Deshalb großzügiger anfragen, damit die Seite voll wird.
-  const filterServerPacks = Boolean(q.serverOnly) && (q.type ?? 'modpack') === 'modpack';
-  const fetchSize = Math.min(50, filterServerPacks ? pageSize * 2 : pageSize);
+  // CurseForge meldet keine verlässliche Client-/Server-Eignung. Fehlende
+  // Serverpaket-IDs sind kein Ausschlussgrund (z. B. externe FTB-Serverdateien).
+  // Ungeprüfte Treffer behalten, damit auch Seiten und Gesamtzahl stimmen.
+  const fetchSize = pageSize;
 
   const params = new URLSearchParams({
     gameId: String(GAME_ID),
@@ -136,10 +136,7 @@ export async function search(q: SearchQuery): Promise<SearchResponse> {
     'CurseForge',
   );
 
-  let hits = data.data.map(toSummary);
-  if (filterServerPacks) {
-    hits = hits.filter((hit) => hit.hasServerPack).slice(0, pageSize);
-  }
+  const hits = data.data.map(toSummary);
 
   return {
     total: data.pagination?.totalCount ?? data.data.length,
@@ -306,7 +303,7 @@ export async function getFilesBulk(fileIds: number[]): Promise<CfFile[]> {
 function toSummary(m: CfMod): ProjectSummary {
   // Ein Serverpaket ist der beste Beleg dafür, dass das Pack serverseitig
   // gedacht ist. Fehlt es, heißt das nicht "läuft nicht" – nur "ungeprüft".
-  const hasServerPack = (m.latestFiles ?? []).some((f) => Boolean(f.serverPackFileId));
+  const hasServerPack = (m.latestFiles ?? []).some((f) => Boolean(f.serverPackFileId) || f.isServerPack === true);
 
   return {
     serverSupport: hasServerPack ? 'supported' : 'unknown',

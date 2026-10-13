@@ -15,7 +15,7 @@ export interface SearchQuery {
   page?: number;
   pageSize?: number;
   sort?: 'relevance' | 'downloads' | 'updated' | 'newest';
-  /** Nur Projekte liefern, die sich auf einem Server betreiben lassen. */
+  /** Ausdrücklich reine Client-Projekte ausblenden; ungeprüfte Projekte behalten. */
   serverOnly?: boolean;
 }
 

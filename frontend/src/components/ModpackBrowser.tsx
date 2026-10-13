@@ -209,15 +209,22 @@ export function ModpackBrowser({
             )}
             title={
               serverOnly
-                ? 'Es werden nur Packs gezeigt, die serverseitig laufen. Klicken für alle.'
+                ? 'Reine Client-Packs laut Anbieter werden ausgeblendet. Ungeprüfte Packs bleiben sichtbar.'
                 : 'Es werden alle Packs gezeigt – auch reine Client-Packs.'
             }
           >
             <ServerIcon size={12} />
-            {serverOnly ? 'nur servertauglich' : 'alle Packs'}
+            {serverOnly ? 'Client-Packs ausblenden' : 'alle Packs'}
           </button>
         )}
       </div>
+
+      {effectiveServerOnly && !isPlugin && (
+        <InfoNote>
+          Ungeprüfte Packs bleiben sichtbar: Ein fehlendes Serverpaket bei CurseForge bedeutet
+          nicht, dass das Pack nur für Clients ist. Manche Anbieter stellen Serverdateien separat bereit.
+        </InfoNote>
+      )}
 
       {!effectiveServerOnly && !isPlugin && (
         <InfoNote>
@@ -453,10 +460,10 @@ function VersionPicker({
                     ))}
                     {showServerPack && version.provider === 'curseforge' && (
                       <Badge
-                        tone={version.serverPackFileId ? 'green' : 'neutral'}
+                        tone={version.serverPackFileId || version.isServerPack ? 'green' : 'neutral'}
                         className="!text-[9px]"
                       >
-                        {version.serverPackFileId ? 'Serverpaket' : 'nur Client-Paket'}
+                        {version.serverPackFileId || version.isServerPack ? 'Serverpaket' : 'kein Serverpaket verknüpft'}
                       </Badge>
                     )}
                     {pruefbar && !passt(version) && (
