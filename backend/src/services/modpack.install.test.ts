@@ -318,6 +318,50 @@ it('verweigert ein als Serverpaket verknüpftes Client-Archiv vor dem Serverstop
   expect(m.stop).not.toHaveBeenCalled();
 });
 
+it.each(['', 'serverpack/'])('installiert ein Pixelmon-ServerPackCreator-Paket mit Manifest unter "%s"', async root => {
+  m.cfVersion = { ...m.cfVersion, isServerPack: false, gameVersions: ['1.21.1'], loaders: ['neoforge'] };
+  m.cfFind.mockResolvedValue({ pack: { ...m.cfVersion, id: '7454494', filename: 'serverpack9314.zip', isServerPack: true } });
+  const zip = new AdmZip();
+  // Die Dateiliste des echten Pakets nennt noch 9.3.9, enthalten ist 9.3.14.
+  // Entscheidend sind die fertigen Dateien, nicht diese veraltete Inventarliste.
+  zip.addFile(root + 'manifest.json', Buffer.from(JSON.stringify({
+    files: ['config', 'mods\\Pixelmon-1.21.1-9.3.9-server.jar'],
+    minecraftVersion: '1.21.1', modloader: 'NeoForge', modloaderVersion: '21.1.200', serverPackCreatorVersion: '7.3.0',
+  })));
+  zip.addFile(root + 'variables.txt', Buffer.from('MINECRAFT_VERSION=1.21.1\nMODLOADER=NeoForge\nMODLOADER_VERSION=21.1.200\n'));
+  zip.addFile(root + 'mods/Pixelmon-1.21.1-9.3.14-server.jar', modJar('pixelmon', '*'));
+  zip.addFile(root + 'config/pixelmon/config.yml', Buffer.from('pixelmon: true'));
+  m.archive = zip.toBuffer();
+  await installModpack('a', { ...request, provider: 'curseforge', startAfter: false, keepConfig: false }, task());
+  expect(await fs.readdir(path.join(dir(), 'mods'))).toEqual(['Pixelmon-1.21.1-9.3.14-server.jar']);
+  expect(await fs.readFile(path.join(dir(), 'config/pixelmon/config.yml'), 'utf8')).toBe('pixelmon: true');
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  expect(m.row).toMatchObject({ mcVersion: '1.21.1', modpackVersionId: 'new', extraEnv: { TYPE: 'NEOFORGE', NEOFORGE_VERSION: '21.1.200' } });
+});
+
+it.each([
+  { manifestType: 'minecraftModpack', files: [{ projectID: 1, fileID: 2 }] },
+  { manifestType: 'minecraftModpack', files: [], serverPackCreatorVersion: '7.3.0' },
+])('verweigert Client-Manifeste auch mit enthaltenen Mods: %j', async manifest => {
+  const zip = new AdmZip();
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest)));
+  zip.addFile('mods/client.jar', modJar('clientmod', '*'));
+  m.archive = zip.toBuffer();
+  await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('Client-Manifest');
+  expect(m.stop).not.toHaveBeenCalled();
+  expect(m.row.modpackVersionId).toBe('old');
+});
+
+it('verweigert ServerPackCreator-Manifeste ohne enthaltene Mod-Dateien vor dem Serverstopp', async () => {
+  const zip = new AdmZip();
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify({ serverPackCreatorVersion: '7.3.0', files: ['mods/fehlt.jar'] })));
+  zip.addFile('mods/', Buffer.alloc(0));
+  m.archive = zip.toBuffer();
+  await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('keine fertigen Mod-Dateien');
+  expect(m.stop).not.toHaveBeenCalled();
+  expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
+});
+
 function ftbPlan(sha1 = createHash('sha1').update('new mod').digest('hex')) {
   m.cfVersion.isServerPack = false;
   m.ftb.mockResolvedValue({ projectId: 128, versionId: 100482, name: 'FTB OceanBlock 2', version: '1.21.1',

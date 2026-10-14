@@ -591,37 +591,49 @@ async function planFromCurseforge(
   hint: CfHint,
 ): Promise<PackPlan> {
   const zip = new AdmZip(archivePath);
-  const entry = zip.getEntry('manifest.json');
+  const root = detectArchiveRoot(zip);
+  const entry = zip.getEntry(root + 'manifest.json');
 
-  // --- Serverpaket: keine manifest.json, dafür fertige mods/ --------------
-  if (!entry) {
-    const root = detectArchiveRoot(zip);
-    const hasMods = zip
-      .getEntries()
-      .some((e) => e.entryName.replace(/\\/g, '/').startsWith(root + 'mods/'));
-    if (!hasMods) {
-      throw new Error('Unbekanntes CurseForge-Archiv – weder manifest.json noch mods/ gefunden');
+  // ServerPackCreator verwendet denselben Dateinamen wie CurseForge, aber
+  // listet bereits enthaltene Dateien statt noch herunterzuladender Mods auf.
+  // Nur dieses bekannte Format zulassen; echte Client-Manifeste weiter ablehnen.
+  if (entry) {
+    let manifest: unknown;
+    try { manifest = JSON.parse(entry.getData().toString('utf8')); }
+    catch { throw badRequest('Die manifest.json im CurseForge-Serverpaket ist ungültig. Installation abgebrochen; vorhandene Daten bleiben erhalten.'); }
+    const serverManifest = z.object({
+      serverPackCreatorVersion: z.string().min(1),
+      files: z.array(z.string()),
+    }).safeParse(manifest);
+    if (!serverManifest.success || (typeof manifest === 'object' && manifest !== null && 'manifestType' in manifest)) {
+      throw badRequest('Die ausgewählte CurseForge-Datei enthält ein Client-Manifest statt eines fertigen Serverpakets. Installation abgebrochen; vorhandene Daten bleiben erhalten.');
     }
-
-    const detected = detectLoaderFromArchive(zip, root);
-    if (detected) {
-      await task.log(`Loader aus dem Serverpaket erkannt: ${detected.loader} ${detected.version}`);
-    }
-
-    return {
-      name: hint.name,
-      version: hint.version,
-      minecraftVersion: hint.minecraftVersion,
-      loader: detected?.loader ?? hint.loader,
-      loaderVersion: detected?.version ?? null,
-      downloads: [],
-      overrideDirs: [root === '' ? '.' : root],
-      isServerPack: true,
-      zip,
-    };
   }
 
-  throw badRequest('Die ausgewählte CurseForge-Datei enthält ein Client-Manifest statt eines fertigen Serverpakets. Installation abgebrochen; vorhandene Daten bleiben erhalten.');
+  // --- Serverpaket: fertige Mod-Dateien müssen bereits enthalten sein. ----
+  const hasMods = zip
+    .getEntries()
+    .some((e) => !e.isDirectory && e.entryName.replace(/\\/g, '/').startsWith(root + 'mods/') && /\.jar$/i.test(e.entryName));
+  if (!hasMods) {
+    throw badRequest('Das CurseForge-Serverpaket enthält keine fertigen Mod-Dateien unter mods/. Installation abgebrochen; vorhandene Daten bleiben erhalten.');
+  }
+
+  const detected = detectLoaderFromArchive(zip, root);
+  if (detected) {
+    await task.log(`Loader aus dem Serverpaket erkannt: ${detected.loader} ${detected.version}`);
+  }
+
+  return {
+    name: hint.name,
+    version: hint.version,
+    minecraftVersion: hint.minecraftVersion,
+    loader: detected?.loader ?? hint.loader,
+    loaderVersion: detected?.version ?? null,
+    downloads: [],
+    overrideDirs: [root === '' ? '.' : root],
+    isServerPack: true,
+    zip,
+  };
 }
 
 /** Serverpakete packen ihren Inhalt oft in einen einzelnen Wurzelordner. */
