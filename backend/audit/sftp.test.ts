@@ -21,7 +21,7 @@ vi.mock('../src/db.js', () => ({ prisma: {
   auditLog: { create: async () => ({}) },
 } }));
 vi.mock('../src/services/quota.js', () => ({ remainingDiskBytes: async () => Infinity }));
-vi.mock('../src/services/diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));
+vi.mock('../src/services/diskUsage.js', () => ({ invalidateDiskUsage: vi.fn(), adjustDiskUsage: vi.fn() }));
 const { startSftp, stopSftp, getSftpInfo } = await import('../src/services/sftp.js');
 const { withServerOperation } = await import('../src/services/operations.js');
 const { Client } = ssh2;

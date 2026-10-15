@@ -34,6 +34,7 @@ Selbstgehostetes Web-Panel für Minecraft-Server (Modpack-Installer für Modrint
 
 ### Integrationstests (`backend/audit/`)
 - Diese Testdateien **überspringen sich selbst**, wenn ihre Umgebungsvariablen fehlen – `npm test` ist davon unberührt.
+- Ausnahme: `audit/sftp.test.ts` braucht keine Infrastruktur und läuft in der CI mit `AUDIT_SFTP_TESTS=1` – lokal vor dem Push ebenso `AUDIT_SFTP_TESTS=1 npm test`, sonst fällt ein fehlender Mock erst in der CI auf.
 - Nur gegen eine **Wegwerf-Datenbank** laufen lassen (leert Tabellen!):
   ```sh
   AUDIT_DATABASE_URL=postgresql://USER@127.0.0.1:PORT/mcpanel_audit \
