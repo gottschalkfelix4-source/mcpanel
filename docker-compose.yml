@@ -7,11 +7,12 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mcpanel}
       # ACHTUNG: Der Vorgabewert ist oeffentlich bekannt. Die Datenbank hat
-      # keinen veroeffentlichten Port und ist nur im internen Compose-Netz
-      # erreichbar - fuer diesen Normalfall genuegt er. Sobald der Port nach
-      # aussen geoeffnet oder die DB mit anderen Diensten geteilt wird, VOR dem
-      # ersten Start ein eigenes Passwort setzen: es landet dauerhaft im
-      # Volume db-data, eine spaetere Aenderung sperrt den Zugriff.
+      # keinen veroeffentlichten Port und haengt nur im Netz "intern" - die
+      # Minecraft-Container (und damit fremde Mods/Plugins) erreichen sie
+      # nicht. Sobald der Port nach aussen geoeffnet oder die DB mit anderen
+      # Diensten geteilt wird, VOR dem ersten Start ein eigenes Passwort
+      # setzen: es landet dauerhaft im Volume db-data, eine spaetere Aenderung
+      # sperrt den Zugriff.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcpanel}
       POSTGRES_DB: ${POSTGRES_DB:-mcpanel}
     volumes:
@@ -23,7 +24,7 @@ services:
       retries: 20
     # Kein Nachreichen von Rechten (setuid): die Datenbank braucht das nie.
     security_opt: ["no-new-privileges:true"]
-    networks: [mcpanel]
+    networks: [intern]
 
   backend:
     build: ./backend
@@ -53,6 +54,10 @@ services:
       MC_PORT_MAX: ${MC_PORT_MAX:-25700}
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
       DOCKER_NETWORK: mcpanel_mcpanel
+      # Weitere Reverse-Proxys vor dem Panel (z. B. Nginx Proxy Manager),
+      # kommagetrennt als Adresse oder CIDR. Nur deren X-Forwarded-For wird
+      # geglaubt - sonst koennte jeder Client seine Adresse frei waehlen.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       # Namensserver fuer die Minecraft-Container, kommagetrennt. Leer = der
       # Resolver des Docker-Hosts. Nur noetig, wenn dort ein filternder DNS
       # laeuft und Downloads von Mojang haengenbleiben.
@@ -84,7 +89,10 @@ services:
     # apparmor:unconfined ist fuer den CIFS-Mount noetig; no-new-privileges
     # verhindert zusaetzlich, dass Prozesse ueber setuid Rechte nachreichen.
     security_opt: ["apparmor:unconfined", "no-new-privileges:true"]
-    networks: [mcpanel]
+    # "intern" fuer Datenbank und Oberflaeche, "mcpanel" nur fuer RCON zu den
+    # Minecraft-Containern. Anfragen aus dem Minecraft-Netz beantwortet das
+    # Backend nicht (HTTP, Socket.IO und SFTP).
+    networks: [intern, mcpanel]
 
   frontend:
     build: ./frontend
@@ -93,11 +101,15 @@ services:
     ports:
       - "${PANEL_PORT:-8080}:80"
     security_opt: ["no-new-privileges:true"]
-    networks: [mcpanel]
+    networks: [intern]
 
 volumes:
   db-data:
 
 networks:
+  # Panel-intern: Datenbank, Backend, Oberflaeche.
+  intern:
+    name: mcpanel_intern
+  # Minecraft-Server, mc-router und das Backend (RCON). Keine Datenbank!
   mcpanel:
     name: mcpanel_mcpanel

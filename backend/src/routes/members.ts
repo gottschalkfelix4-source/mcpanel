@@ -9,6 +9,7 @@ import {
   PERMISSION_LABELS,
 } from '../auth/permissions.js';
 import { badRequest, notFound } from '../lib/errors.js';
+import { invalidateSocketAccess } from '../ws/io.js';
 
 const assignablePermissions = ALL_PERMISSIONS.filter((p) => p !== PERMISSIONS.MEMBERS_MANAGE);
 const permissionSchema = z.array(z.enum(assignablePermissions as [string, ...string[]]));
@@ -90,6 +91,7 @@ export default async function memberRoutes(app: FastifyInstance) {
       data: { permissions: body.permissions },
       include: { user: { select: { id: true, username: true, email: true } } },
     });
+    invalidateSocketAccess();
 
     await audit(req.user!.id, access.server.id, 'member.update', updated.user.username);
     return { id: updated.id, user: updated.user, permissions: updated.permissions };
@@ -106,6 +108,7 @@ export default async function memberRoutes(app: FastifyInstance) {
     if (!member) throw notFound('Mitglied nicht gefunden');
 
     await prisma.serverMember.delete({ where: { id: memberId } });
+    invalidateSocketAccess();
     await audit(req.user!.id, access.server.id, 'member.remove', member.user.username);
     return { ok: true };
   });

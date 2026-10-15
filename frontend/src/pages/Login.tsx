@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Boxes, LogIn } from 'lucide-react';
+import { Boxes, LogIn, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api, ApiError, NETWORK_ERROR_MESSAGE, NetworkError } from '../lib/api';
 import { Button, ErrorNote } from '../components/ui';
 import { BlockIcon, Motes } from '../components/pixel';
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, loginTotp } = useAuth();
 
   // Fassung und Anzahl der Konten - hilft bei der Frage, warum hier die
   // Anmeldung steht und nicht der Einrichtungsassistent.
@@ -24,14 +24,29 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [code, setCode] = useState('');
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      await login(loginName, password);
+      if (mfaToken) {
+        await loginTotp(mfaToken, code);
+      } else {
+        const pending = await login(loginName, password);
+        if (pending) {
+          setMfaToken(pending.mfaToken);
+          setPassword('');
+        }
+      }
     } catch (err) {
+      // Das Zwischen-Token gilt nur kurz – abgelaufen heißt: von vorn.
+      if (mfaToken && err instanceof ApiError && err.status === 401 && !/Code/.test(err.message)) {
+        setMfaToken(null);
+        setCode('');
+      }
       // Ein stummes Backend darf nicht als abgelehntes Passwort erscheinen,
       // sonst zweifelt man an Zugangsdaten, die voellig in Ordnung sind.
       if (err instanceof NetworkError) setError(NETWORK_ERROR_MESSAGE);
@@ -62,6 +77,31 @@ export default function LoginPage() {
           <form onSubmit={submit} className="mc-frame-inner flex flex-col gap-4 px-5 py-[22px]">
             {error && <ErrorNote>{error}</ErrorNote>}
 
+            {mfaToken ? (
+              <div>
+                <label className="mc-label flex items-center gap-1.5">
+                  <ShieldCheck size={13} /> Code aus der Authenticator-App
+                </label>
+                <input
+                  className="mc-input text-center font-mono text-lg tracking-[0.4em]"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/[^0-9 ]/g, ''))}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={7}
+                  autoFocus
+                  required
+                />
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-stone-450 hover:text-stone-200 hover:underline"
+                  onClick={() => { setMfaToken(null); setCode(''); setError(null); }}
+                >
+                  Mit anderem Konto anmelden
+                </button>
+              </div>
+            ) : (
+            <>
             <div>
               <label className="mc-label">Benutzername oder E-Mail</label>
               <input
@@ -85,6 +125,8 @@ export default function LoginPage() {
                 required
               />
             </div>
+            </>
+            )}
 
             <Button
               type="submit"
@@ -93,7 +135,7 @@ export default function LoginPage() {
               icon={<LogIn size={16} />}
               className="mt-1 w-full"
             >
-              Anmelden
+              {mfaToken ? 'Bestätigen' : 'Anmelden'}
             </Button>
           </form>
         </div>

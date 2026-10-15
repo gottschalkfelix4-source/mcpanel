@@ -89,6 +89,7 @@ Die Minecraft-Server oeffnen ihre Ports selbst auf dem Host (Vorgabe 25565-25700
   <Config Name="SFTP-Adresse" Target="SFTP_HOST" Default="" Mode="" Description="Direkte IP oder Adresse dieses Hosts für SFTP. Leer verwendet die Adresse der Weboberfläche. Bei einem HTTP-Reverse-Proxy die direkte Hostadresse eintragen." Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Öffentlicher SFTP-Port" Target="SFTP_PUBLIC_PORT" Default="2222" Mode="" Description="Muss mit dem veröffentlichten SFTP-Port übereinstimmen, falls dieser von 2222 abweicht." Type="Variable" Display="advanced" Required="false" Mask="false">2222</Config>
   <Config Name="SFTP aktivieren" Target="SFTP_ENABLED" Default="true" Mode="" Description="true aktiviert den SFTP-Dateizugriff; false deaktiviert ihn." Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Vertrauenswürdige Proxys" Target="TRUSTED_PROXIES" Default="" Mode="" Description="Nur bei einem vorgeschalteten Reverse-Proxy (z. B. Nginx Proxy Manager, SWAG): dessen IP-Adresse(n) oder CIDR, kommagetrennt. Dann zählt die echte Client-Adresse für Anmeldebremse und Protokoll. Leer lassen, wenn kein Proxy davor steht." Type="Variable" Display="advanced" Required="false" Mask="false"/>
 
   <Config
     Name="Docker-Socket"

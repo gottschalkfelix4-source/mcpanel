@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { attachment } from '../lib/contentDisposition.js';
 import { audit, requireAdmin } from '../auth/context.js';
 import { prisma } from '../db.js';
 import { setSetting } from '../services/settings.js';
@@ -26,7 +27,7 @@ export default async function panelBackupRoutes(app: FastifyInstance) {
     const { filename } = z.object({ filename: z.string() }).parse(req.params);
     const file = await panelBackupFile(filename);
     reply.header('Content-Type', 'application/gzip').header('Content-Length', file.sizeBytes)
-      .header('Content-Disposition', `attachment; filename="${filename}"`);
+      .header('Content-Disposition', attachment(filename));
     return reply.send(fs.createReadStream(file.path));
   });
   app.delete('/:filename', async req => {

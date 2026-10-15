@@ -1,16 +1,22 @@
 import { useCallback, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, HardDrive, HardDriveDownload, Plus, RotateCcw, Trash2 } from 'lucide-react';
-import { api, authedUrl } from '../../lib/api';
+import { Download, HardDrive, HardDriveDownload, Pin, PinOff, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { api, downloadFile } from '../../lib/api';
 import { formatBytes, formatDate, formatRelative } from '../../lib/format';
 import type { Backup } from '../../lib/types';
 import { TaskProgress } from '../../components/TaskProgress';
 import {
-  Button, ConfirmDialog, EmptyState, InfoNote, LoadingBlock, Modal, Panel, useToast,
+  Button, ConfirmDialog, EmptyState, InfoNote, LoadingBlock, Modal, Panel, Toggle, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
 const TASK_TYPES = ['backup.create', 'backup.restore'];
+
+const ORIGIN_LABEL: Record<Backup['origin'], string | null> = {
+  MANUAL: null,
+  AUTOMATIC: 'Automatisch',
+  SAFETY: 'Sicherheitskopie',
+};
 
 export default function BackupsTab() {
   const { server, can } = useServer();
@@ -22,6 +28,7 @@ export default function BackupsTab() {
   const [note, setNote] = useState('');
   const [restoreTarget, setRestoreTarget] = useState<Backup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Backup | null>(null);
+  const [safetyBackup, setSafetyBackup] = useState(true);
 
   const backups = useQuery({
     queryKey: ['backups', server.id],
@@ -45,10 +52,22 @@ export default function BackupsTab() {
   });
 
   const restore = useMutation({
-    mutationFn: (backup: Backup) => api.post(`/servers/${server.id}/backups/${backup.id}/restore`),
+    mutationFn: (backup: Backup) => api.post(`/servers/${server.id}/backups/${backup.id}/restore`, { safetyBackup }),
     onSuccess: () => toast.info('Backup wird eingespielt – der Server wird gestoppt.'),
     onError: (err: Error) => toast.error(err.message),
   });
+
+  const pin = useMutation({
+    mutationFn: (backup: Backup) => api.patch(`/servers/${server.id}/backups/${backup.id}`, { pinned: !backup.pinned }),
+    onSuccess: (_data, backup) => {
+      toast.success(backup.pinned ? 'Backup wird wieder normal aufgeräumt.' : 'Backup angepinnt – es wird nie automatisch gelöscht.');
+      invalidate();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const download = (backup: Backup) =>
+    downloadFile(`/servers/${server.id}/backups/${backup.id}/download`).catch((err: Error) => toast.error(err.message));
 
   const remove = useMutation({
     mutationFn: (backup: Backup) => api.del(`/servers/${server.id}/backups/${backup.id}`),
@@ -106,6 +125,20 @@ export default function BackupsTab() {
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2 truncate text-sm font-semibold text-stone-50">
                     <span className="truncate">{backup.name}</span>
+                    {backup.pinned && (
+                      <span
+                        className="inline-flex shrink-0 items-center gap-1 border border-gold/40 bg-gold/[0.12] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-gold"
+                        title="Wird von keiner Aufbewahrungsregel gelöscht"
+                      >
+                        <Pin size={10} />
+                        Angepinnt
+                      </span>
+                    )}
+                    {ORIGIN_LABEL[backup.origin] && (
+                      <span className="shrink-0 border border-stone-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-stone-400">
+                        {ORIGIN_LABEL[backup.origin]}
+                      </span>
+                    )}
                     {backup.mirrored && (
                       <span
                         className="inline-flex shrink-0 items-center gap-1 border border-emerald/40 bg-emerald/[0.12] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-emerald"
@@ -125,13 +158,26 @@ export default function BackupsTab() {
                 </div>
 
                 <div className="flex gap-1.5">
-                  <a
-                    href={authedUrl(`/servers/${server.id}/backups/${backup.id}/download`)}
-                    className="mc-btn-ghost !px-2.5 !py-1.5 !text-xs"
-                    title="Herunterladen"
-                  >
-                    <Download size={13} />
-                  </a>
+                  {can('backup.create') && (
+                    <Button
+                      variant="ghost"
+                      className="!px-2.5 !py-1.5 !text-xs"
+                      icon={backup.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                      title={backup.pinned ? 'Nicht mehr anpinnen' : 'Anpinnen – nie automatisch löschen'}
+                      aria-label={backup.pinned ? 'Nicht mehr anpinnen' : 'Anpinnen'}
+                      onClick={() => pin.mutate(backup)}
+                    />
+                  )}
+                  {can('backup.download') && (
+                    <Button
+                      variant="ghost"
+                      className="!px-2.5 !py-1.5 !text-xs"
+                      icon={<Download size={13} />}
+                      title="Herunterladen"
+                      aria-label="Herunterladen"
+                      onClick={() => void download(backup)}
+                    />
+                  )}
                   {can('backup.restore') && (
                     <Button
                       variant="gold"
@@ -197,7 +243,7 @@ export default function BackupsTab() {
 
       <ConfirmDialog
         open={Boolean(restoreTarget)}
-        onClose={() => setRestoreTarget(null)}
+        onClose={() => { setRestoreTarget(null); setSafetyBackup(true); }}
         onConfirm={() => restoreTarget && restore.mutateAsync(restoreTarget)}
         title="Backup einspielen?"
         message={
@@ -207,8 +253,13 @@ export default function BackupsTab() {
               <strong className="text-stone-100">{restoreTarget?.name}</strong> ersetzt.
             </p>
             <p className="mt-2 text-redstone">
-              Alle Änderungen seit dieser Sicherung gehen verloren.
+              {safetyBackup
+                ? 'Der aktuelle Stand wird vorher als Sicherheitskopie gesichert.'
+                : 'Alle Änderungen seit dieser Sicherung gehen verloren.'}
             </p>
+            <div className="mt-3">
+              <Toggle checked={safetyBackup} onChange={setSafetyBackup} label="Aktuellen Stand vorher sichern" />
+            </div>
           </>
         }
         confirmLabel="Einspielen"

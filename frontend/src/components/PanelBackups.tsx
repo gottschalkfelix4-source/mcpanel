@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, authedUrl } from '../lib/api';
+import { api, downloadFile } from '../lib/api';
 import { formatBytes, formatDate } from '../lib/format';
 import { Button, ConfirmDialog, Field, Panel, Toggle, useToast } from './ui';
 
@@ -48,7 +48,7 @@ export default function PanelBackups() {
       <ul className="divide-y divide-stone-700">
         {query.data?.backups.map(backup => <li key={backup.filename} className="flex flex-wrap items-center justify-between gap-3 py-3">
           <span className="text-sm">{formatDate(backup.createdAt)} · {formatBytes(backup.sizeBytes)}</span>
-          <div className="flex gap-2"><a href={authedUrl(`/settings/panel-backups/${encodeURIComponent(backup.filename)}/download`)} className="text-sm text-grass-light hover:underline">Herunterladen</a>
+          <div className="flex gap-2"><button className="text-sm text-grass-light hover:underline" onClick={() => downloadFile(`/settings/panel-backups/${encodeURIComponent(backup.filename)}/download`).catch((err: Error) => toast.error(err.message))}>Herunterladen</button>
             <button className="text-sm text-redstone hover:underline" onClick={() => setRemove(backup.filename)}>Löschen</button></div>
         </li>)}
       </ul>

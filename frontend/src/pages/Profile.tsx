@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { KeyRound, Shield, User } from 'lucide-react';
-import { api, tokenStore } from '../lib/api';
-import { resetSocket } from '../lib/socket';
+import { KeyRound, LogOut, Shield, User } from 'lucide-react';
+import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import TotpPanel from '../components/TotpPanel';
 import { formatDate } from '../lib/format';
-import { Badge, Button, ErrorNote, Field, Panel, useToast } from '../components/ui';
+import { Badge, Button, ConfirmDialog, ErrorNote, Field, Panel, useToast } from '../components/ui';
 
 export default function ProfilePage() {
-  const { user } = useAuth();
+  const { user, adoptToken } = useAuth();
+  const [confirmLogoutAll, setConfirmLogoutAll] = useState(false);
   const toast = useToast();
 
   const [currentPassword, setCurrentPassword] = useState('');
@@ -19,15 +20,23 @@ export default function ProfilePage() {
   const change = useMutation({
     mutationFn: () => api.post<{ token: string }>('/auth/password', { currentPassword, newPassword }),
     onSuccess: (res) => {
-      tokenStore.set(res.token);
-      resetSocket();
-      toast.success('Passwort geändert.');
+      adoptToken(res.token);
+      toast.success('Passwort geändert. Andere Geräte wurden abgemeldet.');
       setCurrentPassword('');
       setNewPassword('');
       setRepeat('');
       setError(null);
     },
     onError: (err: Error) => setError(err.message),
+  });
+
+  const logoutAll = useMutation({
+    mutationFn: () => api.post<{ token: string }>('/auth/logout-all'),
+    onSuccess: (res) => {
+      adoptToken(res.token);
+      toast.success('Alle anderen Sitzungen wurden abgemeldet.');
+    },
+    onError: (err: Error) => toast.error(err.message),
   });
 
   function submit(e: React.FormEvent) {
@@ -111,6 +120,30 @@ export default function ProfilePage() {
           </div>
         </form>
       </Panel>
+
+      <TotpPanel />
+
+      <Panel title="Sitzungen" icon={<LogOut size={16} />}>
+        <div className="space-y-3">
+          <p className="text-sm text-stone-350">
+            Meldet jedes andere Gerät und jeden offenen Browser ab – etwa nach einem verlorenen Handy oder
+            einer Anmeldung auf einem fremden Rechner. Dieses Fenster bleibt angemeldet.
+          </p>
+          <Button variant="danger" icon={<LogOut size={15} />} loading={logoutAll.isPending} onClick={() => setConfirmLogoutAll(true)}>
+            Überall sonst abmelden
+          </Button>
+        </div>
+      </Panel>
+
+      <ConfirmDialog
+        open={confirmLogoutAll}
+        onClose={() => setConfirmLogoutAll(false)}
+        onConfirm={() => logoutAll.mutateAsync().then(() => {})}
+        title="Überall abmelden?"
+        message="Alle anderen Sitzungen dieses Kontos werden sofort beendet."
+        confirmLabel="Abmelden"
+        danger
+      />
     </div>
   );
 }

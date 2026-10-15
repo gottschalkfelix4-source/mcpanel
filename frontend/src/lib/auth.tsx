@@ -10,7 +10,12 @@ interface AuthContextValue {
   loading: boolean;
   /** Token vorhanden, aber das Backend antwortet nicht – kein Abmeldegrund. */
   offline: boolean;
-  login: (login: string, password: string) => Promise<void>;
+  /** Liefert ein Zwischen-Token, wenn noch der Einmalcode fehlt. */
+  login: (login: string, password: string) => Promise<{ mfaToken: string } | null>;
+  /** Zweiter Schritt der Anmeldung mit aktivem zweitem Faktor. */
+  loginTotp: (mfaToken: string, code: string) => Promise<void>;
+  /** Neues Token nach Passwortwechsel, „Überall abmelden“ oder 2FA-Aktivierung. */
+  adoptToken: (token: string) => void;
   logout: () => void;
   refresh: () => Promise<void>;
 }
@@ -53,16 +58,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  const login = useCallback(async (loginName: string, password: string) => {
-    const res = await api.post<{ token: string; user: Me }>('/auth/login', {
-      login: loginName,
-      password,
-    });
-    tokenStore.set(res.token);
+  const startSession = useCallback(async (token: string) => {
+    tokenStore.set(token);
     resetSocket();
     queryClient.clear();
     setUser(await api.get<Me>('/auth/me'));
   }, [queryClient]);
+
+  const login = useCallback(async (loginName: string, password: string) => {
+    const res = await api.post<{ token?: string; mfaRequired?: boolean; mfaToken?: string }>('/auth/login', {
+      login: loginName,
+      password,
+    });
+    if (res.mfaRequired && res.mfaToken) return { mfaToken: res.mfaToken };
+    await startSession(res.token!);
+    return null;
+  }, [startSession]);
+
+  const loginTotp = useCallback(async (mfaToken: string, code: string) => {
+    const res = await api.post<{ token: string }>('/auth/login/totp', { mfaToken, code: code.replace(/\s/g, '') });
+    await startSession(res.token);
+  }, [startSession]);
+
+  // Alte Tokens sind danach ungültig – auch das der offenen Socket-Verbindung.
+  const adoptToken = useCallback((token: string) => {
+    tokenStore.set(token);
+    resetSocket();
+  }, []);
 
   const logout = useCallback(() => {
     resetSocket();
@@ -73,8 +95,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const value = useMemo(
-    () => ({ user, loading, offline, login, logout, refresh }),
-    [user, loading, offline, login, logout, refresh],
+    () => ({ user, loading, offline, login, loginTotp, adoptToken, logout, refresh }),
+    [user, loading, offline, login, loginTotp, adoptToken, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -13,6 +13,9 @@ import { bootstrap } from './bootstrap.js';
 import { setupConsoleGateway } from './ws/console.js';
 import { closeRconConnections } from './services/rcon.js';
 import { startSftp, stopSftp } from './services/sftp.js';
+import { stopScheduler } from './services/automation.js';
+import { stopWatcher } from './services/notify.js';
+import { isServerNetworkAddress, trustProxy } from './lib/network.js';
 
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -33,10 +36,21 @@ const app = Fastify({
   /**
    * Vor dem Backend steht immer ein nginx – im Alles-in-einem-Abbild über
    * 127.0.0.1, bei `docker compose` als eigener Dienst im internen Netz.
-   * Ohne diese Angabe trüge jede Anfrage die Adresse dieses Proxys, und die
-   * Anmeldebremse würde alle Nutzer in denselben Zähler stecken.
+   * Vertraut wird genau diesem einen Glied (und zusätzlich TRUSTED_PROXIES),
+   * sonst könnte jeder Client im LAN per X-Forwarded-For eine beliebige
+   * Adresse vorgeben und die Anmeldebremse umgehen.
    */
-  trustProxy: 'loopback, uniquelocal',
+  trustProxy,
+});
+
+/**
+ * Minecraft-Container teilen sich ein Netz mit dem Panel (für RCON). Eine
+ * Mod oder ein Plugin darf darüber nicht die Panel-API ansprechen.
+ */
+app.addHook('onRequest', async (req, reply) => {
+  if (isServerNetworkAddress(req.socket.remoteAddress) || isServerNetworkAddress(req.ip)) {
+    return reply.code(403).send({ error: 'Zugriff aus dem Minecraft-Netz ist gesperrt' });
+  }
 });
 
 await app.register(cors, { origin: true, credentials: true });
@@ -61,6 +75,18 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   }
 });
 
+/**
+ * Systemfehler (Dateisystem mit Pfaden, Prisma mit Abfragedetails, Docker-API)
+ * gehen nie an den Client. Eigene, deutsch formulierte Fehlermeldungen schon.
+ */
+function isInternalError(error: Error): boolean {
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string' && !code.startsWith('FST_')) return true;
+  if ((error as { errno?: unknown }).errno !== undefined) return true;
+  if (error.name.startsWith('Prisma')) return true;
+  return /\(HTTP code \d+\)|ECONNREFUSED|ENOENT|EACCES|\/data\/|\/var\/run\//.test(error.message ?? '');
+}
+
 app.setErrorHandler((error, _req, reply) => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
@@ -76,8 +102,14 @@ app.setErrorHandler((error, _req, reply) => {
     return reply.code(413).send({ error: 'Datei ist zu groß' });
   }
 
+  // Interne Meldungen (Pfade, Docker-/Datenbankdetails) nur ins Log – der
+  // Client bekommt eine neutrale Antwort mit Verweis auf das Protokoll.
   app.log.error(error);
-  return reply.code(500).send({ error: error.message || 'Interner Fehler' });
+  const status = (error as { statusCode?: number }).statusCode;
+  if (status && status >= 400 && status < 500 && !isInternalError(error)) {
+    return reply.code(status).send({ error: error.message || 'Ungültige Anfrage' });
+  }
+  return reply.code(500).send({ error: isInternalError(error) ? 'Interner Fehler – Details stehen im Panel-Protokoll' : error.message || 'Interner Fehler' });
 });
 
 /**
@@ -122,8 +154,12 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     app.log.info('Fahre herunter …');
     stopPanelBackupScheduler();
+    stopScheduler();
+    stopWatcher();
     await stopSftp();
-    await app.close();
+    await new Promise<void>((resolve) => io.close(() => resolve()));
+    await app.close().catch(() => {});
+    await prisma.$disconnect().catch(() => {});
     closeRconConnections();
     process.exit(0);
   });

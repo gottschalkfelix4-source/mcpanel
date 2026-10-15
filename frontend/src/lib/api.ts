@@ -84,11 +84,21 @@ export const api = {
   del: <T>(path: string, body?: unknown) => request<T>('DELETE', path, body),
 };
 
-/** Für Downloads: hängt das Token als Query-Parameter an. */
-export function authedUrl(path: string): string {
-  const token = tokenStore.get();
-  const sep = path.includes('?') ? '&' : '?';
-  return `/api${path}${token ? `${sep}token=${encodeURIComponent(token)}` : ''}`;
+/**
+ * Startet einen Download, den der Browser selbst lädt. Die Sitzung selbst
+ * landet dabei nie in einer Adresse (Verlauf, Proxy-Protokolle): das Backend
+ * stellt einen kurzlebigen Schlüssel aus, der nur für genau diesen Pfad gilt.
+ */
+export async function downloadFile(path: string): Promise<void> {
+  const full = `/api${path}`;
+  const { token } = await api.post<{ token: string }>('/auth/download-token', { path: full });
+  const link = document.createElement('a');
+  link.href = `${full}${full.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 export async function uploadFiles<T = void>(

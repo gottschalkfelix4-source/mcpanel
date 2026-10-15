@@ -81,7 +81,7 @@ export class RconClient {
   }
 
   private send(type: number, body: string): Promise<string> {
-    if (!this.socket) return Promise.reject(new Error('RCON nicht verbunden'));
+    if (!this.socket) return Promise.reject(notDelivered(new Error('RCON nicht verbunden')));
     const id = this.nextId++;
     const payload = Buffer.from(body, 'utf8');
     const packet = Buffer.alloc(payload.length + 14);
@@ -152,6 +152,22 @@ interface Connection {
 
 const connections = new Map<string, Connection>();
 
+/**
+ * Markiert Fehler, bei denen der Befehl den Server sicher nicht erreicht hat
+ * (Verbindungsaufbau oder Anmeldung gescheitert). Nur dann darf ein Aufrufer
+ * auf einen anderen Weg (stdin) ausweichen – nach einem Timeout ist der Befehl
+ * womöglich schon ausgeführt.
+ */
+const NOT_DELIVERED = Symbol('rcon.notDelivered');
+function notDelivered(error: unknown): Error {
+  const err = error instanceof Error ? error : new Error(String(error));
+  (err as Error & { [NOT_DELIVERED]?: boolean })[NOT_DELIVERED] = true;
+  return err;
+}
+export function rconNotDelivered(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { [NOT_DELIVERED]?: boolean })[NOT_DELIVERED]);
+}
+
 function getConnection(server: Server): Connection {
   const key = server.containerName;
   const existing = connections.get(key);
@@ -185,7 +201,12 @@ function sendCommand(entry: Connection, command: string): Promise<string> {
   entry.pending++;
   // Eine gemeinsame Verbindung, auch bei gleichzeitigen API-/Live-Abfragen.
   const result = entry.tail.then(async () => {
-    await entry.ready;
+    try {
+      await entry.ready;
+    } catch (error) {
+      throw notDelivered(error);
+    }
+    if (entry.closed) throw notDelivered(new Error('RCON nicht verbunden'));
     return entry.client.command(command);
   });
   entry.tail = result.catch(() => {});

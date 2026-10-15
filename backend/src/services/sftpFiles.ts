@@ -8,14 +8,14 @@ import { audit, getServerAccess } from '../auth/context.js';
 import { PERMISSIONS, type Permission } from '../auth/permissions.js';
 import { badRequest, forbidden, notFound, unauthorized } from '../lib/errors.js';
 import * as files from './files.js';
-import { withServerOperation } from './operations.js';
+import { waitForServerOperation, withServerOperation } from './operations.js';
 import { remainingDiskBytes } from './quota.js';
-import { invalidateDiskUsage } from './diskUsage.js';
+import { adjustDiskUsage, invalidateDiskUsage } from './diskUsage.js';
 
 type Location = { serverId: string; relative: string };
 type OpenFile = Location & {
   file: FileHandle; writable: boolean; readable: boolean; append: boolean;
-  maxSize: number; temporaryDir?: string; release?: () => Promise<void>;
+  maxSize: number; temporaryDir?: string;
   failed: boolean; pending: Promise<unknown>;
 };
 
@@ -30,20 +30,6 @@ export function sftpLocation(value: string): Location | null {
 }
 
 /** Hält dieselbe Sperre wie Panel-Aktionen bis zum Abschluss oder Abbruch des Uploads. */
-async function reserveUpload(id: string): Promise<() => Promise<void>> {
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => { release = resolve; });
-  let acquired!: () => void;
-  let rejected!: (reason: unknown) => void;
-  const ready = new Promise<void>((resolve, reject) => { acquired = resolve; rejected = reject; });
-  const operation = withServerOperation(id, 'SFTP-Upload', async () => {
-    acquired();
-    await released;
-  }).catch(rejected);
-  await ready;
-  return async () => { release(); await operation; };
-}
-
 export class SftpFiles {
   private handles = new Map<string, OpenFile>();
   private disposed = false;
@@ -104,13 +90,13 @@ export class SftpFiles {
     }
     const writable = Boolean(flags & 2);
     const permission = writable ? PERMISSIONS.FILES_WRITE : PERMISSIONS.FILES_READ;
-    let release: (() => Promise<void>) | undefined;
     let temporaryDir: string | undefined;
     let file: FileHandle | undefined;
     try {
       await this.access(location, permission);
       if ((flags & 1) && writable) await this.access(location, PERMISSIONS.FILES_READ);
-      if (writable) release = await reserveUpload(location.serverId);
+      // Keine Serversperre für die Dauer der Übertragung – ein hängender Client
+      // blockierte sonst Backups und Automationen. Gesperrt wird beim Schließen.
       const { server } = await this.access(location, permission);
       const original = await fs.stat(files.resolveSafe(location.serverId, location.relative)).catch((err) => {
         if (err.code === 'ENOENT') return null;
@@ -144,14 +130,13 @@ export class SftpFiles {
       if (this.disposed || this.handles.size >= 32) throw badRequest('Verbindung geschlossen oder zu viele offene Dateien');
       const handle = crypto.randomBytes(16).toString('hex');
       this.handles.set(handle, { ...location, file, writable, readable: Boolean(flags & 1), append: Boolean(flags & 4), maxSize,
-        temporaryDir, release, failed: false, pending: Promise.resolve() });
+        temporaryDir, failed: false, pending: Promise.resolve() });
       return handle;
     } catch (err) {
       await file?.close().catch(() => {});
       if (temporaryDir) {
         try { await fs.rm(files.resolveSafe(location.serverId, files.toRelative(location.serverId, temporaryDir)), { recursive: true, force: true }); } catch { /* Ein veränderter Pfad darf keine fremden Daten löschen. */ }
       }
-      await release?.();
       throw err;
     }
   }
@@ -231,10 +216,14 @@ export class SftpFiles {
         await this.access(handle, PERMISSIONS.FILES_WRITE);
         await handle.file.sync();
         await handle.file.close();
-        const temporary = files.resolveSafe(handle.serverId, files.toRelative(handle.serverId, path.join(handle.temporaryDir!, 'content')));
-        const destination = files.resolveSafe(handle.serverId, handle.relative);
-        await fs.rename(temporary, destination);
-        invalidateDiskUsage(handle.serverId);
+        await waitForServerOperation(handle.serverId, 'SFTP-Upload', async () => {
+          const temporary = files.resolveSafe(handle.serverId, files.toRelative(handle.serverId, path.join(handle.temporaryDir!, 'content')));
+          const destination = files.resolveSafe(handle.serverId, handle.relative);
+          const before = await fs.stat(destination).then((st) => st.size).catch(() => 0);
+          const after = (await fs.stat(temporary)).size;
+          await fs.rename(temporary, destination);
+          adjustDiskUsage(handle.serverId, after - before);
+        });
         await audit(this.identity.id, handle.serverId, 'files.sftp.upload', handle.relative);
       }
     } finally {
@@ -242,7 +231,6 @@ export class SftpFiles {
       if (handle.temporaryDir) {
         try { await fs.rm(files.resolveSafe(handle.serverId, files.toRelative(handle.serverId, handle.temporaryDir)), { recursive: true, force: true }); } catch { /* Ein veränderter Pfad darf keine fremden Daten löschen. */ }
       }
-      await handle.release?.();
     }
   }
 

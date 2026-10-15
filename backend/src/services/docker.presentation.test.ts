@@ -13,9 +13,10 @@ vi.mock('dockerode', () => ({ default: class {
   listContainers = m.list;
   createContainer = m.create;
   listNetworks = async () => [{ Name: 'mc-network' }];
+  getNetwork = () => ({ inspect: async () => ({ IPAM: { Config: [{ Subnet: '172.30.0.0/16', Gateway: '172.30.0.1' }] } }) });
   listImages = async () => [{}];
 } }));
-const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes, getStats, javaTagForVersion, getState, stop } = await import('./docker.js');
+const { createContainer, findContainer, ensureContainer, buildEnv, containerMemoryBytes, getStats, javaTagForVersion, getState, stop, frameDecoder } = await import('./docker.js');
 const server = {
   id: 'abc123', name: 'Meine Welt', containerName: 'mc-abc123', type: 'FABRIC',
   mcVersion: '1.21.1', memoryMb: 4096, port: 25565, rconPassword: 'test', extraEnv: {},
@@ -223,4 +224,20 @@ it('verwirft die Absturzzuordnung nach einem neuen Containerlauf', async () => {
   info.State.FinishedAt = '2026-10-12T09:05:00Z';
   expect((await getState(s)).state).toBe('stopped');
   expect(m.logs).toHaveBeenCalledTimes(2);
+});
+
+it('setzt Docker-Logframes auch über Paketgrenzen und geteilte UTF-8-Zeichen hinweg zusammen', () => {
+  const frame = (type: number, text: Buffer) => {
+    const header = Buffer.alloc(8);
+    header[0] = type;
+    header.writeUInt32BE(text.length, 4);
+    return Buffer.concat([header, text]);
+  };
+  const stream = Buffer.concat([frame(1, Buffer.from('Größe ok')), frame(2, Buffer.from('Fehler!'))]);
+  const decode = frameDecoder();
+  let out = '';
+  // Byteweise füttern: trennt Header, Längenfeld und das zweibytige „ö“.
+  for (const byte of stream) out += decode(Buffer.from([byte]));
+  expect(out).toBe('Größe okFehler!');
+  expect(frameDecoder()(frame(1, Buffer.from('abc')).subarray(0, 9))).toBe('');
 });

@@ -1,7 +1,7 @@
 import fsSync from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { byteLimit } from '../lib/byteLimit.js';
-import { dirSize } from './files.js';
+import { dirSize, isUploadTemp } from './files.js';
 import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths } from './restoreRecovery.js';
 import { archivePath } from '../lib/safePath.js';
 import { withServerOperation } from './operations.js';
@@ -25,7 +25,15 @@ export interface CreateBackupOptions {
   note?: string;
   createdById?: string | null;
   task?: TaskHandle;
+  /** Herkunft – entscheidet, was die Aufräumregeln löschen dürfen. */
+  origin?: BackupOrigin;
+  /** Bei Automationen: zu welcher Regel die Sicherung gehört. */
+  automationId?: string | null;
+  /** Sicherungen, die das Kontingent-Aufräumen dabei nicht löschen darf. */
+  protect?: string[];
 }
+
+export type BackupOrigin = 'MANUAL' | 'AUTOMATIC' | 'SAFETY';
 
 /**
  * Liefert die Archivdatei – bevorzugt aus der Hauptablage, sonst aus der
@@ -89,7 +97,7 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
     const entries = (await fs.readdir(dir)).filter((e) => !EXCLUDE.has(e));
     const budget = await remainingDiskBytes(server);
     try {
-      await pipeline(tar.create({ gzip: true, cwd: dir, portable: true }, entries), byteLimit(budget), fsSync.createWriteStream(target));
+      await pipeline(tar.create({ gzip: true, cwd: dir, portable: true, filter: (entry) => !isUploadTemp(entry) }, entries), byteLimit(budget), fsSync.createWriteStream(target));
     } catch (err) {
       await fs.rm(target, { force: true });
       throw err;
@@ -115,11 +123,13 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
       filename,
       sizeBytes: BigInt(stat.size),
       createdById: options.createdById ?? null,
+      origin: options.origin ?? 'MANUAL',
+      automationId: options.automationId ?? null,
     },
   });
 
   invalidateDiskUsage(server.id);
-  const pruned = await pruneToBackupLimit(server);
+  const pruned = await pruneToBackupLimit(server, [backup.id, ...(options.protect ?? [])]);
   const size = `${(stat.size / 1024 / 1024).toFixed(1)} MB`;
 
   // Zweitablage: fehlschlagen darf das, ohne die Sicherung zu entwerten –
@@ -191,7 +201,13 @@ async function assertArchiveIntact(archive: string) {
  * abgebrochenen früheren Laufs benutzt – nach einem Neustart mitten in der
  * Wiederherstellung ist der Ausweichordner die einzige vollständige Kopie.
  */
-async function restoreBackupUnlocked(server: Server, backupId: string, task?: TaskHandle) {
+export interface RestoreOptions {
+  /** Vorher den aktuellen Stand sichern (Standard: ja). */
+  safetyBackup?: boolean;
+  createdById?: string | null;
+}
+
+async function restoreBackupUnlocked(server: Server, backupId: string, task?: TaskHandle, options: RestoreOptions = {}) {
   const backup = await prisma.backup.findFirst({ where: { id: backupId, serverId: server.id } });
   if (!backup) throw notFound('Backup nicht gefunden');
 
@@ -205,6 +221,33 @@ async function restoreBackupUnlocked(server: Server, backupId: string, task?: Ta
     await task?.update(5, 'Backup-Archiv wird geprüft …');
     await assertArchiveIntact(archive);
 
+    // Ein abgebrochener Lauf zuerst zurück – sonst sicherte die Kopie unten nur
+    // die Bruchstücke statt des vollständigen Altbestands.
+    await recoverInterruptedRestore(server.id);
+
+    // Ohne diese Kopie wäre ein versehentlich gewähltes altes Backup endgültig:
+    // der aktuelle Stand wird beim Übernehmen verworfen.
+    if (options.safetyBackup !== false) {
+      await task?.update(10, 'Aktueller Stand wird vorher gesichert …');
+      try {
+        await createBackupUnlocked(server, {
+          name: `Vor Wiederherstellung ${new Date().toISOString().slice(0, 16)}`,
+          note: `Automatisch vor dem Einspielen von „${backup.name}“`,
+          createdById: options.createdById ?? null,
+          origin: 'SAFETY',
+          protect: [backup.id],
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw badRequest(`Sicherheits-Backup vor der Wiederherstellung fehlgeschlagen: ${reason}`);
+      }
+    }
+
+    const { state } = await dockerSvc.getState(server);
+    const wasRunning = state === 'running' || state === 'starting';
+    if (wasRunning) {
+      await rconCommand(server, 'say Der Server wird für eine Wiederherstellung neu gestartet.').catch(() => '');
+    }
     await task?.update(20, 'Server wird gestoppt …');
     await dockerSvc.stop(server);
 
@@ -236,7 +279,11 @@ async function restoreBackupUnlocked(server: Server, backupId: string, task?: Ta
       await fs.rm(stage, { recursive: true, force: true });
     }
     invalidateDiskUsage(server.id);
-    await task?.update(100, 'Backup wiederhergestellt');
+    if (wasRunning) {
+      await task?.update(95, 'Server wird wieder gestartet …');
+      await dockerSvc.start(server);
+    }
+    await task?.update(100, wasRunning ? 'Backup wiederhergestellt, Server läuft wieder' : 'Backup wiederhergestellt');
   } finally {
     await source.cleanup();
   }

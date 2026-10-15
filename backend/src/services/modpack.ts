@@ -51,7 +51,7 @@ interface PackPlan {
   loader: Loader;
   loaderVersion: string | null;
   /** Dateien, die heruntergeladen werden müssen (Pfad relativ zu /data). */
-  downloads: { path: string; urls: string[]; size: number; sha1?: string }[];
+  downloads: { path: string; urls: string[]; size: number; sha1?: string; sha512?: string }[];
   /** Ordner im Archiv, deren Inhalt nach /data kopiert wird. */
   overrideDirs: string[];
   /**
@@ -142,6 +142,7 @@ async function installModpackImpl(
     await createBackup(server, {
       name: `Vor ${request.reinstall ? 'Neuinstallation' : isUpdate ? 'Update' : 'Installation'} ${new Date().toISOString().slice(0, 16)}`,
       note: 'Automatisch vor Modpack-Installation',
+      origin: 'SAFETY',
       createdById: request.createdById ?? null,
     });
   }
@@ -459,10 +460,14 @@ async function prefetchDownloads(plan: PackPlan, dir: string, server: Server, ta
       for (const candidate of item.urls) {
         try {
           const size = await downloadToFile(candidate, archiveEntryPath(dir, item.path), { retries: 2, maxBytes: remaining });
-          if (item.sha1) {
+          if (item.sha1 || item.sha512) {
             const bytes = await fs.readFile(archiveEntryPath(dir, item.path));
-            if (bytes.length !== item.size || createHash('sha1').update(bytes).digest('hex') !== item.sha1) {
-              throw badRequest(`Prüfsumme oder Größe der FTB-Datei stimmt nicht: ${item.path}`);
+            const sizeWrong = item.size > 0 && bytes.length !== item.size;
+            const sha1Wrong = item.sha1 && createHash('sha1').update(bytes).digest('hex') !== item.sha1;
+            const sha512Wrong = item.sha512 && createHash('sha512').update(bytes).digest('hex') !== item.sha512;
+            if (sizeWrong || sha1Wrong || sha512Wrong) {
+              await fs.rm(archiveEntryPath(dir, item.path), { force: true });
+              throw badRequest(`Prüfsumme oder Größe stimmt nicht: ${item.path}`);
             }
           }
           remaining -= size;
@@ -525,8 +530,24 @@ interface MrIndex {
     path: string;
     downloads: string[];
     fileSize?: number;
+    hashes?: { sha1?: string; sha512?: string };
     env?: { client?: string; server?: string };
   }[];
+}
+
+/**
+ * Laut Modrinth-Spezifikation dürfen .mrpack-Dateien nur von diesen Hosts
+ * laden. Alles andere (auch interne Adressen) wird verworfen.
+ */
+const MRPACK_HOSTS = new Set(['cdn.modrinth.com', 'github.com', 'raw.githubusercontent.com', 'gitlab.com']);
+export function allowedMrpackUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && MRPACK_HOSTS.has(url.hostname.toLowerCase())
+      && !url.username && !url.password && !url.port;
+  } catch {
+    return false;
+  }
 }
 
 async function planFromMrpack(archivePath: string): Promise<PackPlan> {
@@ -555,11 +576,14 @@ async function planFromMrpack(archivePath: string): Promise<PackPlan> {
   // Modrinth markiert Client-Only-Dateien explizit – die lassen wir weg.
   const downloads = index.files
     .filter((f) => f.env?.server !== 'unsupported')
-    .map((f) => ({
-      path: f.path.replace(/\\/g, '/'),
-      urls: f.downloads,
-      size: f.fileSize ?? 0,
-    }));
+    .map((f) => {
+      const urls = (f.downloads ?? []).filter(allowedMrpackUrl);
+      if (!urls.length) throw new Error(`Ungültiges .mrpack – ${f.path} hat keine erlaubte Downloadadresse`);
+      const sha1 = f.hashes?.sha1?.toLowerCase();
+      const sha512 = f.hashes?.sha512?.toLowerCase();
+      if (!sha1 && !sha512) throw new Error(`Ungültiges .mrpack – ${f.path} hat keine Prüfsumme`);
+      return { path: f.path.replace(/\\/g, '/'), urls, size: f.fileSize ?? 0, sha1, sha512 };
+    });
 
   return {
     name: index.name,
@@ -1085,6 +1109,9 @@ const SERVERPACK_SKIP = [
   /^run\.(bat|sh)$/i,
 ];
 
+/** Einzelne Dateien in Modpack-Overrides sind nie so groß; alles darüber ist verdächtig. */
+const MAX_OVERRIDE_BYTES = 2 * 1024 ** 3;
+
 async function extractOverrides(
   plan: PackPlan,
   targetDir: string,
@@ -1092,6 +1119,9 @@ async function extractOverrides(
 ): Promise<number> {
   const root = path.resolve(targetDir);
   let written = 0;
+  // Auch ohne Kontingent: der Datenträger darf nicht volllaufen (1 GiB Reserve).
+  const free = await fs.statfs(root).then((st) => Number(st.bsize) * Number(st.bavail) - 1024 ** 3).catch(() => Infinity);
+  opts.maxGrowth = Math.min(opts.maxGrowth, Math.max(0, free));
 
   for (const overrideDir of plan.overrideDirs) {
     const prefix = overrideDir === '.' ? '' : overrideDir.replace(/\/+$/, '') + '/';
@@ -1111,12 +1141,18 @@ async function extractOverrides(
       if (isClientOnlyPackPath(relative)) continue;
       if (plan.isServerPack && SERVERPACK_SKIP.some((r) => r.test(relative))) continue;
 
+      // adm-zip begrenzt das Entpacken auf die angegebene Größe – außer sie
+      // steht auf 0. Ein solcher Eintrag mit Inhalt wäre eine ZIP-Bombe.
+      if (entry.header.size === 0 && entry.header.compressedSize > 2) throw new Error(`Ungültiger Eintrag im Modpack: ${relative}`);
+      if (entry.header.size > MAX_OVERRIDE_BYTES) throw new Error(`Datei im Modpack ist zu groß: ${relative}`);
       const out = archiveEntryPath(root, relative);
       const previous = await fs.stat(out).catch(() => null);
       opts.maxGrowth -= Math.max(0, entry.header.size - (previous?.size ?? 0));
-      if (opts.maxGrowth < 0) throw new Error('Speicherkontingent reicht für das Modpack nicht aus');
+      if (opts.maxGrowth < 0) throw new Error('Speicherplatz reicht für das Modpack nicht aus');
+      const data = entry.getData();
+      if (data.length !== entry.header.size) throw new Error(`Größe im Modpack stimmt nicht: ${relative}`);
       await fs.mkdir(path.dirname(out), { recursive: true });
-      await fs.writeFile(out, entry.getData());
+      await fs.writeFile(archiveEntryPath(root, relative), data);
       written++;
     }
   }

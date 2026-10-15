@@ -5,6 +5,7 @@ import { audit, requireAdmin, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { DEFAULT_EVENTS, EVENTS, EVENT_LABELS, testChannel } from '../services/notify.js';
+import { assertWebhookUrl, BlockedTargetError } from '../lib/safeHttp.js';
 
 const TYPES = ['DISCORD', 'WEBHOOK'] as const;
 
@@ -19,40 +20,16 @@ const bodySchema = z.object({
 /**
  * Verhindert, dass ein Server-Mitglied das Panel Anfragen ins eigene Netz
  * schicken lässt (SSRF). Administratoren dürfen das – im Heimnetz zeigt ein
- * Webhook durchaus mal auf einen Dienst nebenan.
- *
- * Die Prüfung sieht nur den Hostnamen an; ein Name, der erst per DNS auf eine
- * private Adresse zeigt, käme durch. Für ein selbst gehostetes Panel mit
- * eingeladenen Freunden ist das die richtige Abwägung.
+ * Webhook durchaus mal auf einen Dienst nebenan. Die Freigabe wird am Kanal
+ * gespeichert; bei der Zustellung prüft lib/safeHttp.ts zusätzlich die
+ * tatsächlich aufgelöste Adresse.
  */
 function assertSafeTarget(target: string, isAdmin: boolean): void {
-  let url: URL;
   try {
-    url = new URL(target);
-  } catch {
-    throw badRequest('Die Ziel-URL ist ungültig');
-  }
-
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw badRequest('Nur http- und https-Adressen sind erlaubt');
-  }
-  if (isAdmin) return;
-
-  const host = url.hostname.toLowerCase();
-  const privat =
-    host === 'localhost' ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal') ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    host === '::1' ||
-    host === '0.0.0.0';
-
-  if (privat) {
-    throw badRequest('Adressen im lokalen Netz sind nur für Administratoren erlaubt');
+    assertWebhookUrl(target.trim(), isAdmin);
+  } catch (err) {
+    if (err instanceof BlockedTargetError) throw badRequest(err.message);
+    throw err;
   }
 }
 
@@ -147,6 +124,7 @@ export default async function notificationRoutes(app: FastifyInstance) {
         type: body.type,
         target: body.target.trim(),
         events: body.events,
+        allowPrivate: req.user!.role === 'ADMIN',
       },
     });
 
@@ -184,6 +162,7 @@ export default async function notificationRoutes(app: FastifyInstance) {
         type: body.type,
         target: body.target.trim(),
         events: body.events,
+        allowPrivate: req.user!.role === 'ADMIN',
       },
     });
 
@@ -250,6 +229,7 @@ export async function globalNotificationRoutes(app: FastifyInstance) {
         type: body.type,
         target: body.target.trim(),
         events: body.events,
+        allowPrivate: true,
       },
     });
 
@@ -285,6 +265,7 @@ export async function globalNotificationRoutes(app: FastifyInstance) {
         type: body.type,
         target: body.target.trim(),
         events: body.events,
+        allowPrivate: true,
       },
     });
 

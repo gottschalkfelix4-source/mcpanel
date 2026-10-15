@@ -114,3 +114,32 @@ it('BUG-17: completion mode waits and propagates a late failure', async () => {
   await checked;
   expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }));
 });
+
+it('bündelt Fortschritt und Log in wenigen Datenbankschreibvorgängen und verliert beim Abschluss nichts', async () => {
+  vi.useFakeTimers();
+  try {
+    mocks.create.mockResolvedValue({ id: 'gebuendelt' });
+    mocks.update.mockReset();
+    mocks.update.mockResolvedValue({});
+    const { createTask } = await import('./tasks.js');
+    const task = await createTask('srv-buendel', 'modpack.install');
+    for (let i = 0; i < 300; i++) {
+      await task.log(`Mod ${i} geladen`);
+      await task.update(i / 3, `Mod ${i}`);
+    }
+    expect(mocks.update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    const zwischenstand = mocks.update.mock.calls[0][0].data;
+    expect(zwischenstand.progress).toBe(100);
+    expect(zwischenstand.log).toContain('Mod 299 geladen');
+
+    await task.log('letzte Zeile');
+    await task.done();
+    const daten = mocks.update.mock.calls.map(([arg]) => arg.data);
+    expect(daten.some((d) => d.log?.includes('letzte Zeile'))).toBe(true);
+    expect(daten.at(-1)).toMatchObject({ status: 'DONE', progress: 100, message: 'Mod 299' });
+  } finally {
+    vi.useRealTimers();
+  }
+});

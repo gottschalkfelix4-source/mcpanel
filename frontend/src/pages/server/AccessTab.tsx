@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Crown, KeyRound, ShieldPlus, Trash2, UserPlus } from 'lucide-react';
+import { ArrowRightLeft, Crown, KeyRound, ShieldPlus, Trash2, UserPlus } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatDate } from '../../lib/format';
 import type { Member } from '../../lib/types';
 import {
-  Badge, Button, ConfirmDialog, EmptyState, InfoNote, LoadErrorBlock, LoadingBlock, Modal, Panel, useToast,
+  Badge, Button, ConfirmDialog, EmptyState, Field, InfoNote, LoadErrorBlock, LoadingBlock, Modal, Panel, Toggle, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
@@ -27,6 +27,9 @@ export default function AccessTab() {
   const [newUser, setNewUser] = useState('');
   const [newPermissions, setNewPermissions] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [newOwner, setNewOwner] = useState('');
+  const [keepPreviousOwner, setKeepPreviousOwner] = useState(true);
 
   const data = useQuery({
     queryKey: ['members', server.id],
@@ -36,13 +39,25 @@ export default function AccessTab() {
   const directory = useQuery({
     queryKey: ['user-directory'],
     queryFn: () => api.get<{ id: string; username: string }[]>('/users/directory'),
-    enabled: showAdd,
+    enabled: showAdd || showTransfer,
   });
 
   const invalidate = () => {
     void data.refetch();
     queryClient.invalidateQueries({ queryKey: ['server', server.id] });
   };
+
+  const transfer = useMutation({
+    mutationFn: () => api.post(`/servers/${server.id}/owner`, { userId: newOwner, keepPreviousOwner }),
+    onSuccess: () => {
+      toast.success('Besitzer übertragen.');
+      setShowTransfer(false);
+      setNewOwner('');
+      setKeepPreviousOwner(true);
+      invalidate();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
 
   const add = useMutation({
     mutationFn: () =>
@@ -125,6 +140,17 @@ export default function AccessTab() {
             <p className="truncate text-xs text-stone-350">{response.owner?.email}</p>
           </div>
           <Badge tone="gold">Besitzer</Badge>
+          {server.isAdmin && (
+            <Button
+              variant="ghost"
+              className="!px-2.5 !py-1.5 !text-xs"
+              icon={<ArrowRightLeft size={13} />}
+              title="Besitzer übertragen"
+              onClick={() => setShowTransfer(true)}
+            >
+              Übertragen
+            </Button>
+          )}
         </div>
 
         {response.members.length === 0 ? (
@@ -224,6 +250,50 @@ export default function AccessTab() {
         confirmLabel="Entziehen"
         danger
       />
+      <Modal
+        open={showTransfer}
+        onClose={() => setShowTransfer(false)}
+        title="Besitzer übertragen"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setShowTransfer(false)}>
+              Abbrechen
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!newOwner}
+              loading={transfer.isPending}
+              onClick={() => transfer.mutate()}
+            >
+              Übertragen
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Neuer Besitzer">
+            <select className="mc-input" value={newOwner} onChange={(e) => setNewOwner(e.target.value)}>
+              <option value="">Konto wählen …</option>
+              {directory.data
+                ?.filter((user) => user.id !== response.owner?.id)
+                .map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.username}
+                  </option>
+                ))}
+            </select>
+          </Field>
+          <Toggle
+            checked={keepPreviousOwner}
+            onChange={setKeepPreviousOwner}
+            label={`${response.owner?.username ?? 'Bisheriger Besitzer'} behält vollen Zugriff als Mitglied`}
+          />
+          {!keepPreviousOwner && (
+            <InfoNote>Automationen des bisherigen Besitzers laufen künftig im Namen des neuen Besitzers.</InfoNote>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

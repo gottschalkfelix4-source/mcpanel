@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { defaultInitialMemory, memoryWorkingSet } from './memory.js';
+import { defaultInitialMemory, memoryWorkingSet, parseMemoryMb } from './memory.js';
 
 it.each(['16384M', '10G', '4294967296', '4194304K', '1t'])('caps initial allocation for a large maximum of %s', maximum => {
   expect(defaultInitialMemory(maximum)).toBe('2048M');
@@ -28,4 +28,14 @@ it('supports old daemons and missing counters', () => {
 });
 it.each([-1, 1000, 2000])('does not hide real memory for an inconsistent cache counter %s', inactive_file => {
   expect(memoryWorkingSet({ usage: 1000, stats: { inactive_file } })).toBe(1000);
+});
+
+it.each([
+  ['4G', 4096], ['4096M', 4096], ['4096m', 4096], ['4194304K', 4096], ['1t', 1024 * 1024],
+  ['1.5G', 1536], ['4294967296', 4096], ['2gb', 2048],
+])('rechnet %s in %i MB um', (value, mb) => {
+  expect(parseMemoryMb(value)).toBe(mb);
+});
+it.each(['50%', '', 'viel', '0M', '-1G', null, undefined])('lehnt unbekannte Schreibweise %s ab', (value) => {
+  expect(parseMemoryMb(value as string)).toBeNull();
 });

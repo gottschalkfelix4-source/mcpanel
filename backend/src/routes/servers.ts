@@ -4,10 +4,12 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { config } from '../config.js';
 import { audit, authenticate, getServerAccess, requireServer } from '../auth/context.js';
-import { PERMISSIONS } from '../auth/permissions.js';
+import { ALL_PERMISSIONS, PERMISSIONS } from '../auth/permissions.js';
+import { invalidateSocketAccess } from '../ws/io.js';
 import { badRequest, forbidden } from '../lib/errors.js';
 import * as dockerSvc from '../services/docker.js';
-import { listPlayers, rconCommand } from '../services/rcon.js';
+import { listPlayers } from '../services/rcon.js';
+import { sendServerCommand } from '../services/consoleCommand.js';
 import {
   createServer,
   deleteServer,
@@ -225,6 +227,44 @@ export default async function serverRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Besitzerwechsel – sonst lässt sich ein Benutzer mit Servern nie löschen.
+  app.post('/:id/owner', async (req) => {
+    const access = await requireServer(req);
+    if (!access.isAdmin) throw forbidden('Den Besitzer kann nur ein Administrator ändern');
+    const body = z.object({
+      userId: z.string().min(1),
+      // Der bisherige Besitzer bleibt standardmäßig als Mitglied mit allen Rechten.
+      keepPreviousOwner: z.boolean().default(true),
+    }).parse(req.body);
+    const server = access.server;
+    if (body.userId === server.ownerId) throw badRequest('Dieser Benutzer besitzt den Server bereits');
+    const target = await prisma.user.findUnique({ where: { id: body.userId } });
+    if (!target) throw badRequest('Benutzer nicht gefunden');
+    if (!target.active) throw badRequest('Deaktivierte Benutzer können keinen Server übernehmen');
+
+    const previousOwnerId = server.ownerId;
+    await prisma.$transaction(async (tx) => {
+      // Der neue Besitzer hat ohnehin alle Rechte – eine Mitgliedschaft wäre doppelt.
+      await tx.serverMember.deleteMany({ where: { serverId: server.id, userId: target.id } });
+      await tx.server.update({ where: { id: server.id }, data: { ownerId: target.id } });
+      if (body.keepPreviousOwner) {
+        await tx.serverMember.create({
+          data: { serverId: server.id, userId: previousOwnerId, permissions: ALL_PERMISSIONS },
+        });
+      } else {
+        // Automationen laufen mit den Rechten ihres Erstellers; ohne Zugang würden
+        // sie beim nächsten Lauf abgeschaltet. Der neue Besitzer übernimmt sie.
+        await tx.automation.updateMany({
+          where: { serverId: server.id, createdById: previousOwnerId },
+          data: { createdById: target.id },
+        });
+      }
+    });
+    invalidateSocketAccess();
+    await audit(req.user!.id, server.id, 'server.owner', `${previousOwnerId} → ${target.username}`);
+    return { ok: true, owner: { id: target.id, username: target.username } };
+  });
+
   app.put('/:id/proxy', async (req) => {
     const access = await requireServer(req);
     if (!access.isAdmin) throw forbidden('Subdomains verwalten nur Administratoren');
@@ -287,8 +327,9 @@ export default async function serverRoutes(app: FastifyInstance) {
   // --- Konsole -----------------------------------------------------------
   app.get('/:id/logs', async (req) => {
     const access = await requireServer(req, PERMISSIONS.CONSOLE_READ);
-    const lines = Number((req.query as { lines?: string }).lines ?? 400);
-    return { log: await dockerSvc.tailLogs(access.server, Math.min(2000, Math.max(50, lines))) };
+    const requested = Number((req.query as { lines?: string }).lines ?? 400);
+    const lines = Number.isFinite(requested) ? Math.min(2000, Math.max(50, Math.trunc(requested))) : 400;
+    return { log: await dockerSvc.tailLogs(access.server, lines) };
   });
 
   app.post('/:id/command', async (req) => {
@@ -296,21 +337,12 @@ export default async function serverRoutes(app: FastifyInstance) {
     const { command } = commandSchema.parse(req.body);
     const server = access.server;
 
-    return withServerOperation(server.id, 'Konsolenbefehl', async () => {
     const { state } = await dockerSvc.getState(server);
     if (state !== 'running') throw badRequest('Server läuft nicht');
 
     const clean = command.replace(/^\//, '');
     await audit(req.user!.id, server.id, 'server.command', clean.slice(0, 120));
-
-    try {
-      const response = await rconCommand(server, clean);
-      return { ok: true, via: 'rcon', response };
-    } catch {
-      await dockerSvc.writeStdin(server, clean);
-      return { ok: true, via: 'stdin', response: '' };
-    }
-    });
+    return { ok: true, ...(await sendServerCommand(server, clean)) };
   });
 
   // --- Spieler & Stats ---------------------------------------------------

@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
+import { badRequest } from '../lib/errors.js';
 import {
   PROPERTY_FIELDS,
   readJsonList,
@@ -42,7 +43,10 @@ export default async function configRoutes(app: FastifyInstance) {
       type: access.server.type,
       autoStart: access.server.autoStart,
       image: dockerSvc.imageForServer(access.server),
-      effective: dockerSvc.buildEnv(access.server),
+      // Das RCON-Passwort öffnet die Serverkonsole ohne Panelrechte – nur
+      // Administratoren sehen es im Klartext.
+      effective: dockerSvc.buildEnv(access.server).map((entry) =>
+        !access.isAdmin && entry.startsWith('RCON_PASSWORD=') ? 'RCON_PASSWORD=••••••••' : entry),
     };
   });
 
@@ -65,7 +69,12 @@ export default async function configRoutes(app: FastifyInstance) {
   app.post('/players/:action', async (req) => {
     const access = await requireServer(req, PERMISSIONS.CONFIG_EDIT);
     const { action } = req.params as { action: string };
-    const body = z.object({ player: z.string().min(1).max(32), reason: z.string().optional() }).parse(req.body);
+    const body = z.object({
+      // Nur echte Spielernamen (Java bzw. Bedrock über Floodgate mit Präfix) –
+      // Zielselektoren wie @a würden sonst alle Spieler treffen.
+      player: z.string().regex(/^[.*]?[A-Za-z0-9_]{1,16}$/, 'Ungültiger Spielername'),
+      reason: z.string().max(200).regex(/^[^\r\n\0]*$/, 'Ungültige Begründung').optional(),
+    }).parse(req.body);
 
     const commands: Record<string, string> = {
       op: `op ${body.player}`,
@@ -78,7 +87,7 @@ export default async function configRoutes(app: FastifyInstance) {
     };
 
     const command = commands[action];
-    if (!command) return { ok: false, error: 'Unbekannte Aktion' };
+    if (!command) throw badRequest('Unbekannte Aktion');
 
     const response = await rconCommand(access.server, command);
     await audit(req.user!.id, access.server.id, `player.${action}`, body.player);

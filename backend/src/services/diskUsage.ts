@@ -81,7 +81,26 @@ export function invalidateDiskUsage(serverId: string): void {
  * vor einer Sicherung: dort zaehlt Genauigkeit mehr als Antwortzeit, und der
  * Vorgang dauert ohnehin Minuten.
  */
-export async function computeDiskUsage(serverId: string): Promise<DiskUsage> {
+export async function computeDiskUsage(serverId: string, maxAgeMs = QUOTA_FRESH_MS): Promise<DiskUsage> {
+  // Ein frisch gemessener Wert reicht – sonst liefe bei jedem Upload und jeder
+  // gespeicherten Datei ein kompletter Verzeichnisdurchlauf (Modpacks:
+  // sechsstellige Dateizahlen). Eigene Schreibvorgänge zählt adjustDiskUsage mit.
+  const hit = cache.get(serverId);
+  if (hit && Date.now() - hit.computedAt <= maxAgeMs) return toResult(hit, false);
   const entry = await compute(serverId);
   return toResult(entry, false);
+}
+
+/** So lange gilt eine Messung für Kontingentprüfungen als aktuell. */
+const QUOTA_FRESH_MS = 30_000;
+
+/**
+ * Rechnet eine bekannte Änderung (Upload, gespeicherte Datei) in den
+ * zwischengespeicherten Wert ein, statt ihn zu verwerfen.
+ */
+export function adjustDiskUsage(serverId: string, deltaBytes: number): void {
+  const hit = cache.get(serverId);
+  if (!hit || !Number.isFinite(deltaBytes)) return;
+  hit.data = Math.max(0, hit.data + deltaBytes);
+  hit.total = hit.data + hit.backups;
 }

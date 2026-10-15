@@ -23,7 +23,7 @@ vi.mock('../src/services/docker.js', () => ({
   getState: async () => ({ state: 'running' }),
   stop: m.stop, recreateContainer: m.recreate, start: m.start,
 }));
-vi.mock('../src/services/diskUsage.js', () => ({ getDiskUsage: vi.fn(), invalidateDiskUsage: vi.fn() }));
+vi.mock('../src/services/diskUsage.js', () => ({ getDiskUsage: vi.fn(), invalidateDiskUsage: vi.fn(), adjustDiskUsage: vi.fn() }));
 vi.mock('../src/services/playerCount.js', () => ({ getPlayerCount: vi.fn() }));
 vi.mock('../src/services/settings.js', () => ({ getPublicHost: async () => 'localhost', getSetting: async () => '' }));
 

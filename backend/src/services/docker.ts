@@ -6,8 +6,10 @@ import type { Container, ContainerInfo } from 'dockerode';
 import type { Server } from '@prisma/client';
 import { config, serverHostDir } from '../config.js';
 import { containerIcon, containerNames } from './containerPresentation.js';
-import { defaultInitialMemory, memoryWorkingSet, type DockerMemoryStats } from './memory.js';
+import { defaultInitialMemory, memoryWorkingSet, parseMemoryMb, type DockerMemoryStats } from './memory.js';
+import { StringDecoder } from 'node:string_decoder';
 import { connectPanelToNetwork } from './dockerNetwork.js';
+import { setServerNetwork } from '../lib/network.js';
 import { serverLoader } from './content.js';
 import { hasFatalServerLog } from './serverLog.js';
 
@@ -30,6 +32,19 @@ let plannedStopHook: ((serverId: string) => void) | null = null;
 const plannedStops = new Map<string, number>();
 export function wasPlannedStop(id: string): boolean {
   return Date.now() - (plannedStops.get(id) ?? 0) < 180_000;
+}
+
+/**
+ * Ging dieser Lauf durch einen Stopp/Kill des Panels zu Ende? Anders als
+ * `wasPlannedStop` gilt das dauerhaft für den beendeten Lauf – ein per Kill
+ * beendeter Server (Exitcode 137) bleibt „gestoppt“ statt nach drei Minuten
+ * als Fehler zu erscheinen.
+ */
+function endedByPanel(id: string, finishedAt: string | undefined): boolean {
+  const planned = plannedStops.get(id);
+  if (!planned) return false;
+  const finished = Date.parse(finishedAt ?? '');
+  return !Number.isFinite(finished) || finished >= planned - 5000;
 }
 
 export function onPlannedStop(fn: (serverId: string) => void): void {
@@ -123,6 +138,19 @@ export async function ensureNetwork(): Promise<void> {
     }
   }
   await connectPanelToNetwork(docker, config.dockerNetwork);
+  // Merken, aus welchem Netz die Minecraft-Container kommen: von dort wird
+  // das Panel (HTTP, Socket.IO, SFTP) nicht beantwortet.
+  // Schlägt die Abfrage fehl, bleibt der zuletzt bekannte Stand – das Anlegen
+  // eines Containers soll daran nicht scheitern.
+  const info = await docker.getNetwork(config.dockerNetwork).inspect().catch(() => null) as {
+    IPAM?: { Config?: { Subnet?: string; Gateway?: string }[] | null };
+  } | null;
+  if (!info) return;
+  const ipam = info.IPAM?.Config ?? [];
+  setServerNetwork(
+    ipam.map((entry) => entry.Subnet ?? '').filter(Boolean),
+    ipam.map((entry) => entry.Gateway ?? '').filter(Boolean),
+  );
 }
 
 export async function ensureImage(image: string, onProgress?: (msg: string) => void): Promise<void> {
@@ -143,11 +171,12 @@ export async function ensureImage(image: string, onProgress?: (msg: string) => v
   });
 }
 
-export async function findContainer(server: Server): Promise<Container | null> {
+/** Sucht den Container; liefert die Inspect-Daten mit, wenn sie schon angefallen sind. */
+async function locateContainer(server: Server): Promise<{ container: Container; info?: Docker.ContainerInspectInfo } | null> {
   try {
     const c = docker.getContainer(server.containerName);
     const info = await c.inspect();
-    if (info.Config.Labels?.[LABEL_SERVER] === server.id) return c;
+    if (info.Config.Labels?.[LABEL_SERVER] === server.id) return { container: c, info };
   } catch (err) {
     if ((err as { statusCode?: number }).statusCode !== 404) throw err;
   }
@@ -155,7 +184,11 @@ export async function findContainer(server: Server): Promise<Container | null> {
   // Docker's visible name can change; ownership is always identified by label.
   const matches = await docker.listContainers({ all: true, filters: { label: [`${LABEL_SERVER}=${server.id}`] } });
   if (matches.length > 1) throw conflict('Mehrere Container gehören zu diesem Server');
-  return matches.length ? docker.getContainer(matches[0].Id) : null;
+  return matches.length ? { container: docker.getContainer(matches[0].Id) } : null;
+}
+
+export async function findContainer(server: Server): Promise<Container | null> {
+  return (await locateContainer(server))?.container ?? null;
 }
 
 function containerLabels(server: Server): Record<string, string> {
@@ -221,10 +254,23 @@ export function containerMemoryBytes(memoryMb: number): number {
   return (memoryMb + overhead) * 1024 * 1024;
 }
 
+/**
+ * Heap, den der Server tatsächlich bekommt. Ein Admin kann MEMORY/MAX_MEMORY
+ * über die Umgebung höher setzen als `memoryMb` – das Containerlimit muss dem
+ * folgen, sonst beendet der OOM-Killer die JVM, sobald der Heap wächst.
+ */
+export function effectiveHeapMb(server: Server): number {
+  const extra = (server.extraEnv ?? {}) as Record<string, string>;
+  const requested = Math.max(parseMemoryMb(extra.MAX_MEMORY) ?? 0, parseMemoryMb(extra.MEMORY) ?? 0);
+  return Math.max(server.memoryMb, requested);
+}
+
+export const serverMemoryLimitBytes = (server: Server) => containerMemoryBytes(effectiveHeapMb(server));
+
 export async function createContainer(server: Server): Promise<Container> {
   await ensureNetwork();
 
-  const memBytes = containerMemoryBytes(server.memoryMb);
+  const memBytes = serverMemoryLimitBytes(server);
 
   const [name, collisionName] = containerNames(server);
   const options: Docker.ContainerCreateOptions = {
@@ -282,7 +328,7 @@ async function configMatches(container: Container, server: Server): Promise<bool
     }
     if (!info.NetworkSettings.Networks[config.dockerNetwork]?.Aliases?.includes(server.containerName)) return false;
     if (info.Config.Image !== imageForServer(server)) return false;
-    if (info.HostConfig.Memory !== containerMemoryBytes(server.memoryMb)) return false;
+    if (info.HostConfig.Memory !== serverMemoryLimitBytes(server)) return false;
 
     const dns = info.HostConfig.Dns ?? [];
     if (dns.join(',') !== config.mcDns.join(',')) return false;
@@ -346,11 +392,15 @@ export async function getState(server: Server): Promise<{
   state: PowerState;
   health: string | null;
   startedAt: string | null;
+  /** Ende des letzten Laufs – erkennt Abstürze auch zwischen zwei Abfragen. */
+  finishedAt?: string | null;
 }> {
-  const c = await findContainer(server);
-  if (!c) return { state: 'missing', health: null, startedAt: null };
+  const found = await locateContainer(server);
+  if (!found) return { state: 'missing', health: null, startedAt: null };
+  const c = found.container;
   try {
-    const info = await c.inspect();
+    // Meist hat die Suche den Container schon inspiziert – kein zweiter Aufruf.
+    const info = found.info ?? await c.inspect();
     const health = info.State.Health?.Status ?? null;
     let state: PowerState = 'stopped';
     if (info.State.Running) {
@@ -359,7 +409,7 @@ export async function getState(server: Server): Promise<{
       // Modpacks antwortet der Status-Ping erst spät oder gar nicht, obwohl
       // Spieler längst verbinden können. Der Zustand wird separat gemeldet.
       state = health === 'starting' ? 'starting' : 'running';
-    } else if (info.State.Dead || info.State.ExitCode > 0) {
+    } else if (info.State.Dead || (info.State.ExitCode > 0 && !endedByPanel(server.id, info.State.FinishedAt))) {
       state = 'error';
     } else if (!wasPlannedStop(server.id) && Date.parse(info.State.StartedAt) > 0) {
       // Fabric kann nach einem fatalen Startfehler trotzdem Exitcode 0 liefern.
@@ -374,7 +424,8 @@ export async function getState(server: Server): Promise<{
       }
       if (check.failed) state = 'error';
     }
-    return { state, health, startedAt: info.State.StartedAt ?? null };
+    const finished = info.State.FinishedAt && Date.parse(info.State.FinishedAt) > 0 ? info.State.FinishedAt : null;
+    return { state, health, startedAt: info.State.StartedAt ?? null, finishedAt: finished };
   } catch (err) {
     if ((err as { statusCode?: number }).statusCode === 404) return { state: 'missing', health: null, startedAt: null };
     throw err;
@@ -425,7 +476,26 @@ async function restartUnlocked(server: Server): Promise<void> {
 }
 
 /** Ressourcennutzung (einmalige Momentaufnahme). */
-export async function getStats(server: Server) {
+type ContainerStats = { cpuPercent: number; memoryUsed: number; memoryLimit: number } | null;
+/**
+ * Docker braucht für eine Momentaufnahme gut eine Sekunde (zwei Messpunkte).
+ * Serverliste, Detailseite und mehrere offene Tabs teilen sich deshalb eine
+ * kurz zwischengespeicherte Messung statt jede selbst anzustoßen.
+ */
+const statsCache = new Map<string, { at: number; value: Promise<ContainerStats> }>();
+const STATS_TTL_MS = 4000;
+
+export function getStats(server: Server): Promise<ContainerStats> {
+  const now = Date.now();
+  const cached = statsCache.get(server.id);
+  if (cached && now - cached.at < STATS_TTL_MS) return cached.value;
+  for (const [id, entry] of statsCache) if (now - entry.at >= STATS_TTL_MS) statsCache.delete(id);
+  const value = readStats(server);
+  statsCache.set(server.id, { at: now, value });
+  return value;
+}
+
+async function readStats(server: Server): Promise<ContainerStats> {
   const c = await findContainer(server);
   if (!c) return null;
   try {
@@ -474,7 +544,13 @@ export async function followLogs(
     tail: 0,
   })) as unknown as NodeJS.ReadableStream;
 
-  const handler = (buf: Buffer) => onChunk(stripDockerHeaders(buf));
+  // Ohne Decoder zerbrechen Umlaute, die über zwei Datenpakete verteilt ankommen.
+  const info = await c.inspect().catch(() => null);
+  const decode = info?.Config?.Tty === false ? frameDecoder() : rawDecoder();
+  const handler = (buf: Buffer) => {
+    const text = decode(Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf)));
+    if (text) onChunk(text);
+  };
   stream.on('data', handler);
   stream.on('error', () => {});
 
@@ -501,6 +577,29 @@ export async function writeStdin(server: Server, line: string): Promise<void> {
 
 export async function listPanelContainers(): Promise<ContainerInfo[]> {
   return docker.listContainers({ all: true, filters: { label: [LABEL_SERVER] } });
+}
+
+function rawDecoder(): (buf: Buffer) => string {
+  const decoder = new StringDecoder('utf8');
+  return (buf) => decoder.write(buf);
+}
+
+/** Multiplexte Frames (ohne TTY) können mitten im Header oder Zeichen enden. */
+export function frameDecoder(): (buf: Buffer) => string {
+  const decoders = [new StringDecoder('utf8'), new StringDecoder('utf8'), new StringDecoder('utf8')];
+  let pending: Buffer = Buffer.alloc(0);
+  return (buf) => {
+    pending = pending.length ? Buffer.concat([pending, buf]) : buf;
+    let out = '';
+    while (pending.length >= 8) {
+      const type = pending[0];
+      const len = pending.readUInt32BE(4);
+      if (pending.length < 8 + len) break;
+      out += decoders[type <= 2 ? type : 1].write(pending.subarray(8, 8 + len));
+      pending = pending.subarray(8 + len);
+    }
+    return out;
+  };
 }
 
 /**
@@ -550,7 +649,12 @@ export const start = (...args: Parameters<typeof startUnlocked>) => withServerOp
 
 export const stop = (...args: Parameters<typeof stopUnlocked>) => withServerOperation(args[0].id, "stop", () => stopUnlocked(...args));
 
-export const kill = (...args: Parameters<typeof killUnlocked>) => withServerOperation(args[0].id, "kill", () => killUnlocked(...args));
+/**
+ * Kill bewusst ohne Serversperre: er ist der Notausgang, wenn ein Stopp,
+ * Backup oder Upload hängt. Ein laufender Vorgang bemerkt den beendeten
+ * Container selbst; Dateien werden hier nicht angefasst.
+ */
+export const kill = (...args: Parameters<typeof killUnlocked>) => killUnlocked(...args);
 
 export const restart = (...args: Parameters<typeof restartUnlocked>) => withServerOperation(args[0].id, "restart", () => restartUnlocked(...args));
 

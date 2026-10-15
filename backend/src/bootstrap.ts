@@ -10,6 +10,8 @@ import { startWatcher } from './services/notify.js';
 import { startPanelBackupScheduler } from './services/panelBackups.js';
 import { applyTarget, getTarget } from './services/backupTarget.js';
 import { startScheduler } from './services/automation.js';
+import { prepareSetupCode } from './routes/setup.js';
+import { runDataMigrations } from './services/migrations.js';
 
 /** Beispielwert, der frueher in .env.example stand und im Repository nachlesbar ist. */
 const BEISPIEL_JWT_SECRET = 'bitte-hier-ein-langes-zufaelliges-secret-eintragen';
@@ -80,6 +82,7 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
       // zum ersten Konto, ein Startabbruch waere nur ein toter Container.
       log(`WARNUNG: Kein Administrator aus der Umgebung angelegt – ${problem}.`);
       log('Das Panel fuehrt beim Aufruf stattdessen durch die Ersteinrichtung.');
+      await prepareSetupCode(log);
     } else if (config.admin.password) {
       // Unbeaufsichtigter Start: Zugangsdaten kamen ueber die Umgebung.
       await prisma.user.create({
@@ -93,6 +96,7 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
       log(`Administrator "${config.admin.username}" aus der Umgebung angelegt.`);
     } else {
       log('Noch kein Konto vorhanden – das Panel fuehrt beim Aufruf durch die Ersteinrichtung.');
+      await prepareSetupCode(log);
     }
   }
 
@@ -102,12 +106,19 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
     data: { status: 'FAILED', error: 'Panel wurde neu gestartet' },
   });
 
+  // Ein einzelner kaputter Server (Docker weg, Rechte, volle Platte) darf
+  // den Start des Panels nicht verhindern – sonst ist niemand mehr drin.
   for (const server of await prisma.server.findMany()) {
-    const interrupted = await hasInterruptedRestore(server.id);
-    if (interrupted) await stop(server);
-    await recoverInterruptedRestore(server.id);
-    if (interrupted) await recreateContainer(await prisma.server.findUniqueOrThrow({ where: { id: server.id } }));
+    try {
+      const interrupted = await hasInterruptedRestore(server.id);
+      if (interrupted) await stop(server);
+      await recoverInterruptedRestore(server.id);
+      if (interrupted) await recreateContainer(await prisma.server.findUniqueOrThrow({ where: { id: server.id } }));
+    } catch (err) {
+      log(`Wiederherstellung für ${server.name} konnte nicht aufgeräumt werden: ${err instanceof Error ? err.message : err}`);
+    }
   }
+  await runDataMigrations(log);
   void runAutostart();
   await reconcileProxy().catch(err => log(`Proxy: ${err.message}`));
 

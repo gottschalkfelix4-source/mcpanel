@@ -160,7 +160,7 @@ export async function importServerZip(id: string, file: string, plan: ImportPlan
         await docker.ensureImage(docker.imageForServer({ ...server, type: request.type, mcVersion: request.mcVersion }));
         changing = true;
         await docker.stop(server);
-        const backup = await createBackup(server, { name: `Vor ZIP-Import ${new Date().toISOString().slice(0, 16)}`, note: 'Automatisch vor ZIP-Import', createdById: actor.id });
+        const backup = await createBackup(server, { name: `Vor ZIP-Import ${new Date().toISOString().slice(0, 16)}`, note: 'Automatisch vor ZIP-Import', createdById: actor.id, origin: 'SAFETY' });
         await task.log(`Sicherheitsbackup erstellt: ${backup.name}`);
         if (server.quotaDiskMb > 0 && await dirSize(stage) + await dirSize(serverBackupDir(id)) > server.quotaDiskMb * 1024 ** 2) throw badRequest('Speicherkontingent reicht für ZIP-Import und Sicherheitsbackup nicht aus.');
         await saveRestoreMetadata(id, reinstallMetadata(server));

@@ -16,9 +16,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   root: '',
   findFirst: vi.fn(),
+  create: vi.fn(),
   stop: vi.fn(),
   recreateContainer: vi.fn(),
   fetchBackup: vi.fn(),
+  prune: vi.fn(async () => 0),
 }));
 
 const serverDirOf = (id: string) => path.join(mocks.root, 'servers', id);
@@ -30,7 +32,7 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../db.js', () => ({
-  prisma: { backup: { findFirst: mocks.findFirst } },
+  prisma: { backup: { findFirst: mocks.findFirst, create: mocks.create } },
 }));
 
 vi.mock('./docker.js', () => ({
@@ -40,11 +42,12 @@ vi.mock('./docker.js', () => ({
 }));
 
 vi.mock('./rcon.js', () => ({ rconCommand: vi.fn() }));
-vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));
+vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn(), adjustDiskUsage: vi.fn() }));
 vi.mock('./notify.js', () => ({ notify: vi.fn() }));
 vi.mock('./quota.js', () => ({
   assertDiskAvailable: vi.fn(),
-  pruneToBackupLimit: vi.fn(async () => 0),
+  pruneToBackupLimit: mocks.prune,
+  remainingDiskBytes: vi.fn(async () => Infinity),
 }));
 vi.mock('./backupTarget.js', () => ({
   fetchBackup: mocks.fetchBackup,
@@ -85,6 +88,7 @@ beforeEach(async () => {
   mocks.root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcpanel-backups-'));
   mocks.findFirst.mockResolvedValue({ id: 'bk-1', serverId: SERVER_ID, filename: FILENAME });
   mocks.fetchBackup.mockResolvedValue(null);
+  mocks.create.mockImplementation(async ({ data }) => ({ id: 'bk-sicher', ...data }));
 });
 
 afterEach(async () => {
@@ -155,6 +159,39 @@ describe('restoreBackup', () => {
     await legeServerstandAn();
     await expect(restoreBackup(server, 'bk-1')).rejects.toThrow(/Backup-Datei fehlt/);
     expect(mocks.stop).not.toHaveBeenCalled();
+  });
+
+  it('sichert vorher den aktuellen Stand und schützt das einzuspielende Backup vor dem Aufräumen', async () => {
+    await legeServerstandAn();
+    await packeArchiv();
+    await fs.writeFile(path.join(dir(), 'server.properties'), 'motd=Neuer Stand\n');
+
+    await restoreBackup(server, 'bk-1');
+
+    expect(mocks.create).toHaveBeenCalledOnce();
+    const { data } = mocks.create.mock.calls[0][0];
+    expect(data.origin).toBe('SAFETY');
+    expect(mocks.prune).toHaveBeenCalledWith(server, ['bk-sicher', 'bk-1']);
+    const copy = path.join(backupDirOf(SERVER_ID), data.filename);
+    const names: string[] = [];
+    await tar.list({ file: copy, onentry: (entry) => { names.push(entry.path); } });
+    expect(names).toContain('server.properties');
+    expect(await fs.readFile(path.join(dir(), 'server.properties'), 'utf8')).toBe('motd=Alter Stand\n');
+  });
+
+  it('legt ohne Wunsch keine Sicherheitskopie an', async () => {
+    await legeServerstandAn();
+    await packeArchiv();
+    await restoreBackup(server, 'bk-1', undefined, { safetyBackup: false });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('erstellt bei einem kaputten Archiv auch keine Sicherheitskopie', async () => {
+    await legeServerstandAn();
+    await fs.mkdir(backupDirOf(SERVER_ID), { recursive: true });
+    await fs.writeFile(archivePath(), 'kein gzip');
+    await expect(restoreBackup(server, 'bk-1')).rejects.toThrow();
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   // Wird das Panel mitten in der Wiederherstellung beendet - etwa durch ein

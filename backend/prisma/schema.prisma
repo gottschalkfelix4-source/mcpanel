@@ -38,6 +38,9 @@ model User {
   username     String   @unique
   passwordHash String
   sessionVersion Int @default(0)
+  /// TOTP-Geheimnis (Base32); erst mit totpEnabled aktiv
+  totpSecret   String?
+  totpEnabled  Boolean  @default(false)
   role         Role     @default(USER)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
@@ -131,6 +134,12 @@ model Backup {
   target BackupTargetVersion? @relation(fields: [targetId], references: [id])
   sizeBytes   BigInt   @default(0)
   note        String   @default("")
+  /// MANUAL | AUTOMATIC | SAFETY – nur AUTOMATIC fällt der Aufbewahrung zum Opfer
+  origin      String   @default("MANUAL")
+  /// Angeheftete Sicherungen werden nie automatisch gelöscht
+  pinned      Boolean  @default(false)
+  /// Automatisierung, die diese Sicherung angelegt hat
+  automationId String?
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
@@ -226,6 +235,8 @@ model NotificationChannel {
   type   String  @default("DISCORD")
   /// Webhook-URL des Ziels
   target String
+  /// Von einem Administrator gespeichert: Ziel darf im lokalen Netz liegen
+  allowPrivate Boolean @default(false)
 
   /// Liste der abonnierten Ereignisse, z. B. ["server.crashed","backup.done"]
   events Json @default("[]")

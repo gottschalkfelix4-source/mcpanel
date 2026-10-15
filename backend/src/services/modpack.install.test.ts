@@ -14,7 +14,7 @@ vi.mock('../db.js', () => ({ prisma: { server: {
   update: async ({ data }: any) => { m.row = { ...m.row, ...data }; return { ...m.row }; },
 } } }));
 vi.mock('./docker.js', () => ({ getState: async () => ({ state: 'running' }), stop: m.stop, start: m.start, recreateContainer: m.recreate }));
-vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));
+vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn(), adjustDiskUsage: vi.fn() }));
 vi.mock('./backups.js', () => ({ createBackup: vi.fn() }));
 vi.mock('./serverStartup.js', () => ({ waitForServerReady: m.ready }));
 vi.mock('../providers/curseforge.js', () => ({
@@ -28,14 +28,14 @@ vi.mock('../providers/modrinth.js', () => ({
   getProject: async () => ({ name: 'Pack', iconUrl: null }), modrinthHeaders: () => ({}),
 }));
 vi.mock('../lib/download.js', () => ({ downloadToFile: m.download }));
-const { installModpack } = await import('./modpack.js');
+const { installModpack, allowedMrpackUrl } = await import('./modpack.js');
 const { withServerOperation } = await import('./operations.js');
 const dir = () => path.join(m.root, 'servers/a');
 const task = () => ({ id: 'task', update: vi.fn(async () => {}), log: vi.fn(async () => {}), done: vi.fn(), fail: vi.fn() });
 const request = { provider: 'modrinth' as const, projectId: 'pack', versionId: 'new', backupFirst: false, keepConfig: true };
 function archive(downloads: { path: string; downloads: string[] }[] = [], overrides: Record<string, string | Buffer> = {}) {
   const zip = new AdmZip();
-  zip.addFile('modrinth.index.json', Buffer.from(JSON.stringify({ formatVersion: 1, name: 'Pack', versionId: 'new', dependencies: { minecraft: '1.20.1', 'fabric-loader': '0.16.0' }, files: downloads })));
+  zip.addFile('modrinth.index.json', Buffer.from(JSON.stringify({ formatVersion: 1, name: 'Pack', versionId: 'new', dependencies: { minecraft: '1.20.1', 'fabric-loader': '0.16.0' }, files: downloads.map((file) => ({ hashes: { sha1: createHash('sha1').update('new mod').digest('hex') }, ...file })) })));
   for (const [name, data] of Object.entries(overrides)) zip.addFile('overrides/' + name, Buffer.from(data));
   m.archive = zip.toBuffer();
 }
@@ -61,7 +61,7 @@ beforeEach(async () => {
 });
 afterEach(async () => fs.rm(m.root, { recursive: true, force: true }));
 it('BUG-16: missing mandatory download preserves original files and version binding', async () => {
-  archive([{ path: 'mods/missing.jar', downloads: ['https://fixture.test/bad'] }]);
+  archive([{ path: 'mods/missing.jar', downloads: ['https://cdn.modrinth.com/fixture/bad'] }]);
   await expect(installModpack('a', request, task())).rejects.toThrow('Pflichtdatei');
   expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
   expect(m.row.modpackVersionId).toBe('old');
@@ -70,9 +70,9 @@ it('BUG-16: missing mandatory download preserves original files and version bind
 });
 it('BUG-35: downloads and overrides cannot overwrite the configured world or preserved config', async () => {
   archive([
-    { path: 'customworld/level.dat', downloads: ['https://fixture.test/world'] },
-    { path: 'config/user.conf', downloads: ['https://fixture.test/config'] },
-    { path: 'mods/new.jar', downloads: ['https://fixture.test/mod'] },
+    { path: 'customworld/level.dat', downloads: ['https://cdn.modrinth.com/fixture/world'] },
+    { path: 'config/user.conf', downloads: ['https://cdn.modrinth.com/fixture/config'] },
+    { path: 'mods/new.jar', downloads: ['https://cdn.modrinth.com/fixture/mod'] },
   ], { 'customworld/level.dat': 'destroy world', 'config/user.conf': 'destroy config' });
   await installModpack('a', request, task());
   expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
@@ -112,7 +112,7 @@ it('beginnt eine Modpack-Neuinstallation auf Wunsch mit einer neuen Welt', async
   await expect(fs.stat(path.join(dir(), 'world'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 it('rolls files and metadata back if container recreation fails after the swap', async () => {
-  archive([{ path: 'mods/new.jar', downloads: ['https://fixture.test/mod'] }]);
+  archive([{ path: 'mods/new.jar', downloads: ['https://cdn.modrinth.com/fixture/mod'] }]);
   m.recreate.mockRejectedValueOnce(new Error('Docker recreation failed'));
   await expect(installModpack('a', request, task())).rejects.toThrow('recreation failed');
   expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
@@ -128,7 +128,7 @@ it('BUG-09: rejects installation while another request owns the server', async (
 });
 
 it('downloads independent mods concurrently without a quota', async () => {
-  archive(Array.from({ length: 8 }, (_, i) => ({ path: `mods/new-${i}.jar`, downloads: [`https://fixture.test/mod-${i}`] })));
+  archive(Array.from({ length: 8 }, (_, i) => ({ path: `mods/new-${i}.jar`, downloads: [`https://cdn.modrinth.com/fixture/mod-${i}`] })));
   const download = m.download.getMockImplementation()!;
   let active = 0, peak = 0;
   m.download.mockImplementation(async (...args) => {
@@ -145,7 +145,7 @@ it('downloads independent mods concurrently without a quota', async () => {
 
 it('keeps quota accounting incremental instead of scanning the tree per mod', async () => {
   m.row.quotaDiskMb = 1;
-  archive(Array.from({ length: 12 }, (_, i) => ({ path: `mods/new-${i}.jar`, downloads: [`https://fixture.test/mod-${i}`] })));
+  archive(Array.from({ length: 12 }, (_, i) => ({ path: `mods/new-${i}.jar`, downloads: [`https://cdn.modrinth.com/fixture/mod-${i}`] })));
   const reads = vi.spyOn(fs, 'readdir');
   try {
     await installModpack('a', request, task());
@@ -196,17 +196,17 @@ it('nimmt Mods mit, die nur wegen einer Client-Mod existieren', async () => {
 
 it('laedt Shaderpacks und Client-Welten aus der Dateiliste gar nicht erst herunter', async () => {
   archive([
-    { path: 'mods/new.jar', downloads: ['https://fixture.test/mod'] },
-    { path: 'shaderpacks/Riesig.zip', downloads: ['https://fixture.test/shader'] },
-    { path: 'saves/Clientwelt/level.dat', downloads: ['https://fixture.test/save'] },
+    { path: 'mods/new.jar', downloads: ['https://cdn.modrinth.com/fixture/mod'] },
+    { path: 'shaderpacks/Riesig.zip', downloads: ['https://cdn.modrinth.com/fixture/shader'] },
+    { path: 'saves/Clientwelt/level.dat', downloads: ['https://cdn.modrinth.com/fixture/save'] },
   ]);
   const t = task();
   await installModpack('a', request, t);
 
   const urls = m.download.mock.calls.map((args: unknown[]) => String(args[0]));
-  expect(urls).toContain('https://fixture.test/mod');
-  expect(urls).not.toContain('https://fixture.test/shader');
-  expect(urls).not.toContain('https://fixture.test/save');
+  expect(urls).toContain('https://cdn.modrinth.com/fixture/mod');
+  expect(urls).not.toContain('https://cdn.modrinth.com/fixture/shader');
+  expect(urls).not.toContain('https://cdn.modrinth.com/fixture/save');
   await expect(fs.stat(path.join(dir(), 'shaderpacks'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(t.log.mock.calls.some((args: unknown[]) => /2 reine Client-Datei/.test(String(args[0])))).toBe(true);
 });
@@ -414,4 +414,19 @@ it('bricht bei widersprüchlichen Loader-Versionen vor dem Serverstopp ab', asyn
   m.archive = zip.toBuffer();
   await expect(installModpack('a', { ...request, provider: 'curseforge' }, task())).rejects.toThrow('widersprüchliche');
   expect(m.stop).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['https://cdn.modrinth.com/data/AANobbMI/versions/1/sodium.jar', true],
+  ['https://github.com/owner/repo/releases/download/v1/mod.jar', true],
+  ['https://raw.githubusercontent.com/owner/repo/main/mod.jar', true],
+  ['http://cdn.modrinth.com/data/x.jar', false],
+  ['https://cdn.modrinth.com:8443/data/x.jar', false],
+  ['https://user:pw@cdn.modrinth.com/data/x.jar', false],
+  ['https://192.168.188.129/mod.jar', false],
+  ['https://cdn.modrinth.com.evil.example/x.jar', false],
+  ['file:///etc/passwd', false],
+  ['kein url', false],
+])('lässt .mrpack-Downloads nur von erlaubten Hosts zu: %s → %s', (url, allowed) => {
+  expect(allowedMrpackUrl(url)).toBe(allowed);
 });

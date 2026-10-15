@@ -1,4 +1,3 @@
-import { withServerOperation } from '../services/operations.js';
 import type { Server as IOServer, Socket } from 'socket.io';
 import type { Server } from '@prisma/client';
 import { prisma } from '../db.js';
@@ -6,8 +5,10 @@ import { prisma } from '../db.js';
 import { authenticateToken, getServerAccess } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import * as dockerSvc from '../services/docker.js';
-import { listPlayers, rconCommand } from '../services/rcon.js';
+import { listPlayers } from '../services/rcon.js';
+import { sendServerCommand } from '../services/consoleCommand.js';
 import { emitToServer, roomForServer, setIO } from './io.js';
+import { clientAddress, isServerNetworkAddress } from '../lib/network.js';
 
 interface StreamEntry {
   stop: () => void;
@@ -105,10 +106,14 @@ export function setupConsoleGateway(io: IOServer) {
 
   io.use(async (socket, next) => {
     try {
-      const token =
-        (socket.handshake.auth as { token?: string })?.token ??
-        (socket.handshake.query.token as string | undefined);
-      if (!token) return next(new Error('Nicht angemeldet'));
+      // Server-Container im Minecraft-Netz bekommen keine Verbindung.
+      const address = clientAddress(socket.request.socket.remoteAddress, socket.request.headers['x-forwarded-for']);
+      if (isServerNetworkAddress(address) || isServerNetworkAddress(socket.request.socket.remoteAddress)) {
+        return next(new Error('Zugriff aus dem Minecraft-Netz ist gesperrt'));
+      }
+      // Nur aus dem Handschlag – ein Token in der URL landet in Proxy-Logs.
+      const token = (socket.handshake.auth as { token?: string })?.token;
+      if (!token || typeof token !== 'string') return next(new Error('Nicht angemeldet'));
 
       const user = await authenticateToken(token);
       socket.data.token = token;
@@ -175,22 +180,16 @@ export function setupConsoleGateway(io: IOServer) {
           const command = payload.command.trim().replace(/^\//, '');
           if (!command) return;
 
-          await withServerOperation(access.server.id, 'Konsolenbefehl', async () => {
+          // Ohne Serversperre: Befehle gehen per RCON an den laufenden Server und
+          // dürfen parallel zu Backups und den Befehlen anderer Nutzer laufen.
           emitToServer(payload.serverId, 'console', {
             lines: [`> ${command}   [${socket.data.user.username}]`],
             local: true,
           });
 
-          try {
-            const response = await rconCommand(access.server, command);
-            if (response.trim()) {
-              socket.emit('console', { lines: response.split('\n'), local: true });
-            }
-            ack?.({ ok: true, via: 'rcon' });
-          } catch {
-            await dockerSvc.writeStdin(access.server, command);
-            ack?.({ ok: true, via: 'stdin' });
-          }
+          const { via, response } = await sendServerCommand(access.server, command);
+          if (response.trim()) socket.emit('console', { lines: response.split('\n'), local: true });
+          ack?.({ ok: true, via });
 
           await prisma.auditLog
             .create({
@@ -202,7 +201,6 @@ export function setupConsoleGateway(io: IOServer) {
               },
             })
             .catch(() => {});
-          });
         } catch (err) {
           ack?.({ ok: false, error: err instanceof Error ? err.message : 'Fehler' });
         }

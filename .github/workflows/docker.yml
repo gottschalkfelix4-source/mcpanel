@@ -41,8 +41,37 @@ jobs:
         env:
           AUDIT_SFTP_TESTS: '1'
 
+      # Bekannte Lücken in Abhängigkeiten sichtbar machen, ohne den Bau zu
+      # blockieren - nicht jede Meldung betrifft den tatsächlich genutzten Code.
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: backend
+        continue-on-error: true
+
+  # Die Oberfläche wurde bisher erst im Docker-Bau geprüft: ein Typfehler
+  # fiel damit erst nach den Backend-Tests auf und brach dann den Bau ab.
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+
+      - run: npm run build
+        working-directory: frontend
+
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend
+        continue-on-error: true
+
   build:
-    needs: test
+    needs: [test, frontend]
     runs-on: ubuntu-latest
     permissions:
       contents: read

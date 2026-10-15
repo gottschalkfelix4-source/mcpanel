@@ -45,6 +45,10 @@ MCPanel – Wartungsbefehle
   node dist/cli.js aktivieren <Benutzername|E-Mail>
       Hebt eine Deaktivierung wieder auf.
 
+  node dist/cli.js zweifaktor-aus <Benutzername|E-Mail>
+      Schaltet den zweiten Faktor ab (Gerät verloren) und meldet
+      alle Sitzungen des Kontos ab.
+
   node dist/cli.js sicherung [Zieldatei]
       Schreibt die Panel-Datenbank mit pg_dump in eine Datei.
       Ohne Angabe unter <Datenverzeichnis>/backups/panel/.
@@ -170,7 +174,7 @@ switch (command) {
       console.log(
         `${u.username.padEnd(20)} ${u.email.padEnd(32)} ${u.role.padEnd(6)} ${
           u.active ? 'aktiv' : 'deaktiviert'
-        }`,
+        }${u.totpEnabled ? ' · 2FA' : ''}`,
       );
     }
     break;
@@ -207,6 +211,18 @@ switch (command) {
     const user = await finde(kennung);
     await prisma.user.update({ where: { id: user.id }, data: { active: true } });
     console.log(`"${user.username}" ist wieder aktiv.`);
+    break;
+  }
+
+  case 'zweifaktor-aus': {
+    const [kennung] = args;
+    if (!kennung) hilfe();
+    const user = await finde(kennung);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { totpEnabled: false, totpSecret: null, sessionVersion: { increment: 1 } },
+    });
+    console.log(`Zweiter Faktor für "${user.username}" abgeschaltet.`);
     break;
   }
 

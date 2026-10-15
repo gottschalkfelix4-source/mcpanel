@@ -12,7 +12,7 @@ vi.mock('../db.js', () => ({ prisma: {
   auditLog: { create: m.audit },
 } }));
 vi.mock('./quota.js', () => ({ remainingDiskBytes: async () => m.remaining }));
-vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));
+vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn(), adjustDiskUsage: vi.fn() }));
 const { SftpFiles, sftpLocation } = await import('./sftpFiles.js');
 const { withServerOperation } = await import('./operations.js');
 let session: InstanceType<typeof SftpFiles>;
@@ -41,24 +41,32 @@ it('hält bestehende Dateien während des Uploads unverändert und ersetzt erst 
   expect(await fs.readFile(target(), 'utf8')).toBe('Neue Welt');
   expect(await fs.readdir(path.dirname(target()))).toEqual(['welt.dat']);
 });
-it('bewahrt den Altbestand bei Verbindungsabbruch und gibt die Serversperre frei', async () => {
+it('bewahrt den Altbestand bei Verbindungsabbruch und hält während der Übertragung keine Serversperre', async () => {
   const handle = await session.open('/a/welt.dat', 26);
   await session.write(handle, 0, Buffer.from('Unvollständig'));
-  await expect(withServerOperation('a', 'Sicherung', async () => {})).rejects.toThrow('SFTP-Upload');
+  // Ein offener Upload blockiert Backups und Automationen nicht mehr.
+  await expect(withServerOperation('a', 'Sicherung', async () => {})).resolves.toBeUndefined();
   await session.dispose();
   expect(await fs.readFile(target(), 'utf8')).toBe('Bestehende Welt');
-  await expect(withServerOperation('a', 'Sicherung', async () => {})).resolves.toBeUndefined();
+  expect(await fs.readdir(path.dirname(target()))).toEqual(['welt.dat']);
 });
-it('beginnt während einer Sicherung keinen SFTP-Upload', async () => {
+it('übernimmt einen Upload erst, wenn eine laufende Sicherung fertig ist', async () => {
+  const handle = await session.open('/a/welt.dat', 26);
+  await session.write(handle, 0, Buffer.from('Neue Welt'));
   let release!: () => void;
   let entered!: () => void;
   const ready = new Promise<void>((resolve) => { entered = resolve; });
   const done = new Promise<void>((resolve) => { release = resolve; });
   const backup = withServerOperation('a', 'Sicherung', async () => { entered(); await done; });
   await ready;
-  try { await expect(session.open('/a/welt.dat', 26)).rejects.toThrow('Sicherung'); }
-  finally { release(); await backup; }
+  const closing = session.close(handle);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Während die Sicherung läuft, bleibt der Altbestand unangetastet.
   expect(await fs.readFile(target(), 'utf8')).toBe('Bestehende Welt');
+  release();
+  await backup;
+  await closing;
+  expect(await fs.readFile(target(), 'utf8')).toBe('Neue Welt');
 });
 it('verweigert Schreibzugriffe für Mitglieder mit Leserechten', async () => {
   m.rights = ['files.read'];

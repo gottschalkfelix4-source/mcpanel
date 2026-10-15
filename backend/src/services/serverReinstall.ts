@@ -35,7 +35,7 @@ export async function reinstallServer(id: string, request: ReinstallRequest, tas
     try {
       if (wasRunning) { await docker.stop(server); stopped = true; }
       await task.update(15, 'Sicherheitsbackup vor der Neuinstallation …');
-      const backup = await createBackup(server, { name: `Vor Neuinstallation ${new Date().toISOString().slice(0, 16)}`, note: 'Automatisch vor Server-Neuinstallation', createdById: actor.id });
+      const backup = await createBackup(server, { name: `Vor Neuinstallation ${new Date().toISOString().slice(0, 16)}`, note: 'Automatisch vor Server-Neuinstallation', createdById: actor.id, origin: 'SAFETY' });
       await task.log(`Sicherheitsbackup erstellt: ${backup.name}`);
       await task.update(35, 'Frische Installation wird vorbereitet …');
       changing = true;

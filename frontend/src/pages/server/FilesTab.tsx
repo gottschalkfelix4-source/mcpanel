@@ -5,7 +5,7 @@ import {
   ChevronRight, Download, File as FileIcon, FileArchive, FileCode2, FileText, Folder,
   FolderPlus, HardDrive, Home, PencilLine, Save, Trash2, Upload, ExternalLink, RefreshCw,
 } from 'lucide-react';
-import { api, authedUrl, uploadFiles } from '../../lib/api';
+import { api, downloadFile, uploadFiles } from '../../lib/api';
 import { formatBytes, formatDate } from '../../lib/format';
 import type { FileEntry } from '../../lib/types';
 import {
@@ -105,13 +105,17 @@ export default function FilesTab() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const download = (entry: FileEntry) =>
+    downloadFile(`/servers/${server.id}/files/download?path=${encodeURIComponent(entry.path)}`)
+      .catch((err: Error) => toast.error(err.message));
+
   async function openFile(entry: FileEntry) {
     if (entry.isDir) {
       setPath(entry.path);
       return;
     }
     if (!entry.editable) {
-      window.open(authedUrl(`/servers/${server.id}/files/download?path=${encodeURIComponent(entry.path)}`), '_blank');
+      await download(entry);
       return;
     }
     try {
@@ -304,15 +308,13 @@ export default function FilesTab() {
                       {/* Auf Touch-Geräten immer sichtbar – Hover gibt es dort nicht */}
                       <div className="flex justify-end gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
                         {!entry.isDir && (
-                          <a
-                            href={authedUrl(
-                              `/servers/${server.id}/files/download?path=${encodeURIComponent(entry.path)}`,
-                            )}
+                          <button
+                            onClick={() => void download(entry)}
                             className="p-1 text-stone-450 transition-colors hover:text-grass-light"
                             title="Herunterladen"
                           >
                             <Download size={15} />
-                          </a>
+                          </button>
                         )}
                         {can('files.write') && /\.zip$/i.test(entry.name) && (
                           <button

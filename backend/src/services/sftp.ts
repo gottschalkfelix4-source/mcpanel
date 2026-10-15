@@ -9,6 +9,8 @@ import { prisma } from '../db.js';
 import { audit } from '../auth/context.js';
 import { HttpError, badRequest } from '../lib/errors.js';
 import { SftpFiles, sftpLocation } from './sftpFiles.js';
+import { isServerNetworkAddress } from '../lib/network.js';
+import { verifyTotp } from '../lib/totp.js';
 
 const { Server, utils } = ssh2;
 const STATUS = utils.sftp.STATUS_CODE;
@@ -29,7 +31,18 @@ function entry(name: string, value: { isDir: boolean; size: number; modified: nu
 export async function verifySftpLogin(login: string, password: string): Promise<User | null> {
   if (!login || login.length > 254 || !password || password.length > 1024) return null;
   const user = await prisma.user.findFirst({ where: { OR: [{ email: login.toLowerCase() }, { username: login }] } });
-  const valid = await bcrypt.compare(password, user?.active ? user.passwordHash : dummyHash);
+  // Mit zweitem Faktor: Passwort und direkt dahinter der sechsstellige Code.
+  // SFTP-Programme kennen keinen zweiten Schritt, das Passwortfeld schon.
+  let secret = password;
+  if (user?.totpEnabled && user.totpSecret) {
+    const code = password.slice(-6);
+    secret = password.slice(0, -6);
+    if (!/^\d{6}$/.test(code) || verifyTotp(user.totpSecret, code) === null) {
+      await bcrypt.compare(secret, dummyHash);
+      return null;
+    }
+  }
+  const valid = await bcrypt.compare(secret, user?.active ? user.passwordHash : dummyHash);
   return user?.active && valid ? user : null;
 }
 
@@ -135,7 +148,8 @@ export async function startSftp(log: (message: string) => void = console.info): 
   if (parsed instanceof Error) throw badRequest('Der gespeicherte SFTP-Hostschlüssel ist ungültig');
   fingerprint = 'SHA256:' + crypto.createHash('sha256').update(parsed.getPublicSSH()).digest('base64').replace(/=+$/, '');
   listener = new Server({ hostKeys: [key], ident: 'MCPanel-SFTP' }, (client, info) => {
-    if (connections.size >= 64) { client.end(); return; }
+    // Minecraft-Container dürfen das Panel auch über SFTP nicht erreichen.
+    if (connections.size >= 64 || isServerNetworkAddress(info.ip)) { client.end(); return; }
     connections.add(client);
     let authenticated: User | null = null;
     let authenticating = false;

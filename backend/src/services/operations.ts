@@ -31,3 +31,20 @@ export async function withServerOperation<T>(serverId: string, label: string, fn
     if (active.get(serverId)?.token === token) active.delete(serverId);
   }
 }
+
+/**
+ * Wie withServerOperation, wartet aber, bis eine laufende Operation fertig ist
+ * (höchstens `timeoutMs`). Für kurze Schritte am Ende langer Übertragungen –
+ * ein fertig hochgeladenes Modpack soll nicht an einem gerade laufenden
+ * Backup scheitern.
+ */
+export async function waitForServerOperation<T>(serverId: string, label: string, fn: () => Promise<T>, timeoutMs = 15 * 60_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const existing = active.get(serverId);
+    if (!existing || context.getStore()?.get(serverId) === existing.token || Date.now() >= deadline) {
+      return withServerOperation(serverId, label, fn);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}

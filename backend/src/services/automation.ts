@@ -33,6 +33,43 @@ interface AutomationConfig {
   backupName?: string;
   note?: string;
   keepBackups?: number;
+  /** Sekunden Vorwarnung im Chat vor Neustart oder Stopp. */
+  warnSeconds?: number;
+}
+
+/** Der Ersteller darf die Regel nicht mehr ausführen (gelöscht, gesperrt, Rechte entzogen). */
+class AuthorizationLost extends Error {}
+
+/** Wann vor Ablauf der Frist noch einmal gewarnt wird (Sekunden). */
+const WARN_MARKS = [300, 120, 60, 30, 10, 5];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** „2 Minuten“, „1 Minute“, „30 Sekunden“. */
+export function warnText(action: 'RESTART' | 'STOP', left: number): string {
+  const verb = action === 'RESTART' ? 'Neustart' : 'Herunterfahren';
+  const span = left >= 60 && left % 60 === 0
+    ? `${left / 60} ${left === 60 ? 'Minute' : 'Minuten'}`
+    : `${left} ${left === 1 ? 'Sekunde' : 'Sekunden'}`;
+  return `say Server-${verb} in ${span}`;
+}
+
+/**
+ * Kündigt Neustart/Stopp im Spiel an und wartet die Frist ab. Läuft bewusst
+ * außerhalb der Serversperre – sonst stünden Konsole und Backups minutenlang.
+ * Eine nicht zustellbare Warnung hält die Aktion nicht auf.
+ */
+async function warnPlayers(server: Server, action: 'RESTART' | 'STOP', seconds: number): Promise<void> {
+  const say = (left: number) => rconCommand(server, warnText(action, left)).catch(() => '');
+  await say(seconds);
+  let left = seconds;
+  for (const mark of WARN_MARKS) {
+    if (mark >= left) continue;
+    await sleep((left - mark) * 1000);
+    left = mark;
+    await say(left);
+  }
+  await sleep(left * 1000);
 }
 
 // ---------------------------------------------------------------------------
@@ -57,21 +94,35 @@ export async function runAutomation(
     const authorize = async () => {
       const userId = origin === 'manuell' ? actorId : automation.createdById;
       const user = userId ? await prisma.user.findUnique({ where: { id: userId } }) : null;
-      if (!user?.active) throw forbidden('Automatisierung hat keinen aktiven berechtigten Benutzer');
-      assertAutomationAccess(await getServerAccess(user, server.id), automation.action, config);
+      if (!user?.active) {
+        if (origin === 'manuell') throw forbidden('Automatisierung hat keinen aktiven berechtigten Benutzer');
+        throw new AuthorizationLost('Das Konto, das die Regel zuletzt gespeichert hat, ist gelöscht oder gesperrt');
+      }
+      try {
+        assertAutomationAccess(await getServerAccess(user, server.id), automation.action, config);
+      } catch (err) {
+        if (origin === 'manuell') throw err;
+        throw new AuthorizationLost(`${user.username} hat nicht mehr die Rechte für diese Regel`);
+      }
       return user.id;
     };
     await authorize();
     const { state } = await dockerSvc.getState(server);
-    const running = state === 'running';
+    let running = state === 'running';
 
     if (automation.onlyWhenRunning && !running) {
       return finish(automation, 'UEBERSPRUNGEN', 'Server läuft nicht – Aktion ausgelassen');
     }
 
+    const warn = Math.min(Math.max(Math.floor(config.warnSeconds ?? 0), 0), 600);
+    if (running && warn > 0 && (automation.action === 'RESTART' || automation.action === 'STOP')) {
+      await warnPlayers(server, automation.action, warn);
+      running = (await dockerSvc.getState(server)).state === 'running';
+    }
+
     const message = await withServerOperation(server.id, 'Automatisierung', async () => {
       await authorize();
-      return execute(automation.action as ActionType, server, config, running);
+      return execute(automation, server, config, running);
     });
     await audit(origin === 'manuell' ? actorId! : automation.createdById, server.id, `automation.${automation.action.toLowerCase()}`,
       `${automation.name} (${origin})`);
@@ -93,6 +144,20 @@ export async function runAutomation(
 
     return finish(automation, 'OK', message);
   } catch (err) {
+    if (err instanceof AuthorizationLost) {
+      // Nicht jede Minute erneut scheitern: Regel abschalten, bis jemand mit
+      // Rechten sie wieder einschaltet (und damit zum neuen Ausführenden wird).
+      const message = `Deaktiviert: ${err.message}. Zum Reaktivieren erneut einschalten.`;
+      await prisma.automation.update({ where: { id: automation.id }, data: { enabled: false } }).catch(() => {});
+      void notify('automation.failed', {
+        serverId: server.id,
+        serverName: server.name,
+        title: `Automatisierung „${automation.name}" deaktiviert`,
+        message,
+        fields: [{ name: 'Aktion', value: automation.action }],
+      });
+      return finish(automation, 'FEHLER', message);
+    }
     const message = err instanceof Error ? err.message : String(err);
 
     void notify(automation.action === 'BACKUP' ? 'backup.failed' : 'automation.failed', {
@@ -111,11 +176,12 @@ export async function runAutomation(
 }
 
 async function execute(
-  action: ActionType,
+  automation: Automation,
   server: Server,
   config: AutomationConfig,
   running: boolean,
 ): Promise<string> {
+  const action = automation.action as ActionType;
   switch (action) {
     case 'COMMAND': {
       const command = (config.command ?? '').trim().replace(/^\//, '');
@@ -131,8 +197,10 @@ async function execute(
         name: config.backupName?.trim() || `Automatisch ${stamp}`,
         note: config.note ?? 'Von einer Automatisierung erstellt',
         createdById: null,
+        origin: 'AUTOMATIC',
+        automationId: automation.id,
       });
-      const removed = await pruneBackups(server.id, config.keepBackups);
+      const removed = await pruneBackups(server.id, automation.id, config.keepBackups);
       const size = `${(Number(backup.sizeBytes) / 1024 / 1024).toFixed(1)} MB`;
       return removed > 0
         ? `Backup erstellt (${size}), ${removed} alte gelöscht`
@@ -182,12 +250,20 @@ async function execute(
   }
 }
 
-/** Alte automatische Backups aufräumen, wenn eine Obergrenze gesetzt ist. */
-async function pruneBackups(serverId: string, keep: number | undefined): Promise<number> {
+/**
+ * Alte Backups *dieser* Regel aufräumen, wenn eine Obergrenze gesetzt ist.
+ * Handgemachte, angeheftete und Sicherheits-Backups fasst sie nie an; ältere
+ * automatische Sicherungen ohne Regelzuordnung zählen noch mit.
+ */
+export async function pruneBackups(serverId: string, automationId: string, keep: number | undefined): Promise<number> {
   if (!keep || keep < 1) return 0;
 
   const backups = await prisma.backup.findMany({
-    where: { serverId },
+    where: {
+      serverId,
+      pinned: false,
+      OR: [{ automationId }, { automationId: null, origin: 'AUTOMATIC' }],
+    },
     orderBy: { createdAt: 'desc' },
   });
   const surplus = backups.slice(keep);
@@ -240,60 +316,142 @@ async function finish(
 // Zeitgeber
 // ---------------------------------------------------------------------------
 
-/** Letzte gesehene Laufzeit je Server – für die Absturzerkennung. */
-const wasRunning = new Map<string, boolean>();
+/** Zuletzt gesehener Zustand je Server – für die Absturzerkennung. */
+const lastSeen = new Map<string, { running: boolean; finishedAt: string | null }>();
+/** Zeitpunkte erkannter Abstürze je Server – für die Absturzschleifen-Bremse. */
+const crashLog = new Map<string, number[]>();
 /** Verhindert Doppelläufe innerhalb derselben Minute. */
 const lastMinuteRun = new Map<string, string>();
+/** Regeln, die gerade laufen – ein langes Backup wird nicht erneut angestoßen. */
+const inFlight = new Set<string>();
+/** Je Server eine Kette: Regeln desselben Servers laufen nacheinander. */
+const serverChains = new Map<string, Promise<void>>();
+
+const CRASH_WINDOW_MS = 10 * 60_000;
+const CRASH_LIMIT = 3;
 
 let timer: NodeJS.Timeout | null = null;
+let ticking = false;
 
 const minuteKey = (date: Date) =>
   `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
 
-async function tick(log: (msg: string) => void): Promise<void> {
-  const now = new Date();
-  const key = minuteKey(now);
+/**
+ * Erkennt einen Absturz seit der letzten Prüfung. Neben dem Wechsel
+ * „lief → Fehler“ zählt auch ein neues Laufende mit Fehler – so fällt auch ein
+ * Server auf, der zwischen zwei Prüfungen gestartet und gleich wieder
+ * abgestürzt ist.
+ */
+export function detectCrash(
+  previous: { running: boolean; finishedAt: string | null } | undefined,
+  current: { state: string; finishedAt?: string | null },
+  plannedStop: boolean,
+): boolean {
+  if (!previous || current.state !== 'error' || plannedStop) return false;
+  const newRunEnded = Boolean(current.finishedAt) && current.finishedAt !== previous.finishedAt;
+  return previous.running || newRunEnded;
+}
 
-  const automations = await prisma.automation.findMany({ where: { enabled: true } });
-  if (automations.length === 0) return;
+/** Vermerkt den Absturz und sagt, ob der Server in einer Absturzschleife hängt. */
+export function recordCrash(serverId: string, now = Date.now()): boolean {
+  const recent = (crashLog.get(serverId) ?? []).filter((at) => now - at < CRASH_WINDOW_MS);
+  recent.push(now);
+  crashLog.set(serverId, recent);
+  return recent.length > CRASH_LIMIT;
+}
 
-  // Absturzerkennung: Zustand je betroffenem Server einmal abfragen.
-  const crashServers = new Set(
-    automations.filter((a) => a.trigger === 'ON_CRASH').map((a) => a.serverId),
-  );
-  const crashed = new Set<string>();
-
-  for (const serverId of crashServers) {
-    const server = await prisma.server.findUnique({ where: { id: serverId } });
-    if (!server) continue;
-    const { state } = await dockerSvc.getState(server);
-    const isRunning = state === 'running' || state === 'starting';
-    if (wasRunning.get(serverId) && state === 'error' && !dockerSvc.wasPlannedStop(serverId)) crashed.add(serverId);
-    wasRunning.set(serverId, isRunning);
+function enqueue(automation: Automation, origin: 'zeitplan' | 'ereignis', log: (msg: string) => void): void {
+  if (inFlight.has(automation.id)) {
+    log(`Automatisierung "${automation.name}": läuft noch – dieser Termin entfällt`);
+    return;
   }
-
-  for (const automation of automations) {
-    let due = false;
-
-    if (automation.trigger === 'SCHEDULE' && automation.cron) {
-      try {
-        due = matchesCron(parseCron(automation.cron), now);
-      } catch {
-        due = false;
-      }
-      if (due && lastMinuteRun.get(automation.id) === key) due = false;
-    } else if (automation.trigger === 'ON_CRASH') {
-      due = crashed.has(automation.serverId);
+  inFlight.add(automation.id);
+  const previous = serverChains.get(automation.serverId) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    try {
+      const result = await runAutomation(automation, origin);
+      log(`Automatisierung "${automation.name}": ${result.status} – ${result.message}`);
+    } catch (err) {
+      log(`Automatisierung "${automation.name}" fehlgeschlagen: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      inFlight.delete(automation.id);
     }
+  });
+  serverChains.set(automation.serverId, next);
+  void next.finally(() => {
+    if (serverChains.get(automation.serverId) === next) serverChains.delete(automation.serverId);
+  });
+}
 
-    if (!due) continue;
+async function tick(log: (msg: string) => void): Promise<void> {
+  // Ein langsamer Docker-Daemon darf keine überlappenden Prüfungen auslösen.
+  if (ticking) return;
+  ticking = true;
+  try {
+    const now = new Date();
+    const key = minuteKey(now);
 
-    lastMinuteRun.set(automation.id, key);
-    const result = await runAutomation(
-      automation,
-      automation.trigger === 'SCHEDULE' ? 'zeitplan' : 'ereignis',
-    );
-    log(`Automatisierung "${automation.name}": ${result.status} – ${result.message}`);
+    const automations = await prisma.automation.findMany({ where: { enabled: true } });
+    if (automations.length === 0) return;
+
+    // Absturzerkennung: Zustand je betroffenem Server einmal abfragen, parallel.
+    const crashServers = [...new Set(
+      automations.filter((a) => a.trigger === 'ON_CRASH').map((a) => a.serverId),
+    )];
+    const crashed = new Set<string>();
+    const looping = new Set<string>();
+
+    await Promise.all(crashServers.map(async (serverId) => {
+      try {
+        const server = await prisma.server.findUnique({ where: { id: serverId } });
+        if (!server) return;
+        const current = await dockerSvc.getState(server);
+        const isRunning = current.state === 'running' || current.state === 'starting';
+        if (detectCrash(lastSeen.get(serverId), current, dockerSvc.wasPlannedStop(serverId))) {
+          crashed.add(serverId);
+          if (recordCrash(serverId)) {
+            looping.add(serverId);
+            log(`Server ${server.name} stürzt wiederholt ab – automatischer Neustart pausiert`);
+            void notify('automation.failed', {
+              serverId,
+              serverName: server.name,
+              title: `${server.name} stürzt wiederholt ab`,
+              message: `Mehr als ${CRASH_LIMIT} Abstürze in ${CRASH_WINDOW_MS / 60_000} Minuten – Start/Neustart durch Automatisierungen wird ausgesetzt. Bitte Protokoll prüfen und den Server von Hand starten.`,
+              fields: [],
+            });
+          }
+        }
+        lastSeen.set(serverId, { running: isRunning, finishedAt: current.finishedAt ?? null });
+      } catch (err) {
+        log(`Absturzprüfung für ${serverId} fehlgeschlagen: ${err instanceof Error ? err.message : err}`);
+      }
+    }));
+
+    for (const automation of automations) {
+      let due = false;
+
+      if (automation.trigger === 'SCHEDULE' && automation.cron) {
+        try {
+          due = matchesCron(parseCron(automation.cron), now);
+        } catch {
+          due = false;
+        }
+        if (due && lastMinuteRun.get(automation.id) === key) due = false;
+      } else if (automation.trigger === 'ON_CRASH') {
+        due = crashed.has(automation.serverId);
+        if (due && looping.has(automation.serverId) && (automation.action === 'RESTART' || automation.action === 'START')) {
+          void finish(automation, 'UEBERSPRUNGEN', 'Absturzschleife erkannt – automatischer Start ausgesetzt');
+          due = false;
+        }
+      }
+
+      if (!due) continue;
+
+      lastMinuteRun.set(automation.id, key);
+      enqueue(automation, automation.trigger === 'SCHEDULE' ? 'zeitplan' : 'ereignis', log);
+    }
+  } finally {
+    ticking = false;
   }
 }
 

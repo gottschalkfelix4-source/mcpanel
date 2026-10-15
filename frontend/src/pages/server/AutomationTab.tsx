@@ -73,6 +73,7 @@ const EMPTY_FORM = {
   command: '',
   backupName: '',
   keepBackups: '' as string,
+  warnSeconds: '' as string,
   onlyWhenRunning: false,
 };
 
@@ -123,6 +124,9 @@ export default function AutomationTab() {
                 backupName: form.backupName.trim() || undefined,
                 keepBackups: form.keepBackups ? Number(form.keepBackups) : undefined,
               }
+            : {}),
+          ...(form.action === 'RESTART' || form.action === 'STOP'
+            ? { warnSeconds: form.warnSeconds ? Number(form.warnSeconds) : undefined }
             : {}),
         },
       };
@@ -184,6 +188,7 @@ export default function AutomationTab() {
       command: item.config.command ?? '',
       backupName: item.config.backupName ?? '',
       keepBackups: item.config.keepBackups ? String(item.config.keepBackups) : '',
+      warnSeconds: item.config.warnSeconds ? String(item.config.warnSeconds) : '',
       onlyWhenRunning: item.onlyWhenRunning,
     });
     setCreating(false);
@@ -431,6 +436,23 @@ export default function AutomationTab() {
             </div>
           )}
 
+          {(form.action === 'RESTART' || form.action === 'STOP') && (
+            <Field
+              label="Vorwarnung im Spielchat (Sekunden)"
+              hint="Kündigt den Neustart bzw. Stopp vorher im Chat an. Leer oder 0 = sofort, höchstens 600."
+            >
+              <input
+                className="mc-input max-w-[10rem]"
+                type="number"
+                min={0}
+                max={600}
+                value={form.warnSeconds}
+                onChange={(e) => update('warnSeconds', e.target.value)}
+                placeholder="z. B. 60"
+              />
+            </Field>
+          )}
+
           <div className="space-y-2.5 border-t border-stone-875 pt-3">
             <Toggle
               checked={form.onlyWhenRunning}
@@ -523,6 +545,20 @@ function AutomationRow({
           <span className="font-mono">{meta.label}</span>
           <span className="text-stone-550">·</span>
           <span>{item.scheduleText}</span>
+          {item.config.warnSeconds ? (
+            <>
+              <span className="text-stone-550">·</span>
+              <span>{item.config.warnSeconds} s Vorwarnung</span>
+            </>
+          ) : null}
+          {item.runsAs !== undefined && (
+            <>
+              <span className="text-stone-550">·</span>
+              <span title="Die Automation läuft mit den Rechten dieses Kontos.">
+                {item.runsAs ? `läuft als ${item.runsAs}` : 'ohne Konto – läuft nicht'}
+              </span>
+            </>
+          )}
         </p>
 
         <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-stone-450">

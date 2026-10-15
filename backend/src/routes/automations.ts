@@ -21,6 +21,8 @@ const bodySchema = z
         backupName: z.string().max(80).optional(),
         note: z.string().max(280).optional(),
         keepBackups: z.number().int().min(1).max(200).optional(),
+        // Vorwarnung im Chat vor Neustart/Stopp (0 = keine).
+        warnSeconds: z.number().int().min(0).max(600).optional(),
       })
       .default({}),
     onlyWhenRunning: z.boolean().default(false),
@@ -65,8 +67,15 @@ export default async function automationRoutes(app: FastifyInstance) {
       where: { serverId: access.server.id },
       orderBy: { createdAt: 'asc' },
     });
+    // Eine Regel läuft mit den Rechten dessen, der sie zuletzt gespeichert
+    // hat – das soll man sehen, nicht erst merken, wenn sie deaktiviert wird.
+    const ids = [...new Set(automations.map((a) => a.createdById).filter((id): id is string => Boolean(id)))];
+    const users = ids.length
+      ? await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, username: true } })
+      : [];
+    const names = new Map(users.map((u) => [u.id, u.username]));
     return {
-      automations: automations.map(decorate),
+      automations: automations.map((a) => ({ ...decorate(a), runsAs: a.createdById ? names.get(a.createdById) ?? null : null })),
       canManage: access.can(PERMISSIONS.AUTOMATION_MANAGE),
     };
   });

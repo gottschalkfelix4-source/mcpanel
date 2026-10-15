@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { attachment } from '../lib/contentDisposition.js';
+import { notFound } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
@@ -40,9 +42,11 @@ export default async function backupRoutes(app: FastifyInstance) {
   app.post('/:backupId/restore', async (req) => {
     const access = await requireServer(req, PERMISSIONS.BACKUP_RESTORE);
     const { backupId } = req.params as { backupId: string };
+    const body = z.object({ safetyBackup: z.boolean().default(true) }).parse(req.body ?? {});
+    const userId = req.user!.id;
 
     const taskId = await runTask(access.server.id, 'backup.restore', async (task) => {
-      await restoreBackup(access.server, backupId, task);
+      await restoreBackup(access.server, backupId, task, { safetyBackup: body.safetyBackup, createdById: userId });
     });
     await audit(req.user!.id, access.server.id, 'backup.restore', backupId);
     return { ok: true, taskId };
@@ -56,8 +60,22 @@ export default async function backupRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  /** Anheften: angeheftete Sicherungen löscht keine Aufbewahrungsregel. */
+  app.patch('/:backupId', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.BACKUP_CREATE);
+    const { backupId } = req.params as { backupId: string };
+    const body = z.object({ pinned: z.boolean() }).parse(req.body);
+    const existing = await prisma.backup.findFirst({ where: { id: backupId, serverId: access.server.id } });
+    if (!existing) throw notFound('Backup nicht gefunden');
+    const updated = await prisma.backup.update({ where: { id: backupId }, data: { pinned: body.pinned } });
+    await audit(req.user!.id, access.server.id, body.pinned ? 'backup.pin' : 'backup.unpin', existing.name);
+    return { ...updated, sizeBytes: Number(updated.sizeBytes) };
+  });
+
+  // Eine Sicherung enthält die komplette Welt samt Konfiguration – das ist
+  // mehr als „Dateien ansehen“ und bekommt deshalb ein eigenes Recht.
   app.get('/:backupId/download', async (req, reply) => {
-    const access = await requireServer(req, PERMISSIONS.FILES_READ);
+    const access = await requireServer(req, PERMISSIONS.BACKUP_DOWNLOAD);
     const { backupId } = req.params as { backupId: string };
     const file = await backupFilePath(access.server, backupId);
     const stat = fs.statSync(file.path);
@@ -70,7 +88,7 @@ export default async function backupRoutes(app: FastifyInstance) {
     reply
       .header('Content-Type', 'application/gzip')
       .header('Content-Length', String(stat.size))
-      .header('Content-Disposition', `attachment; filename="${file.filename}"`);
+      .header('Content-Disposition', attachment(file.filename));
     return reply.send(stream);
   });
 }

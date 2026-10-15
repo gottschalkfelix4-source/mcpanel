@@ -44,7 +44,7 @@ Selbstgehostetes Web-Panel für Minecraft-Server (Modpack-Installer für Modrint
   Schema vorher in dieser Test-DB anlegen (`prisma db push`). Niemals eine produktive `DATABASE_URL` verwenden.
 
 ### Notfall-CLI
-Im Alles-in-einem-Container: `docker exec mcpanel node dist/cli.js <befehl>` – `benutzer`, `passwort`, `admin`, `aktivieren`, `sicherung`, `einspielen`. Existiert, weil die Anmeldung die einzige Tür ins Panel ist; wird genutzt, wenn niemand mehr reinkommt.
+Im Alles-in-einem-Container: `docker exec mcpanel node dist/cli.js <befehl>` – `benutzer`, `passwort`, `admin`, `aktivieren`, `zweifaktor-aus`, `sicherung`, `einspielen`. Existiert, weil die Anmeldung die einzige Tür ins Panel ist; wird genutzt, wenn niemand mehr reinkommt.
 
 ## Architektur und Datenfluss
 
@@ -69,7 +69,7 @@ React (nginx) ── HTTP /api (Bearer JWT) + /socket.io ──► Fastify-Backe
 
 1. **Serversperre (nicht verpassen!)**: Alle Operationen an einem Server (Backup, Restore, Modpack-Install/Update, Power, Datei- und Config-Änderungen, Automationen) müssen über `withServerOperation` (exklusiv, reentrant via `AsyncLocalStorage`) bzw. `withQueuedOperation` (warteschlangt) laufen – sonst entstehen halb fertige Zustände. Konflikt = deutscher Fehler „X läuft für diesen Server bereits.“ Reentranz ist wichtig: ein Modpack-Update legt intern ein Sicherheits-Backup an, ohne sich selbst zu blockieren.
 2. **Tasks**: Langläufer erzeugen über `createTask` eine Task-Zeile mit Fortschritt/Log und pushen live über Socket.IO (`task`-Event). Log auf 60 000 Zeichen gekappt. `runTask` wartet auf Abschluss und übernimmt Fehler (Automationen dürfen nicht „OK“ melden, bevor die Modpack-Installation fertig ist).
-3. **Rechtesystem**: 13 einzelne Permissions (`auth/permissions.ts`), Admin/Besitzer bekommen alle; Einladungen starten mit `DEFAULT_MEMBER_PERMISSIONS`. **Server anlegen ist Administrator-Sache.** `PROTECTED_ENV_KEYS` (MC_IMAGE, JVM_OPTS, MEMORY, RCON_*, …) darf nur ein Admin ändern – geprüft wird gegen den **gespeicherten** Stand, weil das UI `extraEnv` immer vollständig zurückschickt.
+3. **Rechtesystem**: 14 einzelne Permissions (inkl. `backup.download`) (`auth/permissions.ts`), Admin/Besitzer bekommen alle; Einladungen starten mit `DEFAULT_MEMBER_PERMISSIONS`. **Server anlegen ist Administrator-Sache.** `PROTECTED_ENV_KEYS` (MC_IMAGE, JVM_OPTS, MEMORY, RCON_*, …) darf nur ein Admin ändern – geprüft wird gegen den **gespeicherten** Stand, weil das UI `extraEnv` immer vollständig zurückschickt.
 4. **Sicherheit Pfadgrenzen**: `safePath()` lehnt Symlinks in jeder Pfadkomponente ab und begrenzt komponentenweise; `archivePath()` zusätzlich Traversal/Absolutpfade/Laufwerksbuchstaben. Faustregel aus dem Code: **nach jedem `await` vor einer Dateisystem-Mutation `safePath` erneut aufrufen** (TOCTOU).
 5. **Downloads schreiben erst in eine temporäre Datei und ersetzen atomar per rename** – eine bestehende Mod/Datei darf durch einen fehlgeschlagenen Download nicht zerstört werden.
 6. **Backup/Restore**: Tar.gz (`tar`-Paket); Restore prüft das Archiv zuerst, verschiebt den Altbestand dann separat und ist über ein Journal wiederanlaufbar (`restoreRecovery.ts`). Zweitablage: Samba (bindet CIFS zur Laufzeit ein – deshalb `cap_add: [SYS_ADMIN, DAC_READ_SEARCH]` und `apparmor:unconfined` im Compose-File) oder S3; Zugangsdaten liegen in der DB und werden nie zurückgegeben (`backupTarget.ts`).
@@ -86,6 +86,11 @@ React (nginx) ── HTTP /api (Bearer JWT) + /socket.io ──► Fastify-Backe
 17. **Absturzdiagnose in zwei Stufen**: `crashAnalysis.ts` ist regelbasiert und rein (Fabrics „provided by"/„requires … which is missing" schlagen den Stacktrace; `server-intermediary.jar` & Co. sind nie verdächtig; bei der Sprachdatei-NPE schaut es in die Jars). `services/assistant.ts` ist die optionale zweite Stufe: ein OpenAI-kompatibler Dienst (Einstellungen `assistant.*`, Key nie zurückgeben), der Protokoll + Modliste + Diagnose bekommt und **nur liest** – keine Werkzeuge, keine Aktionen. Route `POST /servers/:id/assistant/ask` (CONSOLE_READ, rate-limited), Verlauf hält der Client.
 18. **Effektiver Loader = `serverLoader()`** in `content.ts` – bei `MODPACK` steht er in `extraEnv.TYPE`, ein gesetztes `TYPE` gewinnt immer (so kommt es auch im Container an). Nicht erneut aus `server.type` ableiten; das war dreimal kopiert und jedes Mal anders.
 19. **Java-Abbild nach Version**: Mojang zählt seit 26.1 nach Jahr; `javaTagForVersion()` gibt dafür und für alles Unbekannte (`LATEST`, Schnappschüsse) das neueste bekannte Java – zu alt geraten bricht mit `UnsupportedClassVersionError`, zu neu läuft meist.
+
+20. **Uploads halten die Serversperre nicht**: Dateimanager und SFTP streamen in eine `.upload-*`- bzw. `.sftp-upload-*`-Temp-Datei und rufen erst zum `rename` `waitForServerOperation` auf. Backups filtern diese Temp-Dateien heraus (`isUploadTemp`). Kontingent: `computeDiskUsage` nutzt 30 s lang den Cache, Uploads korrigieren ihn per `adjustDiskUsage`.
+21. **Downloads per Kurzzeit-Token**: `?token=` akzeptiert nur noch Tokens aus `POST /auth/download-token`, gebunden an genau einen Pfad (`canonicalDownloadPath`). Sitzungs-JWTs gehören nie in eine URL. Im Frontend: `downloadFile(path)` aus `lib/api.ts`.
+22. **Anmeldung mit zweitem Faktor**: `/auth/login` antwortet bei aktivem TOTP mit `{ mfaRequired, mfaToken }`, danach `/auth/login/totp`. SFTP erwartet Passwort + Code am Stück. Aktivieren und „überall abmelden“ erhöhen `sessionVersion` und liefern ein neues Token zurück.
+23. **Einrichtungscode**: Der Assistent (`routes/setup.ts`) verlangt den Code aus dem Containerprotokoll bzw. `<data>/.setup-code`. Er verfällt nach abgeschlossener Einrichtung.
 
 ## Tests schreiben
 

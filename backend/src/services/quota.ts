@@ -74,18 +74,37 @@ export async function assertDiskAvailable(server: Server, extraBytes = 0): Promi
   }
 }
 
+/** Löschreihenfolge beim Kontingent: erst Automatik, dann Sicherheitskopien, zuletzt Handarbeit. */
+const PRUNE_ORDER: Record<string, number> = { AUTOMATIC: 0, SAFETY: 1, MANUAL: 2 };
+
 /**
- * Entfernt die ältesten Sicherungen, bis die erlaubte Zahl wieder eingehalten
- * ist. Gibt zurück, wie viele entfernt wurden.
+ * Wählt aus, welche Sicherungen für das Kontingent weichen. Angeheftete und
+ * geschützte (gerade erstellte oder gleich gebrauchte) bleiben immer; reicht
+ * das nicht, bleibt das Kontingent eben überschritten.
  */
-export async function pruneToBackupLimit(server: Server): Promise<number> {
+export function chooseBackupsToPrune<T extends { id: string; origin: string; pinned: boolean; createdAt: Date }>(
+  backups: T[],
+  limit: number,
+  protect: ReadonlySet<string> = new Set(),
+): T[] {
+  if (limit <= 0) return [];
+  const surplus = backups.length - limit;
+  if (surplus <= 0) return [];
+  return backups
+    .filter((b) => !b.pinned && !protect.has(b.id))
+    .sort((a, b) => (PRUNE_ORDER[a.origin] ?? 2) - (PRUNE_ORDER[b.origin] ?? 2) || a.createdAt.getTime() - b.createdAt.getTime())
+    .slice(0, surplus);
+}
+
+/**
+ * Entfernt Sicherungen, bis die erlaubte Zahl wieder eingehalten ist. Gibt
+ * zurück, wie viele entfernt wurden.
+ */
+export async function pruneToBackupLimit(server: Server, protect: Iterable<string> = []): Promise<number> {
   if (server.quotaBackups <= 0) return 0;
 
-  const backups = await prisma.backup.findMany({
-    where: { serverId: server.id },
-    orderBy: { createdAt: 'desc' },
-  });
-  const surplus = backups.slice(server.quotaBackups);
+  const backups = await prisma.backup.findMany({ where: { serverId: server.id } });
+  const surplus = chooseBackupsToPrune(backups, server.quotaBackups, new Set(protect));
   if (surplus.length === 0) return 0;
 
   const { deleteBackup } = await import('./backups.js');

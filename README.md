@@ -77,6 +77,12 @@ das Panel steuert sie über den Docker-Socket.
 - Vor jedem Modpack-Update wird automatisch eines angelegt
 - Beim Einspielen wird das Archiv erst geprüft und das Serververzeichnis danach geleert –
   bei einer beschädigten Datei wäre am Ende sonst beides weg
+- Vor dem Einspielen sichert das Panel standardmäßig den aktuellen Stand (abschaltbar im
+  Bestätigungsdialog) – ein versehentlich gewähltes altes Backup ist damit kein Weltverlust
+- Jede Sicherung trägt ihre Herkunft (*manuell*, *automatisch*, *Sicherheitskopie*).
+  Die Aufbewahrungsgrenze einer Automation räumt nur deren eigene Sicherungen ab;
+  **angeheftete** Sicherungen werden nie automatisch gelöscht
+- Herunterladen ist ein eigenes Recht (`backup.download`) – ein Archiv enthält die ganze Welt
 - **Zweitablage**, eingerichtet in den Panel-Einstellungen (nicht in der `.env`):
   - **Samba-Freigabe** – NAS oder Windows-Rechner im Netz; das Panel hängt die Freigabe selbst ein
   - **S3-Speicher** – AWS S3, MinIO, Backblaze B2, Wasabi; Upload mehrteilig, also auch über 5 GB
@@ -112,10 +118,17 @@ das Panel steuert sie über den Docker-Socket.
 **Mehrbenutzerbetrieb**
 - Rollen: Administrator und Benutzer
 - Pro Server: Besitzer + eingeladene Mitglieder
+- Administratoren können den Besitz eines Servers im Tab *Zugriff* übertragen; der bisherige
+  Besitzer bleibt auf Wunsch als Mitglied mit vollen Rechten. Erst danach lässt sich ein
+  Konto löschen, dem noch Server gehören
+- Optionale Zwei-Faktor-Anmeldung (TOTP, z. B. Aegis oder Google Authenticator) im Profil;
+  Administratoren können sie bei verlorenem Gerät zurücksetzen. „Überall sonst abmelden“
+  macht alle anderen Sitzungen ungültig
 - Zugriff und Mitgliedsrechte dürfen ausschließlich Administratoren vergeben, ändern oder entziehen. Auch Besitzer und Mitglieder mit alten Verwaltungsrechten können weder eigene noch fremde Rechte ändern.
 - Automationen benötigen neben dem Verwaltungsrecht auch die Rechte ihrer Aktion. Geplante Läufe prüfen den zuletzt verantwortlichen Benutzer erneut; nach Entzug der Rechte oder Deaktivierung des Kontos wird die Aktion verweigert. Eine berechtigte Person kann die Regel bearbeiten oder erneut aktivieren und damit übernehmen.
-- 13 einzeln vergebbare Rechte, z. B. „Konsole lesen“, „Befehle senden“, „Starten / Stoppen“,
-  „Dateien bearbeiten“, „Backups einspielen“, „Modpacks verwalten“, „Automatisierungen verwalten“, „Mitglieder verwalten“
+- 14 einzeln vergebbare Rechte, z. B. „Konsole lesen“, „Befehle senden“, „Starten / Stoppen“,
+  „Dateien bearbeiten“, „Backups einspielen“, „Backups herunterladen“, „Modpacks verwalten“,
+  „Automatisierungen verwalten“, „Mitglieder verwalten“
 - Aktivitätsprotokoll für Administratoren
 
 ---
@@ -173,7 +186,10 @@ docker compose up -d
 ```
 
 Dann **http://localhost:8080** öffnen – ein Assistent fragt nach Konto, Server-Adresse
-und optional dem CurseForge-Schlüssel. Es ist keine `.env` nötig: das Sitzungs-Geheimnis
+und optional dem CurseForge-Schlüssel. Zuerst will er den **Einrichtungscode** sehen: der
+steht im Containerprotokoll (`docker compose logs backend | grep Einrichtungscode`, im
+Alles-in-einem-Abbild `docker logs mcpanel`) und in `data/.setup-code`. So kann niemand,
+der das frisch gestartete Panel zufällig zuerst im Netz findet, sich zum Administrator machen. Es ist keine `.env` nötig: das Sitzungs-Geheimnis
 erzeugt das Panel beim ersten Start selbst und legt es unter `data/.jwt-secret` ab.
 
 ### Wenn es woanders liegen soll
@@ -369,6 +385,7 @@ Alle Werte kommen aus der `.env` (siehe `.env.example`):
 | `CURSEFORGE_API_KEY` | leer | CurseForge-Zugang (auch im Panel unter *Panel → CurseForge* setzbar) |
 | `MC_IMAGE` | leer / automatisch | Optionales Image-Override; sonst passende Java-Version je Minecraft-Version |
 | `POSTGRES_*` | `mcpanel` | Datenbankzugang |
+| `TRUSTED_PROXIES` | leer | IP/CIDR eines vorgeschalteten Reverse-Proxys (kommagetrennt), damit Anmeldebremse und Protokoll die echte Client-Adresse sehen |
 
 `JWT_SECRET` und `ADMIN_PASSWORD` sind bewusst leer vorgegeben: das Sitzungs-Geheimnis
 erzeugt das Panel sonst selbst, und ohne Admin-Passwort führt der Assistent durch die
@@ -502,7 +519,9 @@ $HOST_DATA_ROOT/
 
 Im Server-Tab **Dateien → SFTP-Zugang** stehen Adresse, Port, Benutzername,
 Serververzeichnis und SSH-Hostschlüssel. Die Anmeldung erfolgt mit dem normalen
-**Benutzernamen oder der E-Mail-Adresse und dem Panel-Passwort**. Das Passwort wird
+**Benutzernamen oder der E-Mail-Adresse und dem Panel-Passwort**. Ist die
+Zwei-Faktor-Anmeldung aktiv, wird der sechsstellige Code direkt an das Passwort
+angehängt (`meinpasswort123456`). Das Passwort wird
 im Client eingegeben und steht weder im Panel-Fenster noch in der Verbindungs-URL.
 
 **SFTP-Client öffnen** verwendet eine `sftp://`-Adresse. Das Betriebssystem muss einen
@@ -533,10 +552,12 @@ gesperrt; Panel-Datenbank, Backups und andere interne Verzeichnisse werden nicht
 angeboten. Der private Hostschlüssel liegt dauerhaft unter `/data/.sftp-host-key`.
 Beim ersten Verbinden den im Fenster angezeigten SHA256-Fingerabdruck vergleichen.
 
-Im Client **eine gleichzeitige Übertragung je Server** einstellen. Ein Upload hält
-die Serversperre bis zum Abschluss; Sicherungen, Wiederherstellungen und andere
-Schreibvorgänge melden währenddessen einen Konflikt. Uploads verwenden temporäre
-Dateien und ersetzen die Zieldatei erst bei erfolgreichem Abschluss. Abbrüche und
+Uploads über SFTP und den Dateimanager laufen in eine temporäre Datei, ohne die
+Serversperre zu halten – ein großer Upload blockiert also weder Sicherungen noch
+Neustarts. Erst das Ersetzen der Zieldatei geschieht unter der Sperre; läuft gerade eine
+Wiederherstellung oder ein Modpack-Update, wartet der Upload kurz darauf. Temporäre
+Upload-Dateien landen nie in einer Sicherung. Die Zieldatei wird erst bei erfolgreichem
+Abschluss ersetzt. Abbrüche und
 überschrittene Speicherkontingente erhalten die vorherige Datei. Nach fünf Minuten
 ohne SFTP-Anfragen wird die Verbindung geschlossen. UNIX-Eigentümer und Zugriffsrechte
 werden nicht durch Client-Attribute geändert; neue Dateien erben den Ordnerbesitzer,
@@ -766,8 +787,10 @@ docker exec mcpanel node dist/cli.js benutzer
 docker exec mcpanel node dist/cli.js passwort felix neuespasswort
 ```
 
-Weiter gibt es `admin <Konto>` (macht ein Konto zum Administrator) und
-`aktivieren <Konto>` (hebt eine Deaktivierung auf). Im Compose-Stack heißt der
+Weiter gibt es `admin <Konto>` (macht ein Konto zum Administrator),
+`aktivieren <Konto>` (hebt eine Deaktivierung auf) und `zweifaktor-aus <Konto>`
+(schaltet die Zwei-Faktor-Anmeldung ab, wenn das Handy weg ist und kein anderer
+Administrator mehr hineinkommt). Im Compose-Stack heißt der
 Container `mcpanel-backend-1`.
 
 Meldet das Panel beim Anmelden „Benutzername oder Passwort falsch“, ist genau das

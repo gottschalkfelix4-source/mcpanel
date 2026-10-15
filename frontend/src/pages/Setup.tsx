@@ -40,11 +40,12 @@ export default function SetupPage() {
   const [password2, setPassword2] = useState('');
   const [publicHost, setPublicHost] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [setupCode, setSetupCode] = useState('');
   const [keyProbe, setKeyProbe] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const checkKey = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; message: string }>('/setup/check-curseforge', { apiKey }),
+    mutationFn: () => api.post<{ ok: boolean; message: string }>('/setup/check-curseforge', { apiKey, setupCode: setupCode.trim() }),
     onSuccess: setKeyProbe,
     onError: (err: Error) => setKeyProbe({ ok: false, message: err.message }),
   });
@@ -57,6 +58,7 @@ export default function SetupPage() {
         password,
         publicHost: publicHost.trim() || undefined,
         curseforgeApiKey: apiKey.trim() || undefined,
+        setupCode: setupCode.trim(),
       }),
     onSuccess: async (res) => {
       // Die Einrichtung liefert das Token gleich mit – kein zweites Anmelden.
@@ -76,6 +78,9 @@ export default function SetupPage() {
   }
 
   const info = status.data;
+  // Der Code steht nur im Containerprotokoll: so kann niemand aus dem Netz
+  // einem frisch gestarteten Panel zuvorkommen und sich zum Admin machen.
+  const codeOk = /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/.test(setupCode.trim());
   const accountOk =
     username.trim().length >= 3 &&
     /.+@.+\..+/.test(email.trim()) &&
@@ -163,6 +168,22 @@ export default function SetupPage() {
                       value={`${info?.portRange.min} – ${info?.portRange.max}`}
                     />
                   </div>
+
+                  <Field
+                    label="Einrichtungscode"
+                    hint="Steht im Protokoll des Containers (z. B. docker logs mcpanel) und in der Datei .setup-code im Datenverzeichnis."
+                  >
+                    <input
+                      className="mc-input w-full font-mono uppercase tracking-[0.2em]"
+                      value={setupCode}
+                      maxLength={14}
+                      autoFocus
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="XXXX-XXXX-XXXX"
+                      onChange={(e) => setSetupCode(e.target.value.toUpperCase())}
+                    />
+                  </Field>
 
                   {!info?.docker.ok && (
                     <ErrorNote>
@@ -366,7 +387,7 @@ export default function SetupPage() {
                   <Button
                     variant="primary"
                     icon={<ArrowRight size={15} />}
-                    disabled={step === 1 && !accountOk}
+                    disabled={(step === 0 && !codeOk) || (step === 1 && !accountOk)}
                     onClick={next}
                   >
                     Weiter
@@ -376,7 +397,7 @@ export default function SetupPage() {
                     variant="primary"
                     icon={<Check size={15} />}
                     loading={finish.isPending}
-                    disabled={!accountOk}
+                    disabled={!accountOk || !codeOk}
                     onClick={() => {
                       setError(null);
                       finish.mutate();

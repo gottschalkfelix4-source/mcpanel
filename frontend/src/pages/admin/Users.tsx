@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { KeyRound, Shield, Trash2, UserPlus, Users as UsersIcon } from 'lucide-react';
+import { KeyRound, Shield, ShieldOff, Trash2, UserPlus, Users as UsersIcon } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatDate } from '../../lib/format';
 import { useAuth } from '../../lib/auth';
@@ -21,6 +21,7 @@ export default function UsersPage() {
   const [passwordTarget, setPasswordTarget] = useState<PanelUser | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<PanelUser | null>(null);
+  const [totpTarget, setTotpTarget] = useState<PanelUser | null>(null);
 
   const users = useQuery({
     queryKey: ['users'],
@@ -130,6 +131,7 @@ export default function UsersPage() {
                           {user.role === 'ADMIN' ? 'Admin' : 'Benutzer'}
                         </Badge>
                         {!user.active && <Badge tone="red">deaktiviert</Badge>}
+                        {user.totpEnabled && <Badge tone="green">2FA</Badge>}
                       </div>
                     </td>
                     <td className="hidden px-4 py-3 font-mono text-xs text-stone-450 lg:table-cell">
@@ -160,6 +162,24 @@ export default function UsersPage() {
                           }}
                           title="Passwort zurücksetzen"
                         />
+                        {user.totpEnabled && (
+                          <Button
+                            variant="ghost"
+                            className="!px-2 !py-1 !text-[11px]"
+                            icon={<ShieldOff size={12} />}
+                            onClick={() => setTotpTarget(user)}
+                            title="Zweiten Faktor zurücksetzen"
+                          />
+                        )}
+                        <Button
+                          variant="ghost"
+                          className="!px-2 !py-1 !text-[11px]"
+                          disabled={user.id === me?.id}
+                          onClick={() => update.mutate({ id: user.id, data: { active: !user.active } })}
+                          title={user.active ? 'Konto deaktivieren' : 'Konto aktivieren'}
+                        >
+                          {user.active ? 'Sperren' : 'Entsperren'}
+                        </Button>
                         <Button
                           variant="danger"
                           className="!px-2 !py-1 !text-[11px]"
@@ -262,6 +282,18 @@ export default function UsersPage() {
           />
         </Field>
       </Modal>
+
+      <ConfirmDialog
+        open={Boolean(totpTarget)}
+        onClose={() => setTotpTarget(null)}
+        onConfirm={() =>
+          totpTarget && update.mutateAsync({ id: totpTarget.id, data: { resetTotp: true } }).then(() => {})
+        }
+        title="Zweiten Faktor zurücksetzen?"
+        message={`${totpTarget?.username} meldet sich danach wieder nur mit dem Passwort an und kann den zweiten Faktor im Profil neu einrichten. Nur nach einer Rückfrage bei der Person tun – etwa bei verlorenem Handy.`}
+        confirmLabel="Zurücksetzen"
+        danger
+      />
 
       <ConfirmDialog
         open={Boolean(deleteTarget)}

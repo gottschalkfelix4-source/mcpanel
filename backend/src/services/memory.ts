@@ -22,3 +22,12 @@ export function memoryWorkingSet(memory: DockerMemoryStats): number {
   // Invalid/racing counters must not produce negative usage or hide all memory.
   return inactive >= 0 && inactive < usage ? usage - inactive : usage;
 }
+
+/** `4G`, `4096M`, `4096m`, `4194304K` → MB. Unbekannte Schreibweisen (z. B. Prozent) → null. */
+export function parseMemoryMb(value: string | undefined | null): number | null {
+  const match = (value ?? '').trim().match(/^(\d+(?:\.\d+)?)([kmgt]?)b?$/i);
+  if (!match) return null;
+  const factor = { '': 1 / (1024 * 1024), k: 1 / 1024, m: 1, g: 1024, t: 1024 * 1024 }[match[2].toLowerCase()]!;
+  const mb = Math.ceil(Number(match[1]) * factor);
+  return Number.isFinite(mb) && mb > 0 ? mb : null;
+}

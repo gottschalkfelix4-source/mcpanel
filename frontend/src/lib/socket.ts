@@ -7,13 +7,26 @@ let socket: Socket | null = null;
 export function getSocket(): Socket {
   if (socket && socket.connected) return socket;
   if (!socket) {
-    socket = io({
+    const created = io({
       path: '/socket.io',
-      auth: { token: tokenStore.get() },
+      // Als Funktion: jeder Verbindungsversuch nimmt das aktuelle Token.
+      auth: (cb) => cb({ token: tokenStore.get() }),
       transports: ['websocket', 'polling'],
       reconnectionDelay: 800,
       reconnectionDelayMax: 5000,
     });
+    // Trennt der Server (z. B. beim Neustart oder nach geänderten Rechten),
+    // verbindet Socket.IO von sich aus nicht neu – sonst bliebe die Konsole
+    // bis zum Neuladen der Seite stumm.
+    created.on('disconnect', (reason) => {
+      if (reason !== 'io server disconnect') return;
+      setTimeout(() => {
+        if (socket === created && tokenStore.get() && !created.connected) created.connect();
+      }, 2000);
+    });
+    socket = created;
+  } else if (!socket.active) {
+    socket.connect();
   }
   return socket;
 }

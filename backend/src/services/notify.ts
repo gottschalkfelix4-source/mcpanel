@@ -16,6 +16,7 @@ import { analyseCrash } from './crashAnalysis.js';
 import * as dockerSvc from './docker.js';
 import { getSetting, setSetting } from './settings.js';
 import { HealthMonitor } from './healthMonitor.js';
+import { postJson } from '../lib/safeHttp.js';
 
 // ---------------------------------------------------------------------------
 // Ereignisse
@@ -178,24 +179,12 @@ function webhookPayload(event: NotifyEvent, ctx: NotifyContext, severity: Severi
   };
 }
 
-/** Einmalige HTTP-Zustellung mit Zeitlimit. */
-async function post(url: string, body: unknown): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status} ${text.slice(0, 160)}`.trim());
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
+/**
+ * Einmalige HTTP-Zustellung mit Zeitlimit. Ziele im lokalen Netz nur, wenn ein
+ * Administrator den Kanal gespeichert hat (siehe lib/safeHttp.ts).
+ */
+async function post(channel: NotificationChannel, body: unknown): Promise<void> {
+  await postJson(channel.target, body, { allowPrivate: channel.allowPrivate });
 }
 
 function payloadFor(
@@ -226,7 +215,7 @@ async function deliver(
       : null;
 
   try {
-    await post(channel.target, payloadFor(channel, event, ctx, severity, extra));
+    await post(channel, payloadFor(channel, event, ctx, severity, extra));
     await prisma.notificationChannel
       .update({
         where: { id: channel.id },
@@ -284,7 +273,7 @@ export async function testChannel(channel: NotificationChannel): Promise<void> {
     fields: [{ name: 'Abonnierte Ereignisse', value: String(events.length) }],
   };
 
-  await post(channel.target, payloadFor(channel, 'server.started', ctx, 'info', null));
+  await post(channel, payloadFor(channel, 'server.started', ctx, 'info', null));
 
   await prisma.notificationChannel
     .update({

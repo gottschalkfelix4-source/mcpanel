@@ -11,6 +11,7 @@ import { getDiskUsage, invalidateDiskUsage } from './diskUsage.js';
 import { getPlayerCount } from './playerCount.js';
 import { getPublicHost } from './settings.js';
 import { getProxyConfig } from './proxy.js';
+import { removeBackup } from './backupTarget.js';
 
 export interface CreateServerInput {
   name: string;
@@ -97,11 +98,19 @@ async function createServerUnlocked(input: CreateServerInput): Promise<Server> {
 
 async function deleteServerUnlocked(server: Server, deleteFiles: boolean): Promise<void> {
   await dockerSvc.removeContainer(server);
+  // Die Zeilen verschwinden per Kaskade – vorher merken, was in der
+  // Zweitablage liegt, sonst bleiben dort verwaiste Archive für immer.
+  const mirrored = deleteFiles
+    ? await prisma.backup.findMany({ where: { serverId: server.id, mirrored: true }, select: { filename: true, targetId: true } })
+    : [];
   await prisma.server.delete({ where: { id: server.id } });
   invalidateDiskUsage(server.id);
   if (deleteFiles) {
     await fs.rm(serverDir(server.id), { recursive: true, force: true });
     await fs.rm(serverBackupDir(server.id), { recursive: true, force: true });
+    for (const backup of mirrored) {
+      await removeBackup(server.id, backup.filename, backup.targetId).catch(() => {});
+    }
   }
 }
 
@@ -176,11 +185,14 @@ async function updateServerSettingsUnlocked(
 
 /** Kompakte Darstellung für Listen und Dashboard. */
 export async function serializeServer(server: Server, extra?: { withStats?: boolean }) {
-  const { state, health, startedAt } = await dockerSvc.getState(server);
+  // Unabhängige Abfragen gleichzeitig – die Serverliste ruft das je Server auf.
+  const [{ state, health, startedAt }, host, hostnames, proxy] = await Promise.all([
+    dockerSvc.getState(server),
+    getPublicHost(),
+    prisma.serverHostname.findMany({ where: { serverId: server.id }, orderBy: { position: 'asc' } }),
+    getProxyConfig(),
+  ]);
   const running = state === 'running';
-  const host = await getPublicHost();
-  const hostnames = await prisma.serverHostname.findMany({ where: { serverId: server.id }, orderBy: { position: 'asc' } });
-  const proxy = await getProxyConfig();
   const directAddress = `${host.includes(':') && !host.startsWith('[') ? `[${host}]` : host}:${server.port}`;
   const stats = extra?.withStats && running ? await dockerSvc.getStats(server) : null;
   const players = extra?.withStats ? getPlayerCount(server, running) : null;

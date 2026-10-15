@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Server, User } from '@prisma/client';
 import { prisma } from '../db.js';
 import { verifyToken } from './jwt.js';
+import { canonicalDownloadPath } from './downloadPath.js';
 import { ALL_PERMISSIONS, PERMISSIONS, type Permission } from './permissions.js';
 import { forbidden, notFound, unauthorized } from '../lib/errors.js';
 
@@ -14,24 +15,39 @@ declare module 'fastify' {
 function extractToken(req: FastifyRequest): string | null {
   const header = req.headers.authorization;
   if (header?.startsWith('Bearer ')) return header.slice(7);
-  const q = (req.query as Record<string, string> | undefined)?.token;
-  return q ?? null;
+  return null;
 }
 
 /** preHandler: erzwingt einen gültigen Login. */
 export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
   const token = extractToken(req);
-  if (!token) throw unauthorized();
-  req.user = await authenticateToken(token);
+  if (token) {
+    req.user = await authenticateToken(token);
+    return;
+  }
+  // Downloads öffnet der Browser selbst, ohne Kopfzeile. Dafür gibt es ein
+  // kurzlebiges Token, das nur genau diese Adresse aufschließt – nie das
+  // Sitzungstoken in der URL, das in Verläufen und Proxy-Protokollen landet.
+  const queryToken = (req.query as Record<string, unknown> | undefined)?.token;
+  if ((req.method === 'GET' || req.method === 'HEAD') && typeof queryToken === 'string') {
+    req.user = await authenticateToken(queryToken, { purpose: 'download', path: canonicalDownloadPath(req.url) });
+    return;
+  }
+  throw unauthorized();
 }
 
-export async function authenticateToken(token: string): Promise<User> {
+export async function authenticateToken(
+  token: string,
+  expect: { purpose?: 'download' | 'mfa'; path?: string } = {},
+): Promise<User> {
   let payload;
   try {
     payload = verifyToken(token);
   } catch {
     throw unauthorized('Sitzung abgelaufen');
   }
+  if (payload.purpose !== expect.purpose) throw unauthorized('Ungültiges Token');
+  if (expect.purpose === 'download' && payload.path !== expect.path) throw unauthorized('Download-Link gilt nicht für diese Adresse');
   const user = await prisma.user.findUnique({ where: { id: payload.sub } });
   if (!user || !user.active) throw unauthorized('Konto deaktiviert');
   if ((payload.sessionVersion ?? 0) !== user.sessionVersion) throw unauthorized('Sitzung widerrufen');

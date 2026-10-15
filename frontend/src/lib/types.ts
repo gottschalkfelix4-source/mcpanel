@@ -13,6 +13,8 @@ export interface Me {
   role: Role;
   createdAt: string;
   serverCount: number;
+  /** Anmeldung verlangt zusätzlich einen Einmalcode. */
+  totpEnabled: boolean;
 }
 
 export interface ContainerStats {
@@ -113,6 +115,10 @@ export interface Backup {
   note: string;
   createdAt: string;
   createdBy: { id: string; username: string } | null;
+  /** Wer die Sicherung ausgelöst hat – bestimmt die Reihenfolge beim Aufräumen. */
+  origin: 'MANUAL' | 'AUTOMATIC' | 'SAFETY';
+  /** Angepinnte Sicherungen entfernt keine Aufbewahrungsregel. */
+  pinned: boolean;
 }
 
 export interface ProjectSummary {
@@ -234,6 +240,7 @@ export interface PanelUser {
   username: string;
   role: Role;
   active: boolean;
+  totpEnabled: boolean;
   createdAt: string;
   _count?: { ownedServers: number; memberships: number };
 }
@@ -254,6 +261,8 @@ export interface Automation {
     backupName?: string;
     note?: string;
     keepBackups?: number;
+    /** Vorwarnung im Spielchat vor Neustart/Stopp, in Sekunden. */
+    warnSeconds?: number;
   };
   onlyWhenRunning: boolean;
   lastRunAt: string | null;
@@ -264,6 +273,8 @@ export interface Automation {
   /** Vom Server erzeugter Klartext des Zeitplans. */
   scheduleText: string;
   nextRunAt: string | null;
+  /** Konto, mit dessen Rechten die Automation läuft. */
+  runsAs?: string | null;
 }
 
 export type NotifyChannelType = 'DISCORD' | 'WEBHOOK';

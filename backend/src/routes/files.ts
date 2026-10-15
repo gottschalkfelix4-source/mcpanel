@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { attachment } from '../lib/contentDisposition.js';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import { badRequest, notFound } from '../lib/errors.js';
@@ -89,12 +90,12 @@ export default async function fileRoutes(app: FastifyInstance) {
     reply
       .header('Content-Type', 'application/octet-stream')
       .header('Content-Length', String(stat.size))
-      .header('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(abs))}"`);
+      .header('Content-Disposition', attachment(path.basename(abs)));
     return reply.send(fs.createReadStream(abs));
   });
 
   // Upload (multipart)
-  app.post('/upload', async (req) => {
+  app.post('/upload', { config: { locksItself: true } }, async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_WRITE);
     const dir = (req.query as { path?: string }).path ?? '/';
 
