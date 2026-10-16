@@ -5,10 +5,10 @@ Git-Tag `vX.Y.Z`; daraus baut die CI das Abbild `ghcr.io/…:X.Y.Z` (und
 `:X.Y`). `latest` folgt weiterhin dem Hauptzweig.
 
 Die Oberfläche zeigt dieses Protokoll unter **Einstellungen → Was ist neu**.
-Neue Einträge kommen immer oben in den Abschnitt „Unveröffentlicht“; beim
+Neue Einträge kommen immer oben in einen Abschnitt „[Unveröffentlicht]“; beim
 Taggen wird daraus eine Versionsüberschrift.
 
-## [Unveröffentlicht]
+## [1.0.0] – 2026-10-16
 
 ### Neu
 - **Wiederherstellungscodes für die Zwei-Faktor-Anmeldung**: Beim Einrichten gibt es zehn Einmalcodes, mit denen man sich ohne Authenticator-App anmelden kann. Sie lassen sich im Profil jederzeit neu erzeugen.
