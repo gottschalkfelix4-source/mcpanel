@@ -5,6 +5,8 @@ import { api } from '../../lib/api';
 import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
 import PanelBackups from '../../components/PanelBackups';
+import Changelog from '../../components/Changelog';
+import { DiskSpace, SecuritySettings, type DiskInfo, type SecurityInfo } from '../../components/PanelSecurity';
 import { Link } from 'react-router-dom';
 import { formatDate } from '../../lib/format';
 import {
@@ -22,6 +24,8 @@ interface PanelInfo {
   dockerNetwork: string;
   curseforge: { configured: boolean; masked: string | null };
   counts: { users: number; servers: number; backups: number };
+  disk: DiskInfo | null;
+  security: SecurityInfo;
   docker: { version: string; containers: number } | null;
   assistant: AssistantInfo;
 }
@@ -97,7 +101,16 @@ export default function PanelSettingsPage() {
         />
       </div>
 
+      {data.disk?.low && (
+        <ErrorNote>
+          Auf dem Datenträger des Panels ist kaum noch Platz frei – Details unter „Speicherplatz“.
+        </ErrorNote>
+      )}
+
       <PanelAddressSettings url={data.panelUrl} />
+
+      <SecuritySettings data={data.security} />
+      <DiskSpace disk={data.disk} />
 
       {/* CurseForge */}
       <Panel
@@ -198,6 +211,8 @@ export default function PanelSettingsPage() {
           </InfoNote>
         </div>
       </Panel>
+
+      <Changelog version={data.build.version} />
 
       {/* Protokoll */}
       <Panel title="Aktivitätsprotokoll" icon={<ScrollText size={16} />} bodyClassName="!p-0">

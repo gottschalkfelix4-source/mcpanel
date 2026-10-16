@@ -2,8 +2,9 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, NETWORK_ERROR_MESSAGE } from './lib/api';
 import { useAuth } from './lib/auth';
-import { LoadErrorBlock, LoadingBlock } from './components/ui';
+import { Button, InfoNote, LoadErrorBlock, LoadingBlock } from './components/ui';
 import Layout from './components/Layout';
+import TotpPanel from './components/TotpPanel';
 
 import LoginPage from './pages/Login';
 import SetupPage from './pages/Setup';
@@ -18,6 +19,7 @@ import ContentTab from './pages/server/ContentTab';
 import FilesTab from './pages/server/FilesTab';
 import ConfigTab from './pages/server/ConfigTab';
 import BackupsTab from './pages/server/BackupsTab';
+import WorldsTab from './pages/server/WorldsTab';
 import PlayersTab from './pages/server/PlayersTab';
 import AccessTab from './pages/server/AccessTab';
 import AutomationTab from './pages/server/AutomationTab';
@@ -27,6 +29,28 @@ import UsersPage from './pages/admin/Users';
 import PanelSettingsPage from './pages/admin/PanelSettings';
 import ProxyPage from './pages/admin/Proxy';
 import ProfilePage from './pages/Profile';
+
+/**
+ * Der Administrator hat den zweiten Faktor vorgeschrieben: Bis er
+ * eingerichtet ist, lehnt das Backend fast alles ab. Statt einer Oberfläche
+ * voller Fehlermeldungen gibt es nur diese eine Seite.
+ */
+function TotpRequired() {
+  const { user, logout } = useAuth();
+  return (
+    <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-5 p-4 animate-fade-in">
+      <h1 className="heading-pixel text-base">Zwei-Faktor-Anmeldung einrichten</h1>
+      <InfoNote>
+        Für {user?.role === 'ADMIN' ? 'Administratorkonten' : 'alle Konten'} ist auf diesem Panel ein zweiter
+        Faktor vorgeschrieben. Richte ihn ein, um weiterzumachen – danach geht es ganz normal ins Panel.
+      </InfoNote>
+      <TotpPanel />
+      <div>
+        <Button variant="ghost" onClick={() => logout()}>Abmelden</Button>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const { user, loading, offline, refresh } = useAuth();
@@ -81,6 +105,14 @@ export default function App() {
     );
   }
 
+  if (user.totpRequired) {
+    return (
+      <Routes>
+        <Route path="*" element={<TotpRequired />} />
+      </Routes>
+    );
+  }
+
   return (
     <Routes>
       <Route path="/login" element={<Navigate to="/" replace />} />
@@ -100,6 +132,7 @@ export default function App() {
           <Route path="files" element={<FilesTab />} />
           <Route path="config" element={<ConfigTab />} />
           <Route path="backups" element={<BackupsTab />} />
+          <Route path="worlds" element={<WorldsTab />} />
           <Route path="players" element={<PlayersTab />} />
           <Route path="automation" element={<AutomationTab />} />
           <Route path="access" element={<AccessTab />} />

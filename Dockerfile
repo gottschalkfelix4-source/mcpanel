@@ -14,6 +14,8 @@ WORKDIR /build
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ ./
+# „Was ist neu“ liest ../CHANGELOG.md, von /build aus also /CHANGELOG.md.
+COPY CHANGELOG.md /CHANGELOG.md
 RUN node scripts/gen-icons.mjs
 RUN npm run build
 

@@ -92,9 +92,10 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
     }
   }
 
+  let entries: string[] = [];
   try {
     await task?.update(25, 'Archiv wird erstellt …');
-    const entries = (await fs.readdir(dir)).filter((e) => !EXCLUDE.has(e));
+    entries = (await fs.readdir(dir)).filter((e) => !EXCLUDE.has(e));
     const budget = await remainingDiskBytes(server);
     try {
       await pipeline(tar.create({ gzip: true, cwd: dir, portable: true, filter: (entry) => !isUploadTemp(entry) }, entries), byteLimit(budget), fsSync.createWriteStream(target));
@@ -109,6 +110,18 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
   }
 
   const stat = await fs.stat(target);
+
+  // Einmal komplett durchlesen: ein Archiv, das sich nicht entpacken ließe,
+  // soll gar nicht erst als Sicherung in der Liste stehen.
+  await task?.update(85, 'Archiv wird geprüft …');
+  let check: ArchiveCheck;
+  try {
+    check = await inspectArchive(target);
+    if (check.entries === 0 && entries.length > 0) throw new Error('Archiv ist leer');
+  } catch (err) {
+    await fs.rm(target, { force: true });
+    throw badRequest(`Das neue Archiv ist fehlerhaft und wurde verworfen: ${err instanceof Error ? err.message : err}`);
+  }
   await task?.update(90, 'Backup wird registriert …');
 
   const store = await getTarget();
@@ -125,6 +138,9 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
       createdById: options.createdById ?? null,
       origin: options.origin ?? 'MANUAL',
       automationId: options.automationId ?? null,
+      verifiedAt: new Date(),
+      verifyStatus: 'OK',
+      verifyMessage: describeCheck(check),
     },
   });
 
@@ -177,21 +193,90 @@ Zweitkopie fehlgeschlagen: ${mirrorError}` : backup.name,
  * Warnungen (abgeschnittenes Archiv) als Fehler durchschlagen.
  */
 async function assertArchiveIntact(archive: string) {
-  let entries = 0;
+  let check: ArchiveCheck;
   try {
-    await tar.list({
-      file: archive,
-      strict: true,
-      onReadEntry: () => {
-        entries += 1;
-      },
-    });
+    check = await inspectArchive(archive);
   } catch {
     throw badRequest('Das Backup-Archiv ist beschädigt oder unvollständig – es wurde nichts verändert.');
   }
-  if (entries === 0) {
+  if (check.entries === 0) {
     throw badRequest('Das Backup-Archiv ist leer – es wurde nichts verändert.');
   }
+}
+
+export interface ArchiveCheck {
+  entries: number;
+  /** Summe der entpackten Dateigrößen */
+  bytes: number;
+  /** Enthält eine Welt (level.dat) */
+  hasWorld: boolean;
+}
+
+/** Liest das ganze Archiv (gzip-Prüfsumme inklusive), ohne etwas zu schreiben. */
+export async function inspectArchive(archive: string): Promise<ArchiveCheck> {
+  const check: ArchiveCheck = { entries: 0, bytes: 0, hasWorld: false };
+  await tar.list({
+    file: archive,
+    strict: true,
+    onReadEntry: (entry) => {
+      check.entries += 1;
+      check.bytes += entry.size ?? 0;
+      if (/(^|\/)level\.dat$/.test(entry.path)) check.hasWorld = true;
+    },
+  });
+  return check;
+}
+
+function describeCheck(check: ArchiveCheck): string {
+  const size = check.bytes >= 1024 ** 3 ? `${(check.bytes / 1024 ** 3).toFixed(1)} GB` : `${(check.bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${check.entries} Einträge, ${size} entpackt${check.hasWorld ? ', Welt enthalten' : ''}`;
+}
+
+/**
+ * Prüft eine bestehende Sicherung vollständig (Hauptablage, sonst Zweitablage)
+ * und merkt sich das Ergebnis. Liest nur – braucht keine Serversperre.
+ */
+export async function verifyBackup(server: Server, backupId: string, task?: TaskHandle) {
+  const backup = await prisma.backup.findFirst({ where: { id: backupId, serverId: server.id } });
+  if (!backup) throw notFound('Backup nicht gefunden');
+  await task?.update(5, 'Archiv wird gesucht …');
+  const fromPrimary = !!(await fs.stat(primaryPath(server.id, backup.filename)).catch(() => null));
+  const source = await resolveArchive(server.id, backup.filename, backup.targetId);
+  let status: 'OK' | 'FEHLER';
+  let message: string;
+  if (!source) {
+    status = 'FEHLER';
+    message = 'Archiv fehlt – weder in der Haupt- noch in der Zweitablage';
+  } else {
+    try {
+      await task?.update(20, 'Archiv wird vollständig gelesen …');
+      const check = await inspectArchive(source.path);
+      if (check.entries === 0) throw new Error('Archiv ist leer');
+      status = 'OK';
+      message = `${describeCheck(check)}${fromPrimary ? '' : ' (aus der Zweitablage)'}`;
+    } catch (err) {
+      status = 'FEHLER';
+      message = `Archiv beschädigt: ${err instanceof Error ? err.message : err}`;
+    } finally {
+      await source.cleanup();
+    }
+  }
+  const updated = await prisma.backup.update({
+    where: { id: backup.id },
+    data: { verifiedAt: new Date(), verifyStatus: status, verifyMessage: message.slice(0, 500) },
+  });
+  if (status === 'FEHLER') {
+    void notify('backup.failed', {
+      serverId: server.id,
+      serverName: server.name,
+      title: `Backup-Prüfung fehlgeschlagen: ${server.name}`,
+      message: `${backup.name}
+
+${message}`,
+    });
+  }
+  await task?.update(100, status === 'OK' ? `Backup in Ordnung – ${message}` : message);
+  return updated;
 }
 
 /**

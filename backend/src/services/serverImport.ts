@@ -44,8 +44,12 @@ export function importEnvironment(request: ImportRequest): Record<string, string
 export interface ImportPlan { root: string; entries: Entry[]; bytes: number }
 const ignored = (name: string) => name.startsWith('__MACOSX/') || name.split('/').pop() === '.DS_Store';
 
+/** Woran der Wurzelordner im ZIP erkannt wird (Server: server.properties, Welt: level.dat). */
+export interface ZipMarker { file: string; missing: string }
+const SERVER_MARKER: ZipMarker = { file: 'server.properties', missing: 'Das ZIP muss einen eindeutigen Serverordner mit server.properties enthalten.' };
+
 /** ZIP-Metadaten vollständig prüfen, bevor Dateien oder ein Server angelegt werden. */
-export async function inspectServerZip(file: string, maxBytes = IMPORT_EXPANDED_LIMIT): Promise<ImportPlan> {
+export async function inspectServerZip(file: string, maxBytes = IMPORT_EXPANDED_LIMIT, marker: ZipMarker = SERVER_MARKER): Promise<ImportPlan> {
   let zip;
   try {
     zip = await openPromise(file, { lazyEntries: true, autoClose: false });
@@ -76,10 +80,10 @@ export async function inspectServerZip(file: string, maxBytes = IMPORT_EXPANDED_
       while (parts.length > 1) { parts.pop(); if (files.has(parts.join('/'))) throw badRequest('Dateien und Ordner im ZIP haben widersprüchliche Pfade.'); }
     }
     const usable = entries.filter(e => !ignored(e.fileName));
-    const properties = usable.filter(e => /(?:^|\/)server\.properties$/.test(e.fileName));
-    const direct = properties.find(e => e.fileName === 'server.properties');
-    if (!direct && properties.length !== 1) throw badRequest('Das ZIP muss einen eindeutigen Serverordner mit server.properties enthalten.');
-    const root = direct ? '' : properties[0].fileName.slice(0, -'server.properties'.length);
+    const properties = usable.filter(e => e.fileName === marker.file || e.fileName.endsWith(`/${marker.file}`));
+    const direct = properties.find(e => e.fileName === marker.file);
+    if (!direct && properties.length !== 1) throw badRequest(marker.missing);
+    const root = direct ? '' : properties[0].fileName.slice(0, -marker.file.length);
     if (usable.some(e => !e.fileName.startsWith(root) && !(e.fileName.endsWith('/') && root.startsWith(e.fileName)))) {
       throw badRequest('Bitte nur den Serverordner oder dessen Inhalt als ZIP hochladen.');
     }

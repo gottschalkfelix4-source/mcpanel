@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, HardDrive, HardDriveDownload, Pin, PinOff, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Download, HardDrive, HardDriveDownload, Pin, PinOff, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react';
 import { api, downloadFile } from '../../lib/api';
 import { formatBytes, formatDate, formatRelative } from '../../lib/format';
 import type { Backup } from '../../lib/types';
@@ -10,13 +10,33 @@ import {
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
-const TASK_TYPES = ['backup.create', 'backup.restore'];
+const TASK_TYPES = ['backup.create', 'backup.restore', 'backup.verify'];
 
 const ORIGIN_LABEL: Record<Backup['origin'], string | null> = {
   MANUAL: null,
   AUTOMATIC: 'Automatisch',
   SAFETY: 'Sicherheitskopie',
 };
+
+/** Ergebnis der letzten Archivprüfung. */
+function VerifyLine({ backup }: { backup: Backup }) {
+  if (!backup.verifiedAt) {
+    return <p className="mt-1 text-xs text-stone-450">Noch nicht geprüft</p>;
+  }
+  const ok = backup.verifyStatus === 'OK';
+  return (
+    <p
+      className={`mt-1 flex items-center gap-1 text-xs ${ok ? 'text-emerald' : 'text-redstone'}`}
+      title={backup.verifyMessage ?? undefined}
+    >
+      {ok ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
+      <span className="truncate">
+        {ok ? 'Geprüft' : 'Prüfung fehlgeschlagen'} {formatRelative(backup.verifiedAt)}
+        {backup.verifyMessage && ` · ${backup.verifyMessage}`}
+      </span>
+    </p>
+  );
+}
 
 export default function BackupsTab() {
   const { server, can } = useServer();
@@ -63,6 +83,12 @@ export default function BackupsTab() {
       toast.success(backup.pinned ? 'Backup wird wieder normal aufgeräumt.' : 'Backup angepinnt – es wird nie automatisch gelöscht.');
       invalidate();
     },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const verify = useMutation({
+    mutationFn: (backup: Backup) => api.post(`/servers/${server.id}/backups/${backup.id}/verify`),
+    onSuccess: () => toast.info('Backup wird geprüft …'),
     onError: (err: Error) => toast.error(err.message),
   });
 
@@ -155,6 +181,7 @@ export default function BackupsTab() {
                     {backup.createdBy && ` · von ${backup.createdBy.username}`}
                   </p>
                   {backup.note && <p className="mt-1 text-xs italic text-stone-450">{backup.note}</p>}
+                  <VerifyLine backup={backup} />
                 </div>
 
                 <div className="flex gap-1.5">
@@ -166,6 +193,17 @@ export default function BackupsTab() {
                       title={backup.pinned ? 'Nicht mehr anpinnen' : 'Anpinnen – nie automatisch löschen'}
                       aria-label={backup.pinned ? 'Nicht mehr anpinnen' : 'Anpinnen'}
                       onClick={() => pin.mutate(backup)}
+                    />
+                  )}
+                  {can('backup.create') && (
+                    <Button
+                      variant="ghost"
+                      className="!px-2.5 !py-1.5 !text-xs"
+                      icon={<ShieldCheck size={13} />}
+                      title="Archiv vollständig lesen und prüfen"
+                      aria-label="Prüfen"
+                      loading={verify.isPending && verify.variables?.id === backup.id}
+                      onClick={() => verify.mutate(backup)}
                     />
                   )}
                   {can('backup.download') && (

@@ -113,6 +113,8 @@ const AUFGABEN_NAMEN: Record<string, string> = {
   'modpack.install': 'Eine Modpack-Installation',
   'modpack.update': 'Ein Modpack-Update',
   'server.reinstall': 'Eine Neuinstallation',
+  'world.reset': 'Ein Weltreset',
+  'world.import': 'Ein Welt-Upload',
 };
 
 const aufgabenName = (type: string) => AUFGABEN_NAMEN[type] ?? `Die Aufgabe "${type}"`;

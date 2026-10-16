@@ -8,6 +8,7 @@ vi.mock('../db.js', () => ({ prisma: {
   user: { findUnique: async ({ where }: any) => ({ id: where.id, role: where.id === 'admin' ? 'ADMIN' : 'USER', active: true, sessionVersion: 0 }) },
   server: { findUnique: async () => ({ id: 'a', ownerId: 'besitzer', quotaMemoryMb: 4096 }) },
   serverMember: { findUnique: async ({ where }: any) => where.serverId_userId.userId === 'mitglied' ? { permissions: m.permissions } : null },
+  setting: { findUnique: async () => null },
   auditLog: { create: vi.fn(async () => {}) },
 } }));
 vi.mock('../services/serverReinstall.js', () => ({ reinstallServer: m.install }));

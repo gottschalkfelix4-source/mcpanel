@@ -15,6 +15,8 @@ import { globalNotificationRoutes } from './notifications.js';
 import { configureProxy, proxyStatus } from '../services/proxy.js';
 import { proxyOverview } from '../services/proxyOverview.js';
 import panelBackupRoutes from './panelBackups.js';
+import { volumeSpace } from '../services/quota.js';
+import { getTotpPolicy, policyApplies, TOTP_POLICIES, TOTP_POLICY_KEY } from '../auth/totpPolicy.js';
 import {
   getAssistantConfig, isConfigured as assistantConfigured, publicAssistantConfig,
   saveAssistantConfig, testAssistant,
@@ -41,6 +43,20 @@ export default async function settingsRoutes(app: FastifyInstance) {
     await setSetting('panel.url', url);
     await audit(req.user!.id, null, 'settings.panelUrl', url || 'entfernt');
     return { panelUrl: url };
+  });
+
+  /** Zwei-Faktor-Pflicht: aus, nur Administratoren oder alle Konten. */
+  app.put('/security', { preHandler: requireAdmin }, async (req) => {
+    const { requireTotp } = z.object({ requireTotp: z.enum(TOTP_POLICIES as [string, ...string[]]) }).parse(req.body);
+    const user = req.user!;
+    // Sonst sperrte sich der Administrator mit dem Klick selbst aus allem
+    // außer der Einrichtungsseite aus.
+    if (policyApplies(requireTotp as never, user) && !user.totpEnabled) {
+      throw badRequest('Richte zuerst für dein eigenes Konto die Zwei-Faktor-Anmeldung ein (Profil).');
+    }
+    await setSetting(TOTP_POLICY_KEY, requireTotp);
+    await audit(user.id, null, 'settings.requireTotp', requireTotp);
+    return { requireTotp };
   });
 
   await app.register(globalNotificationRoutes, { prefix: '/notifications' });
@@ -92,6 +108,12 @@ export default async function settingsRoutes(app: FastifyInstance) {
         masked: key ? `${key.slice(0, 6)}…${key.slice(-4)}` : null,
       },
       counts: { users, servers, backups },
+      disk: await volumeSpace(),
+      security: {
+        requireTotp: await getTotpPolicy(),
+        usersWithoutTotp: await prisma.user.count({ where: { active: true, totpEnabled: false } }),
+        adminsWithoutTotp: await prisma.user.count({ where: { active: true, totpEnabled: false, role: 'ADMIN' } }),
+      },
       docker: dockerInfo,
       assistant: publicAssistantConfig(await getAssistantConfig()),
     };

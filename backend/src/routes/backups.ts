@@ -6,8 +6,8 @@ import { notFound } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
-import { backupFilePath, createBackup, deleteBackup, restoreBackup } from '../services/backups.js';
-import { runTask } from '../services/tasks.js';
+import { backupFilePath, createBackup, deleteBackup, restoreBackup, verifyBackup } from '../services/backups.js';
+import { createTask, runTask } from '../services/tasks.js';
 import { assertDiskAvailable } from '../services/quota.js';
 
 export default async function backupRoutes(app: FastifyInstance) {
@@ -50,6 +50,20 @@ export default async function backupRoutes(app: FastifyInstance) {
     });
     await audit(req.user!.id, access.server.id, 'backup.restore', backupId);
     return { ok: true, taskId };
+  });
+
+  /** Liest das Archiv vollständig durch und merkt sich das Ergebnis. */
+  app.post('/:backupId/verify', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.BACKUP_CREATE);
+    const { backupId } = req.params as { backupId: string };
+    const existing = await prisma.backup.findFirst({ where: { id: backupId, serverId: access.server.id } });
+    if (!existing) throw notFound('Backup nicht gefunden');
+    // Bewusst ohne Serversperre: die Prüfung liest nur und soll Start/Stopp
+    // nicht minutenlang blockieren.
+    const task = await createTask(access.server.id, 'backup.verify', 'Prüfung beginnt …');
+    void verifyBackup(access.server, backupId, task).then(() => task.done(), (err) => task.fail(err));
+    await audit(req.user!.id, access.server.id, 'backup.verify', existing.name);
+    return { ok: true, taskId: task.id };
   });
 
   app.delete('/:backupId', async (req) => {

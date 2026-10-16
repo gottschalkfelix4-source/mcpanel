@@ -1,12 +1,15 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { User } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { signDownloadToken, signMfaToken, signToken } from '../auth/jwt.js';
+import { signDownloadToken, signMfaToken } from '../auth/jwt.js';
+import { createSession, describeUserAgent } from '../auth/sessions.js';
+import { totpSetupRequired } from '../auth/totpPolicy.js';
 import { canonicalDownloadPath } from '../auth/downloadPath.js';
 import { audit, authenticate, authenticateToken } from '../auth/context.js';
-import { HttpError, badRequest, unauthorized } from '../lib/errors.js';
+import { HttpError, badRequest, notFound, unauthorized } from '../lib/errors.js';
+import { generateRecoveryCodes, hashRecoveryCode, looksLikeRecoveryCode } from '../lib/recoveryCodes.js';
 import { generateSecret, otpauthUrl, verifyTotp } from '../lib/totp.js';
 import { invalidateSocketAccess } from '../ws/io.js';
 
@@ -50,11 +53,32 @@ function checkTotp(user: User, code: string): boolean {
   return true;
 }
 
-function session(user: User) {
+/** Verbraucht einen Wiederherstellungscode – atomar, damit er wirklich nur einmal gilt. */
+async function consumeRecoveryCode(user: User, code: string): Promise<boolean> {
+  const hash = hashRecoveryCode(code);
+  if (!user.totpRecoveryCodes.includes(hash)) return false;
+  const count = await prisma.$executeRaw`
+    UPDATE "User" SET "totpRecoveryCodes" = array_remove("totpRecoveryCodes", ${hash})
+    WHERE id = ${user.id} AND ${hash} = ANY("totpRecoveryCodes")`;
+  return count === 1;
+}
+
+export function clientInfo(req: FastifyRequest) {
+  const ua = req.headers['user-agent'];
+  return { ip: req.ip, userAgent: typeof ua === 'string' ? ua : '' };
+}
+
+export async function session(user: User, req: FastifyRequest) {
   return {
-    token: signToken({ sub: user.id, username: user.username, role: user.role, sessionVersion: user.sessionVersion }),
+    token: await createSession(user, clientInfo(req)),
     user: { id: user.id, email: user.email, username: user.username, role: user.role },
   };
+}
+
+/** Alle Geräte abmelden (Passwortwechsel, zweiter Faktor, „überall abmelden“). */
+async function revokeAllSessions(userId: string) {
+  await prisma.session.deleteMany({ where: { userId } });
+  invalidateSocketAccess();
 }
 
 /**
@@ -96,18 +120,23 @@ export default async function authRoutes(app: FastifyInstance) {
     }
 
     await audit(user.id, null, 'auth.login', `von ${req.ip}`);
-    return session(user);
+    return session(user, req);
   });
 
   app.post('/login/totp', { config: loginLimit }, async (req) => {
-    const { mfaToken, code } = z.object({ mfaToken: z.string().min(1), code: z.string().min(1).max(12) }).parse(req.body);
+    const { mfaToken, code } = z.object({ mfaToken: z.string().min(1), code: z.string().min(1).max(24) }).parse(req.body);
     const user = await authenticateToken(mfaToken, { purpose: 'mfa' });
-    if (!user.totpEnabled || !checkTotp(user, code)) {
-      await audit(user.id, null, 'auth.login.failed', `falscher Einmalcode von ${req.ip}`);
-      throw unauthorized('Der Code ist falsch oder abgelaufen');
+    const recovery = looksLikeRecoveryCode(code);
+    const ok = user.totpEnabled && (recovery ? await consumeRecoveryCode(user, code) : checkTotp(user, code));
+    if (!ok) {
+      await audit(user.id, null, 'auth.login.failed', `falscher ${recovery ? 'Wiederherstellungscode' : 'Einmalcode'} von ${req.ip}`);
+      throw unauthorized(recovery ? 'Der Wiederherstellungscode ist ungültig oder schon verbraucht' : 'Der Code ist falsch oder abgelaufen');
     }
-    await audit(user.id, null, 'auth.login', `mit zweitem Faktor von ${req.ip}`);
-    return session(user);
+    await audit(user.id, null, 'auth.login', `${recovery ? 'mit Wiederherstellungscode' : 'mit zweitem Faktor'} von ${req.ip}`);
+    return {
+      ...(await session(user, req)),
+      ...(recovery ? { usedRecoveryCode: true, recoveryCodesLeft: user.totpRecoveryCodes.length - 1 } : {}),
+    };
   });
 
   app.get('/me', { preHandler: authenticate }, async (req) => {
@@ -124,6 +153,8 @@ export default async function authRoutes(app: FastifyInstance) {
       createdAt: user.createdAt,
       serverCount: ownedCount + memberCount,
       totpEnabled: user.totpEnabled,
+      totpRequired: await totpSetupRequired(user),
+      recoveryCodesLeft: user.totpEnabled ? user.totpRecoveryCodes.length : 0,
     };
   });
 
@@ -137,8 +168,8 @@ export default async function authRoutes(app: FastifyInstance) {
       where: { id: user.id },
       data: { passwordHash: await bcrypt.hash(newPassword, 10), sessionVersion: { increment: 1 } },
     });
-    invalidateSocketAccess();
-    return { ok: true, token: session(updated).token };
+    await revokeAllSessions(user.id);
+    return { ok: true, token: (await session(updated, req)).token };
   });
 
   /** Meldet alle Geräte ab; dieses Fenster bekommt ein frisches Token. */
@@ -147,9 +178,52 @@ export default async function authRoutes(app: FastifyInstance) {
       where: { id: req.user!.id },
       data: { sessionVersion: { increment: 1 } },
     });
-    invalidateSocketAccess();
+    await revokeAllSessions(updated.id);
     await audit(updated.id, null, 'auth.logout-all', `von ${req.ip}`);
-    return { ok: true, token: session(updated).token };
+    return { ok: true, token: (await session(updated, req)).token };
+  });
+
+  /** Meldet nur dieses Gerät ab. */
+  app.post('/logout', { preHandler: authenticate }, async (req) => {
+    if (req.sessionId) {
+      await prisma.session.deleteMany({ where: { id: req.sessionId, userId: req.user!.id } });
+      invalidateSocketAccess();
+    }
+    return { ok: true };
+  });
+
+  // -------------------------------------------------------------------------
+  // Angemeldete Geräte
+  // -------------------------------------------------------------------------
+
+  app.get('/sessions', { preHandler: authenticate }, async (req) => {
+    const user = req.user!;
+    // Zeilen aus einer früheren Sitzungsversion (Passwort per CLI/Admin geändert) sind tot.
+    await prisma.session.deleteMany({ where: { userId: user.id, version: { not: user.sessionVersion } } });
+    const rows = await prisma.session.findMany({
+      where: { userId: user.id, expiresAt: { gt: new Date() } },
+      orderBy: { lastSeenAt: 'desc' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      device: describeUserAgent(row.userAgent),
+      userAgent: row.userAgent,
+      ip: row.ip,
+      createdAt: row.createdAt,
+      lastSeenAt: row.lastSeenAt,
+      expiresAt: row.expiresAt,
+      current: row.id === req.sessionId,
+    }));
+  });
+
+  app.delete('/sessions/:sessionId', { preHandler: authenticate }, async (req) => {
+    const { sessionId } = req.params as { sessionId: string };
+    const { count } = await prisma.session.deleteMany({ where: { id: sessionId, userId: req.user!.id } });
+    if (!count) throw notFound('Sitzung nicht gefunden');
+    invalidateSocketAccess();
+    const current = sessionId === req.sessionId;
+    await audit(req.user!.id, null, 'auth.session.revoke', current ? 'dieses Gerät' : 'anderes Gerät');
+    return { ok: true, current };
   });
 
   /**
@@ -160,7 +234,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const { path } = z.object({ path: z.string().min(5).max(4000).startsWith('/api/') }).parse(req.body);
     const user = req.user!;
     const bound = canonicalDownloadPath(path);
-    const token = signDownloadToken({ sub: user.id, username: user.username, role: user.role, sessionVersion: user.sessionVersion }, bound);
+    const token = signDownloadToken({ sub: user.id, username: user.username, role: user.role, sessionVersion: user.sessionVersion, sid: req.sessionId }, bound);
     return { token };
   });
 
@@ -184,13 +258,27 @@ export default async function authRoutes(app: FastifyInstance) {
     if (!user.totpSecret) throw badRequest('Bitte zuerst die Einrichtung starten');
     if (!checkTotp(user, code)) throw badRequest('Der Code passt nicht – Uhrzeit des Geräts prüfen');
     // Bestehende Sitzungen ohne zweiten Faktor beenden.
+    const { codes, hashes } = generateRecoveryCodes();
     const updated = await prisma.user.update({
       where: { id: user.id },
-      data: { totpEnabled: true, sessionVersion: { increment: 1 } },
+      data: { totpEnabled: true, totpRecoveryCodes: hashes, sessionVersion: { increment: 1 } },
     });
-    invalidateSocketAccess();
+    await revokeAllSessions(user.id);
     await audit(user.id, null, 'auth.totp.enable', '');
-    return { ok: true, token: session(updated).token };
+    return { ok: true, token: (await session(updated, req)).token, recoveryCodes: codes };
+  });
+
+  /** Neue Wiederherstellungscodes; die alten verlieren ihre Gültigkeit. */
+  app.post('/totp/recovery-codes', { preHandler: authenticate, config: loginLimit }, async (req) => {
+    const { password, code } = z.object({ password: z.string().min(1), code: z.string().min(1).max(12) }).parse(req.body);
+    const user = req.user!;
+    if (!user.totpEnabled) throw badRequest('Der zweite Faktor ist nicht aktiv');
+    if (!(await bcrypt.compare(password, user.passwordHash))) throw badRequest('Passwort ist falsch');
+    if (!checkTotp(user, code)) throw badRequest('Der Code ist falsch oder abgelaufen');
+    const { codes, hashes } = generateRecoveryCodes();
+    await prisma.user.update({ where: { id: user.id }, data: { totpRecoveryCodes: hashes } });
+    await audit(user.id, null, 'auth.totp.recovery-codes', 'neu erzeugt');
+    return { recoveryCodes: codes };
   });
 
   app.post('/totp/disable', { preHandler: authenticate, config: loginLimit }, async (req) => {
@@ -199,7 +287,10 @@ export default async function authRoutes(app: FastifyInstance) {
     if (!user.totpEnabled) throw badRequest('Der zweite Faktor ist nicht aktiv');
     if (!(await bcrypt.compare(password, user.passwordHash))) throw badRequest('Passwort ist falsch');
     if (!checkTotp(user, code)) throw badRequest('Der Code ist falsch oder abgelaufen');
-    await prisma.user.update({ where: { id: user.id }, data: { totpEnabled: false, totpSecret: null } });
+    if (await totpSetupRequired({ ...user, totpEnabled: false })) {
+      throw badRequest('Die Zwei-Faktor-Anmeldung ist für dieses Konto vorgeschrieben und kann nicht abgeschaltet werden');
+    }
+    await prisma.user.update({ where: { id: user.id }, data: { totpEnabled: false, totpSecret: null, totpRecoveryCodes: [] } });
     await audit(user.id, null, 'auth.totp.disable', '');
     return { ok: true };
   });

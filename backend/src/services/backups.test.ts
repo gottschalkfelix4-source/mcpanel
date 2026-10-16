@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   root: '',
   findFirst: vi.fn(),
   create: vi.fn(),
+  update: vi.fn(async ({ data }: any) => data),
   stop: vi.fn(),
   recreateContainer: vi.fn(),
   fetchBackup: vi.fn(),
@@ -32,7 +33,7 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../db.js', () => ({
-  prisma: { backup: { findFirst: mocks.findFirst, create: mocks.create } },
+  prisma: { backup: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update } },
 }));
 
 vi.mock('./docker.js', () => ({
@@ -57,7 +58,8 @@ vi.mock('./backupTarget.js', () => ({
   removeBackup: vi.fn(),
 }));
 
-const { restoreBackup } = await import('./backups.js');
+const { restoreBackup, verifyBackup } = await import('./backups.js');
+const { notify } = await import('./notify.js');
 
 const SERVER_ID = 'srv-test';
 const FILENAME = 'backup-test.tar.gz';
@@ -217,5 +219,34 @@ describe('restoreBackup', () => {
     expect(await exists(path.join(dir(), 'world', 'level.dat'))).toBe(true);
     expect(await exists(path.join(dir(), 'halb-entpackt.tmp'))).toBe(false);
     expect(await exists(stash)).toBe(false);
+  });
+});
+
+describe('verifyBackup', () => {
+  it('merkt sich ein heiles Archiv mit Eintragszahl und Welt', async () => {
+    await legeServerstandAn();
+    await packeArchiv();
+    const result: any = await verifyBackup(server, 'bk-1');
+    expect(result.verifyStatus).toBe('OK');
+    expect(result.verifyMessage).toMatch(/Einträge.*Welt enthalten/);
+    expect(result.verifiedAt).toBeInstanceOf(Date);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('meldet ein abgeschnittenes Archiv als fehlerhaft und benachrichtigt', async () => {
+    await legeServerstandAn();
+    await packeArchiv();
+    const voll = await fs.readFile(archivePath());
+    await fs.writeFile(archivePath(), voll.subarray(0, Math.floor(voll.length / 2)));
+    const result: any = await verifyBackup(server, 'bk-1');
+    expect(result.verifyStatus).toBe('FEHLER');
+    expect(result.verifyMessage).toMatch(/^Archiv beschädigt/);
+    expect(notify).toHaveBeenCalledWith('backup.failed', expect.objectContaining({ serverId: SERVER_ID }));
+  });
+
+  it('meldet ein fehlendes Archiv, ohne etwas zu verändern', async () => {
+    const result: any = await verifyBackup(server, 'bk-1');
+    expect(result).toMatchObject({ verifyStatus: 'FEHLER', verifyMessage: expect.stringMatching(/Archiv fehlt/) });
+    expect(mocks.stop).not.toHaveBeenCalled();
   });
 });

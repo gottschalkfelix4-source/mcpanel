@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ShieldCheck, ShieldOff } from 'lucide-react';
+import { Copy, Download, KeyRound, ShieldCheck, ShieldOff } from 'lucide-react';
 import qrcode from 'qrcode-generator';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -36,6 +36,49 @@ function QrCode({ value }: { value: string }) {
 
 const cleanCode = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 6);
 
+/**
+ * Wiederherstellungscodes werden genau einmal gezeigt. Erst mit der
+ * Bestätigung geht es weiter – bei vorgeschriebenem zweiten Faktor wechselt
+ * danach die ganze Oberfläche, und die Codes wären sonst weg.
+ */
+function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
+  const toast = useToast();
+  const text = `MCPanel – Wiederherstellungscodes\nJeder Code gilt genau einmal.\n\n${codes.join('\n')}\n`;
+
+  function download() {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'mcpanel-wiederherstellungscodes.txt';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function copy() {
+    navigator.clipboard.writeText(text).then(
+      () => toast.success('Codes kopiert.'),
+      () => toast.error('Kopieren nicht möglich – bitte als Datei speichern.'),
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <InfoNote>
+        Mit diesen Codes kommst du ohne Authenticator-App ins Konto – etwa wenn das Handy verloren ist. Jeder Code
+        gilt genau einmal. Bewahre sie getrennt vom Passwort auf; sie werden nur jetzt angezeigt.
+      </InfoNote>
+      <ul className="grid grid-cols-2 gap-2 border border-stone-950 bg-stone-950/40 p-3 font-mono text-sm text-stone-100">
+        {codes.map((c) => <li key={c} className="text-center">{c}</li>)}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <Button icon={<Copy size={15} />} onClick={copy}>Kopieren</Button>
+        <Button icon={<Download size={15} />} onClick={download}>Als Datei speichern</Button>
+        <Button variant="primary" onClick={onDone}>Ich habe die Codes gesichert</Button>
+      </div>
+    </div>
+  );
+}
+
 export default function TotpPanel() {
   const { user, adoptToken, refresh } = useAuth();
   const toast = useToast();
@@ -43,6 +86,8 @@ export default function TotpPanel() {
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [disabling, setDisabling] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const start = useMutation({
@@ -52,14 +97,15 @@ export default function TotpPanel() {
   });
 
   const enable = useMutation({
-    mutationFn: () => api.post<{ token: string }>('/auth/totp/enable', { code }),
-    onSuccess: async (res) => {
+    mutationFn: () => api.post<{ token: string; recoveryCodes: string[] }>('/auth/totp/enable', { code }),
+    onSuccess: (res) => {
       adoptToken(res.token);
       setSetup(null);
       setCode('');
       setError(null);
+      // Erst nach dem Sichern der Codes neu laden (siehe RecoveryCodes).
+      setCodes(res.recoveryCodes);
       toast.success('Zweiter Faktor ist aktiv. Andere Geräte wurden abgemeldet.');
-      await refresh();
     },
     onError: (err: Error) => setError(err.message),
   });
@@ -77,18 +123,41 @@ export default function TotpPanel() {
     onError: (err: Error) => setError(err.message),
   });
 
+  const regenerate = useMutation({
+    mutationFn: () => api.post<{ recoveryCodes: string[] }>('/auth/totp/recovery-codes', { password, code }),
+    onSuccess: (res) => {
+      setRegenerating(false);
+      setPassword('');
+      setCode('');
+      setError(null);
+      setCodes(res.recoveryCodes);
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
   if (!user) return null;
+  const active = user.totpEnabled || codes !== null;
+
+  function cancel() {
+    setDisabling(false);
+    setRegenerating(false);
+    setPassword('');
+    setCode('');
+    setError(null);
+  }
 
   return (
     <Panel
       title="Zwei-Faktor-Anmeldung"
       icon={<ShieldCheck size={16} />}
-      actions={<Badge tone={user.totpEnabled ? 'green' : 'neutral'}>{user.totpEnabled ? 'Aktiv' : 'Aus'}</Badge>}
+      actions={<Badge tone={active ? 'green' : 'neutral'}>{active ? 'Aktiv' : 'Aus'}</Badge>}
     >
       <div className="space-y-4">
         {error && <ErrorNote>{error}</ErrorNote>}
 
-        {!user.totpEnabled && !setup && (
+        {codes && <RecoveryCodes codes={codes} onDone={() => { setCodes(null); void refresh(); }} />}
+
+        {!active && !setup && (
           <>
             <p className="text-sm text-stone-350">
               Zusätzlich zum Passwort fragt das Panel bei der Anmeldung nach einem sechsstelligen Code aus
@@ -101,7 +170,7 @@ export default function TotpPanel() {
           </>
         )}
 
-        {!user.totpEnabled && setup && (
+        {!active && setup && (
           <form
             className="space-y-4"
             onSubmit={(e) => { e.preventDefault(); enable.mutate(); }}
@@ -128,7 +197,10 @@ export default function TotpPanel() {
                 required
               />
             </Field>
-            <InfoNote>Nach dem Aktivieren werden alle anderen Sitzungen abgemeldet.</InfoNote>
+            <InfoNote>
+              Nach dem Aktivieren werden alle anderen Sitzungen abgemeldet. Du bekommst zehn
+              Wiederherstellungscodes für den Fall, dass die App einmal nicht greifbar ist.
+            </InfoNote>
             <div className="flex gap-2">
               <Button type="submit" variant="primary" loading={enable.isPending} disabled={code.length !== 6}>
                 Aktivieren
@@ -140,20 +212,40 @@ export default function TotpPanel() {
           </form>
         )}
 
-        {user.totpEnabled && !disabling && (
+        {user.totpEnabled && !codes && !disabling && !regenerating && (
           <>
             <p className="text-sm text-stone-350">
-              Die Anmeldung verlangt zusätzlich einen Code aus deiner Authenticator-App. Geht das Gerät
-              verloren, kann ein Administrator den zweiten Faktor zurücksetzen.
+              Die Anmeldung verlangt zusätzlich einen Code aus deiner Authenticator-App. Ohne die App hilft ein
+              Wiederherstellungscode; geht beides verloren, kann ein Administrator den zweiten Faktor zurücksetzen.
             </p>
-            <Button variant="danger" icon={<ShieldOff size={15} />} onClick={() => { setDisabling(true); setError(null); }}>
-              Abschalten
-            </Button>
+            {user.recoveryCodesLeft <= 2 ? (
+              <ErrorNote>
+                Nur noch {user.recoveryCodesLeft} von 10 Wiederherstellungscodes übrig – am besten neue erzeugen.
+              </ErrorNote>
+            ) : (
+              <p className="text-sm text-stone-300">Noch {user.recoveryCodesLeft} von 10 Wiederherstellungscodes übrig.</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button icon={<KeyRound size={15} />} onClick={() => { setRegenerating(true); setError(null); }}>
+                Neue Wiederherstellungscodes
+              </Button>
+              <Button variant="danger" icon={<ShieldOff size={15} />} onClick={() => { setDisabling(true); setError(null); }}>
+                Abschalten
+              </Button>
+            </div>
           </>
         )}
 
-        {user.totpEnabled && disabling && (
-          <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); disable.mutate(); }}>
+        {user.totpEnabled && !codes && (disabling || regenerating) && (
+          <form
+            className="space-y-4"
+            onSubmit={(e) => { e.preventDefault(); if (regenerating) regenerate.mutate(); else disable.mutate(); }}
+          >
+            {regenerating && (
+              <p className="text-sm text-stone-350">
+                Die bisherigen Wiederherstellungscodes verlieren damit ihre Gültigkeit.
+              </p>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Passwort">
                 <input
@@ -177,10 +269,16 @@ export default function TotpPanel() {
               </Field>
             </div>
             <div className="flex gap-2">
-              <Button type="submit" variant="danger" loading={disable.isPending} disabled={code.length !== 6}>
-                Zweiten Faktor abschalten
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => { setDisabling(false); setError(null); }}>
+              {regenerating ? (
+                <Button type="submit" variant="primary" loading={regenerate.isPending} disabled={code.length !== 6}>
+                  Neue Codes erzeugen
+                </Button>
+              ) : (
+                <Button type="submit" variant="danger" loading={disable.isPending} disabled={code.length !== 6}>
+                  Zweiten Faktor abschalten
+                </Button>
+              )}
+              <Button type="button" variant="ghost" onClick={cancel}>
                 Abbrechen
               </Button>
             </div>

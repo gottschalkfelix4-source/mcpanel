@@ -16,7 +16,8 @@ import { z } from 'zod';
 
 import { config } from '../config.js';
 import { prisma } from '../db.js';
-import { signToken } from '../auth/jwt.js';
+import { createSession } from '../auth/sessions.js';
+import { clientInfo } from './auth.js';
 import { forbidden } from '../lib/errors.js';
 import { getCurseforgeKey, setSetting } from '../services/settings.js';
 import * as curseforge from '../providers/curseforge.js';
@@ -154,7 +155,7 @@ export default async function setupRoutes(app: FastifyInstance) {
 
     // Direkt angemeldet weiterleiten – ein frisch gesetztes Passwort noch
     // einmal eintippen zu lassen, wäre reine Schikane.
-    const token = signToken({ sub: user.id, username: user.username, role: user.role, sessionVersion: user.sessionVersion });
+    const token = await createSession(user, clientInfo(req));
     reply.code(201);
     return {
       token,

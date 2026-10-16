@@ -12,6 +12,8 @@ import { applyTarget, getTarget } from './services/backupTarget.js';
 import { startScheduler } from './services/automation.js';
 import { prepareSetupCode } from './routes/setup.js';
 import { runDataMigrations } from './services/migrations.js';
+import { pruneExpiredSessions } from './auth/sessions.js';
+import { startPlayerStats } from './services/playerStats.js';
 
 /** Beispielwert, der frueher in .env.example stand und im Repository nachlesbar ist. */
 const BEISPIEL_JWT_SECRET = 'bitte-hier-ein-langes-zufaelliges-secret-eintragen';
@@ -137,4 +139,11 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
   startScheduler(log);
   startWatcher(log);
   startPanelBackupScheduler(log);
+
+  await startPlayerStats(log).catch((err) => log(`Spielerstatistik nicht gestartet: ${err instanceof Error ? err.message : err}`));
+
+  // Abgelaufene Gerätesitzungen stündlich wegräumen.
+  const prune = () => pruneExpiredSessions().catch((err) => log(`Sitzungen aufräumen: ${err instanceof Error ? err.message : err}`));
+  void prune();
+  setInterval(prune, 3600_000).unref();
 }

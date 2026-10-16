@@ -15,6 +15,7 @@ vi.mock('../db.js', () => ({ prisma: {
     findFirst: async ({ where }: any) => where.serverId === 'a' && ['selbst', 'anderer'].includes(where.id) ? { id: where.id, userId: 'mitglied', user: { username: 'Mitglied' } } : null,
     create: m.create, update: m.update, delete: m.remove,
   },
+  setting: { findUnique: async () => null },
   auditLog: { create: vi.fn(async () => {}) },
 } }));
 import memberRoutes from './members.js';

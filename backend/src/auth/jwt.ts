@@ -11,6 +11,8 @@ export interface TokenPayload {
   username: string;
   role: 'ADMIN' | 'USER';
   sessionVersion?: number;
+  /** Gerätesitzung (Tabelle Session). Ältere Token ohne Angabe gelten weiter bis zum Ablauf. */
+  sid?: string;
   purpose?: 'download' | 'mfa';
   /** Nur bei Download-Token: die gebundene Adresse samt Abfrage. */
   path?: string;

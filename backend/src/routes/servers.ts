@@ -30,6 +30,8 @@ import serverImportRoutes from './serverImport.js';
 import filesRoutes from './files.js';
 import configRoutes from './config.js';
 import backupRoutes from './backups.js';
+import worldRoutes from './worlds.js';
+import { getPlayerStats, RETENTION_DAYS } from '../services/playerStats.js';
 import modpackRoutes from './modpacks.js';
 import contentRoutes from './content.js';
 import memberRoutes from './members.js';
@@ -357,6 +359,13 @@ export default async function serverRoutes(app: FastifyInstance) {
     }
   });
 
+  /** Spielerverlauf und Spielzeit je Spieler (aus der Hintergrundabfrage). */
+  app.get('/:id/players/stats', async (req) => {
+    const access = await requireServer(req);
+    const { days } = z.object({ days: z.coerce.number().int().min(1).max(RETENTION_DAYS).default(7) }).parse(req.query);
+    return getPlayerStats(access.server.id, days);
+  });
+
   app.get('/:id/stats', async (req) => {
     const access = await requireServer(req);
     const [state, stats, disk] = await Promise.all([
@@ -385,6 +394,7 @@ export default async function serverRoutes(app: FastifyInstance) {
   await app.register(filesRoutes, { prefix: '/:id/files' });
   await app.register(configRoutes, { prefix: '/:id/config' });
   await app.register(backupRoutes, { prefix: '/:id/backups' });
+  await app.register(worldRoutes, { prefix: '/:id/worlds' });
   await app.register(modpackRoutes, { prefix: '/:id/modpack' });
   await app.register(contentRoutes, { prefix: '/:id/content' });
   await app.register(memberRoutes, { prefix: '/:id/members' });

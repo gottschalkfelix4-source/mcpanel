@@ -12,6 +12,7 @@ vi.mock('../db.js', () => ({ prisma: {
   user: { findUnique: async ({ where }: any) => ({ id: where.id, role: where.id === 'admin' ? 'ADMIN' : 'USER', active: true, sessionVersion: 0 }) },
   server: { findUnique: async ({ where }: any) => where.id === 'bestehend' ? { id: 'bestehend', ownerId: 'besitzer', quotaMemoryMb: 4096 } : null },
   serverMember: { findUnique: m.member },
+  setting: { findUnique: async () => null },
   auditLog: { create: async () => {} },
 } }));
 vi.mock('../services/serverManager.js', () => ({ createServer: m.create }));

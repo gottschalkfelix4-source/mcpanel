@@ -70,8 +70,79 @@ jobs:
         working-directory: frontend
         continue-on-error: true
 
-  build:
+  # Das fertige Abbild einmal wirklich starten, bevor es nach :latest oder
+  # unter einer Versionsnummer veroeffentlicht wird: frische Datenbank,
+  # Einrichtung mit Code, Konten, Server, Backups, Welten, Sitzungen,
+  # zweiter Faktor. Faengt alles, was Unit-Tests mit Mocks nicht sehen
+  # (Schemaabgleich, nginx, Startskript, echte Archive).
+  e2e:
     needs: [test, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: mcpanel:e2e
+          build-args: |
+            VERSION=e2e
+            REVISION=${{ github.sha }}
+          provenance: false
+          sbom: false
+          platforms: linux/amd64
+          # Derselbe Cache wie im Veroeffentlichungsjob - der baut danach
+          # praktisch nichts mehr neu.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Panel starten
+        run: |
+          docker volume create mcpanel-e2e-data
+          docker run -d --name mcpanel-e2e -p 18089:8080 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v mcpanel-e2e-data:/data \
+            mcpanel:e2e
+          for i in $(seq 1 90); do
+            if curl -fsS http://localhost:18089/api/health >/dev/null 2>&1; then echo "Panel bereit nach ${i}x2 s"; exit 0; fi
+            sleep 2
+          done
+          echo "Panel wurde nicht gesund"
+          docker logs mcpanel-e2e
+          exit 1
+
+      - name: End-zu-End-Test
+        run: |
+          for i in $(seq 1 15); do
+            CODE=$(docker exec mcpanel-e2e cat /data/.setup-code 2>/dev/null || true)
+            [ -n "$CODE" ] && break
+            sleep 2
+          done
+          if [ -z "$CODE" ]; then echo "Kein Einrichtungscode gefunden"; exit 1; fi
+          E2E_BASE=http://localhost:18089 E2E_SETUP_CODE="$CODE" node scripts/e2e.mjs
+
+      - name: Protokoll bei Fehlschlag
+        if: failure()
+        run: docker logs mcpanel-e2e 2>&1 | tail -300
+
+      - name: Aufraeumen
+        if: always()
+        run: |
+          docker ps -aq --filter "name=^mc-" | xargs -r docker rm -f
+          docker rm -f mcpanel-e2e || true
+          docker volume rm mcpanel-e2e-data || true
+
+  build:
+    needs: [test, frontend, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -96,6 +167,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=sha,format=short
           labels: |
             org.opencontainers.image.title=MCPanel

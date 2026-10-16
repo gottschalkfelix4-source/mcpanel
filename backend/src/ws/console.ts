@@ -2,7 +2,7 @@ import type { Server as IOServer, Socket } from 'socket.io';
 import type { Server } from '@prisma/client';
 import { prisma } from '../db.js';
 
-import { authenticateToken, getServerAccess } from '../auth/context.js';
+import { authenticateToken, enforceTotpPolicy, getServerAccess } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import * as dockerSvc from '../services/docker.js';
 import { listPlayers } from '../services/rcon.js';
@@ -116,6 +116,8 @@ export function setupConsoleGateway(io: IOServer) {
       if (!token || typeof token !== 'string') return next(new Error('Nicht angemeldet'));
 
       const user = await authenticateToken(token);
+      // Ohne vorgeschriebenen zweiten Faktor gibt es keine Live-Verbindung.
+      await enforceTotpPolicy(user, null);
       socket.data.token = token;
 
       socket.data.user = user;

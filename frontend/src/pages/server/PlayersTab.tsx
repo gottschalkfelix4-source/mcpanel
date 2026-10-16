@@ -4,6 +4,7 @@ import { Ban, Crown, ListChecks, LogOut, Plus, ShieldCheck, UserMinus, Users } f
 import { api } from '../../lib/api';
 import { Badge, Button, EmptyState, ErrorNote, LoadingBlock, Panel, useToast } from '../../components/ui';
 import { PixelHead } from '../../components/pixel';
+import PlayerStats from '../../components/PlayerStats';
 import { useServer } from './ServerLayout';
 
 interface PlayerLists {
@@ -277,6 +278,8 @@ export default function PlayersTab() {
           )}
         </Panel>
       </div>
+
+      <PlayerStats serverId={server.id} />
     </div>
   );
 }

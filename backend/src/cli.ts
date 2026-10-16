@@ -220,7 +220,7 @@ switch (command) {
     const user = await finde(kennung);
     await prisma.user.update({
       where: { id: user.id },
-      data: { totpEnabled: false, totpSecret: null, sessionVersion: { increment: 1 } },
+      data: { totpEnabled: false, totpSecret: null, totpRecoveryCodes: [], sessionVersion: { increment: 1 } },
     });
     console.log(`Zweiter Faktor für "${user.username}" abgeschaltet.`);
     break;

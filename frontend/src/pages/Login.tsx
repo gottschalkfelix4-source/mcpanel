@@ -3,11 +3,12 @@ import { useQuery } from '@tanstack/react-query';
 import { Boxes, LogIn, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api, ApiError, NETWORK_ERROR_MESSAGE, NetworkError } from '../lib/api';
-import { Button, ErrorNote } from '../components/ui';
+import { Button, ErrorNote, useToast } from '../components/ui';
 import { BlockIcon, Motes } from '../components/pixel';
 
 export default function LoginPage() {
   const { login, loginTotp } = useAuth();
+  const toast = useToast();
 
   // Fassung und Anzahl der Konten - hilft bei der Frage, warum hier die
   // Anmeldung steht und nicht der Einrichtungsassistent.
@@ -26,6 +27,8 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [code, setCode] = useState('');
+  /** Statt des App-Codes einen Wiederherstellungscode eingeben. */
+  const [recovery, setRecovery] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,7 +36,15 @@ export default function LoginPage() {
     setBusy(true);
     try {
       if (mfaToken) {
-        await loginTotp(mfaToken, code);
+        const result = await loginTotp(mfaToken, code);
+        if (result.usedRecoveryCode) {
+          const left = result.recoveryCodesLeft ?? 0;
+          toast.info(
+            left > 0
+              ? `Wiederherstellungscode verbraucht – noch ${left} übrig. Im Profil lassen sich neue erzeugen.`
+              : 'Das war der letzte Wiederherstellungscode. Bitte im Profil neue erzeugen.',
+          );
+        }
       } else {
         const pending = await login(loginName, password);
         if (pending) {
@@ -43,9 +54,10 @@ export default function LoginPage() {
       }
     } catch (err) {
       // Das Zwischen-Token gilt nur kurz – abgelaufen heißt: von vorn.
-      if (mfaToken && err instanceof ApiError && err.status === 401 && !/Code/.test(err.message)) {
+      if (mfaToken && err instanceof ApiError && err.status === 401 && !/code/i.test(err.message)) {
         setMfaToken(null);
         setCode('');
+        setRecovery(false);
       }
       // Ein stummes Backend darf nicht als abgelehntes Passwort erscheinen,
       // sonst zweifelt man an Zugangsdaten, die voellig in Ordnung sind.
@@ -80,25 +92,51 @@ export default function LoginPage() {
             {mfaToken ? (
               <div>
                 <label className="mc-label flex items-center gap-1.5">
-                  <ShieldCheck size={13} /> Code aus der Authenticator-App
+                  <ShieldCheck size={13} /> {recovery ? 'Wiederherstellungscode' : 'Code aus der Authenticator-App'}
                 </label>
-                <input
-                  className="mc-input text-center font-mono text-lg tracking-[0.4em]"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/[^0-9 ]/g, ''))}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={7}
-                  autoFocus
-                  required
-                />
-                <button
-                  type="button"
-                  className="mt-2 text-xs text-stone-450 hover:text-stone-200 hover:underline"
-                  onClick={() => { setMfaToken(null); setCode(''); setError(null); }}
-                >
-                  Mit anderem Konto anmelden
-                </button>
+                {recovery ? (
+                  <input
+                    key="recovery"
+                    className="mc-input text-center font-mono text-lg uppercase tracking-[0.2em]"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9 -]/g, ''))}
+                    placeholder="XXXXX-XXXXX"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    maxLength={13}
+                    autoFocus
+                    required
+                  />
+                ) : (
+                  <input
+                    key="totp"
+                    className="mc-input text-center font-mono text-lg tracking-[0.4em]"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/[^0-9 ]/g, ''))}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={7}
+                    autoFocus
+                    required
+                  />
+                )}
+                <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="text-stone-450 hover:text-stone-200 hover:underline"
+                    onClick={() => { setRecovery(!recovery); setCode(''); setError(null); }}
+                  >
+                    {recovery ? 'Code aus der App verwenden' : 'Kein Zugriff auf die App? Wiederherstellungscode'}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-stone-450 hover:text-stone-200 hover:underline"
+                    onClick={() => { setMfaToken(null); setCode(''); setRecovery(false); setError(null); }}
+                  >
+                    Mit anderem Konto anmelden
+                  </button>
+                </div>
               </div>
             ) : (
             <>

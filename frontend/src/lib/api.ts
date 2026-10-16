@@ -33,6 +33,13 @@ export const tokenStore = {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+/**
+ * Ein Administrator hat den zweiten Faktor vorgeschrieben, während dieses
+ * Konto angemeldet war. Das Backend lehnt dann fast alles mit 403 ab; der
+ * AuthProvider lädt daraufhin das Konto neu und zeigt die Einrichtung.
+ */
+export const TOTP_REQUIRED_EVENT = 'mcpanel:totp-required';
+
 async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   const token = tokenStore.get();
   const headers: Record<string, string> = {};
@@ -71,6 +78,9 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   const data = text ? JSON.parse(text) : null;
 
   if (!res.ok) {
+    if (res.status === 403 && /Zwei-Faktor-Anmeldung vorgeschrieben/.test(data?.error ?? '')) {
+      window.dispatchEvent(new Event(TOTP_REQUIRED_EVENT));
+    }
     throw new ApiError(res.status, data?.error ?? `Fehler ${res.status}`, data?.details);
   }
   return data as T;

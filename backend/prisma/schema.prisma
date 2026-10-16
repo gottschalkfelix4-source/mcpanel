@@ -33,56 +33,75 @@ enum TaskStatus {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  username     String   @unique
-  passwordHash String
-  sessionVersion Int @default(0)
+  id                String   @id @default(cuid())
+  email             String   @unique
+  username          String   @unique
+  passwordHash      String
+  sessionVersion    Int      @default(0)
   /// TOTP-Geheimnis (Base32); erst mit totpEnabled aktiv
-  totpSecret   String?
-  totpEnabled  Boolean  @default(false)
-  role         Role     @default(USER)
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  totpSecret        String?
+  totpEnabled       Boolean  @default(false)
+  /// SHA-256-Hashes der noch unverbrauchten Wiederherstellungscodes
+  totpRecoveryCodes String[] @default([])
+  role              Role     @default(USER)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
 
   ownedServers Server[]       @relation("ServerOwner")
   memberships  ServerMember[]
   backups      Backup[]
   auditLogs    AuditLog[]
+  sessions     Session[]
+}
+
+/// Angemeldetes Gerät. Das Sitzungstoken trägt die ID; fehlt die Zeile, ist es widerrufen.
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ip         String   @default("")
+  userAgent  String   @default("")
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  /// sessionVersion des Kontos beim Anlegen – Passwortwechsel u. Ä. machen die Zeile ungültig
+  version    Int      @default(0)
+
+  @@index([userId])
 }
 
 model Server {
-  id          String     @id @default(cuid())
+  id          String @id @default(cuid())
   name        String
-  description String     @default("")
+  description String @default("")
   ownerId     String
-  owner       User       @relation("ServerOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  owner       User   @relation("ServerOwner", fields: [ownerId], references: [id], onDelete: Cascade)
 
   // Container / Runtime
-  containerId String?
-  containerName String   @unique
-  port        Int        @unique
-  directConnect Boolean @default(true)
-  hostnames ServerHostname[]
-  rconPort    Int
-  rconPassword String
-  memoryMb    Int        @default(4096)
-  javaVersion String     @default("21")
-  type        ServerType @default(PAPER)
-  mcVersion   String     @default("LATEST")
-  extraEnv    Json       @default("{}")
-  autoStart   Boolean    @default(false)
+  containerId   String?
+  containerName String           @unique
+  port          Int              @unique
+  directConnect Boolean          @default(true)
+  hostnames     ServerHostname[]
+  rconPort      Int
+  rconPassword  String
+  memoryMb      Int              @default(4096)
+  javaVersion   String           @default("21")
+  type          ServerType       @default(PAPER)
+  mcVersion     String           @default("LATEST")
+  extraEnv      Json             @default("{}")
+  autoStart     Boolean          @default(false)
 
   // --- Kontingent (0 = unbegrenzt), nur von Administratoren aenderbar -----
   /// Obergrenze fuer Serverdaten + Backups zusammen, in MB
-  quotaDiskMb    Int @default(0)
+  quotaDiskMb   Int @default(0)
   /// Hoechstzahl aufbewahrter Backups; aeltere werden automatisch entfernt
-  quotaBackups   Int @default(0)
+  quotaBackups  Int @default(0)
   /// Hoechster Arbeitsspeicher, den Nicht-Administratoren einstellen duerfen
-  quotaMemoryMb  Int @default(0)
+  quotaMemoryMb Int @default(0)
 
   // Modpack-Bindung (für Updater)
-  modpackProvider    String?  // "modrinth" | "curseforge"
+  modpackProvider    String? // "modrinth" | "curseforge"
   modpackProjectId   String?
   modpackVersionId   String?
   modpackName        String?
@@ -92,12 +111,14 @@ model Server {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members ServerMember[]
-  backups Backup[]
-  tasks   Task[]
-  automations Automation[]
-  notifications NotificationChannel[]
-  auditLogs AuditLog[]
+  members        ServerMember[]
+  backups        Backup[]
+  tasks          Task[]
+  automations    Automation[]
+  notifications  NotificationChannel[]
+  auditLogs      AuditLog[]
+  playerSessions PlayerSession[]
+  playerSamples  PlayerCountSample[]
 
   @@index([ownerId])
 }
@@ -117,39 +138,45 @@ model ServerMember {
 model ServerHostname {
   hostname String @id
   serverId String
-  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
-  position Int @default(0)
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  position Int    @default(0)
+
   @@index([serverId])
 }
 
 model Backup {
-  id          String   @id @default(cuid())
-  serverId    String
-  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
-  name        String
-  filename    String
+  id            String               @id @default(cuid())
+  serverId      String
+  server        Server               @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name          String
+  filename      String
   /// Liegt zusaetzlich in der Zweitablage
-  mirrored    Boolean  @default(false)
-  targetId String?
-  target BackupTargetVersion? @relation(fields: [targetId], references: [id])
-  sizeBytes   BigInt   @default(0)
-  note        String   @default("")
+  mirrored      Boolean              @default(false)
+  targetId      String?
+  target        BackupTargetVersion? @relation(fields: [targetId], references: [id])
+  sizeBytes     BigInt               @default(0)
+  note          String               @default("")
   /// MANUAL | AUTOMATIC | SAFETY – nur AUTOMATIC fällt der Aufbewahrung zum Opfer
-  origin      String   @default("MANUAL")
+  origin        String               @default("MANUAL")
   /// Angeheftete Sicherungen werden nie automatisch gelöscht
-  pinned      Boolean  @default(false)
+  pinned        Boolean              @default(false)
   /// Automatisierung, die diese Sicherung angelegt hat
-  automationId String?
-  createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
+  automationId  String?
+  /// Letzte vollständige Prüfung des Archivs
+  verifiedAt    DateTime?
+  /// OK | FEHLER
+  verifyStatus  String?
+  verifyMessage String?
+  createdById   String?
+  createdBy     User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime             @default(now())
 
   @@index([serverId])
 }
 
 model BackupTargetVersion {
-  id String @id
-  config Json
+  id      String   @id
+  config  Json
   backups Backup[]
 }
 
@@ -189,9 +216,9 @@ model Setting {
 
 /// Automatisierung: zeitgesteuerte oder ereignisbasierte Aktionen je Server.
 model Automation {
-  id       String  @id @default(cuid())
+  id       String @id @default(cuid())
   serverId String
-  server   Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
 
   name    String
   enabled Boolean @default(true)
@@ -216,8 +243,8 @@ model Automation {
   runCount    Int       @default(0)
 
   createdById String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([serverId])
 }
@@ -232,9 +259,9 @@ model NotificationChannel {
   enabled Boolean @default(true)
 
   /// DISCORD | WEBHOOK
-  type   String  @default("DISCORD")
+  type         String  @default("DISCORD")
   /// Webhook-URL des Ziels
-  target String
+  target       String
   /// Von einem Administrator gespeichert: Ziel darf im lokalen Netz liegen
   allowPrivate Boolean @default(false)
 
@@ -251,4 +278,30 @@ model NotificationChannel {
   updatedAt DateTime @updatedAt
 
   @@index([serverId])
+}
+
+/// Aufenthalt eines Spielers, aus der regelmäßigen Spielerabfrage abgeleitet.
+model PlayerSession {
+  id         String    @id @default(cuid())
+  serverId   String
+  server     Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name       String
+  joinedAt   DateTime  @default(now())
+  /// Zuletzt online gesehen – bei einem Panel-Neustart endet die Sitzung hier
+  lastSeenAt DateTime  @default(now())
+  leftAt     DateTime?
+
+  @@index([serverId, joinedAt])
+  @@index([serverId, leftAt])
+}
+
+/// Spielerzahl zu einem Zeitpunkt, für den Verlauf.
+model PlayerCountSample {
+  id       String   @id @default(cuid())
+  serverId String
+  server   Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  at       DateTime @default(now())
+  count    Int
+
+  @@index([serverId, at])
 }

@@ -353,7 +353,23 @@ Zwei Dinge machen das überhaupt erst zuverlässig:
   „database files are incompatible“ stehenzubleiben.
 
 Wer nicht jeden Push mitnehmen will, trägt im Template statt `latest` eine feste
-Fassung ein – Git-Tags der Form `v1.2.3` erzeugen zusätzlich `:1.2.3` und `:1.2`.
+Fassung ein – Git-Tags der Form `v1.2.3` erzeugen zusätzlich `:1.2.3`, `:1.2` und `:1`.
+Mit `:1` kommen Fehlerbehebungen und neue Funktionen derselben Hauptversion an,
+aber keine Umbrüche; `:1.2.3` bleibt für immer genau dieser Stand.
+
+#### Versionen und Änderungsprotokoll
+
+Was sich geändert hat, steht in [`CHANGELOG.md`](CHANGELOG.md) und im Panel unter
+*Einstellungen → Was ist neu*. Eine neue Fassung entsteht so:
+
+1. Im Abschnitt „Unveröffentlicht“ von `CHANGELOG.md` die Überschrift durch
+   `## [1.2.3] – JJJJ-MM-TT` ersetzen und darüber einen leeren Abschnitt
+   „Unveröffentlicht“ anlegen.
+2. Committen, `git tag v1.2.3` und `git push --tags`.
+
+Die CI baut das Abbild dann einmal, startet es mit einer frischen Datenbank, spielt
+einen End-zu-End-Test (`scripts/e2e.mjs`) dagegen durch und veröffentlicht nur, wenn
+der grün ist – für `latest` genauso wie für Versionstags.
 
 Dasselbe Abbild lässt sich auch ohne Unraid einzeln starten:
 

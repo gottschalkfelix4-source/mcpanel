@@ -15,6 +15,22 @@ export interface Me {
   serverCount: number;
   /** Anmeldung verlangt zusätzlich einen Einmalcode. */
   totpEnabled: boolean;
+  /** Vorgeschrieben, aber noch nicht eingerichtet – bis dahin ist alles andere gesperrt. */
+  totpRequired: boolean;
+  /** Übrige Wiederherstellungscodes (0 ohne zweiten Faktor). */
+  recoveryCodesLeft: number;
+}
+
+/** Ein angemeldetes Gerät. */
+export interface AuthSession {
+  id: string;
+  device: string;
+  userAgent: string;
+  ip: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  current: boolean;
 }
 
 export interface ContainerStats {
@@ -119,6 +135,37 @@ export interface Backup {
   origin: 'MANUAL' | 'AUTOMATIC' | 'SAFETY';
   /** Angepinnte Sicherungen entfernt keine Aufbewahrungsregel. */
   pinned: boolean;
+  /** Letzte vollständige Lesung des Archivs. */
+  verifiedAt: string | null;
+  verifyStatus: 'OK' | 'FEHLER' | null;
+  verifyMessage: string | null;
+}
+
+export interface World {
+  name: string;
+  /** Zugehörige Dimensionsordner (world_nether, world_the_end). */
+  dimensions: string[];
+  sizeBytes: number;
+  modifiedAt: string | null;
+  active: boolean;
+  /** false: eingetragen, aber vom Server noch nicht erzeugt. */
+  exists: boolean;
+}
+
+export interface WorldList {
+  active: string;
+  seed: string;
+  running: boolean;
+  worlds: World[];
+}
+
+export interface PlayerStats {
+  days: number;
+  timeline: { at: string; count: number; max: number }[];
+  players: { name: string; totalSeconds: number; sessions: number; lastSeen: string | null; online: boolean }[];
+  peak: { count: number; at: string | null };
+  uniquePlayers: number;
+  totalSeconds: number;
 }
 
 export interface ProjectSummary {

@@ -1,16 +1,70 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { KeyRound, LogOut, Shield, User } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { KeyRound, LogOut, Monitor, Shield, User } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import TotpPanel from '../components/TotpPanel';
-import { formatDate } from '../lib/format';
-import { Badge, Button, ConfirmDialog, ErrorNote, Field, Panel, useToast } from '../components/ui';
+import { formatDate, formatRelative } from '../lib/format';
+import type { AuthSession } from '../lib/types';
+import { Badge, Button, ConfirmDialog, ErrorNote, Field, LoadErrorBlock, LoadingBlock, Panel, useToast } from '../components/ui';
+
+/** Alle angemeldeten Geräte des Kontos, jedes einzeln abmeldbar. */
+function SessionList() {
+  const { logout } = useAuth();
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const sessions = useQuery({
+    queryKey: ['auth-sessions'],
+    queryFn: () => api.get<AuthSession[]>('/auth/sessions'),
+  });
+
+  const revoke = useMutation({
+    mutationFn: (session: AuthSession) => api.del<{ ok: boolean; current: boolean }>(`/auth/sessions/${session.id}`),
+    onSuccess: (res) => {
+      if (res.current) return logout();
+      toast.success('Gerät wurde abgemeldet.');
+      void queryClient.invalidateQueries({ queryKey: ['auth-sessions'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  if (sessions.isLoading) return <LoadingBlock label="Geräte werden geladen …" />;
+  if (sessions.isError) return <LoadErrorBlock error={sessions.error} onRetry={() => void sessions.refetch()} />;
+  if (!sessions.data?.length) return <p className="text-sm text-stone-400">Keine aktiven Sitzungen gefunden.</p>;
+
+  return (
+    <ul className="divide-y divide-stone-700 border border-stone-950">
+      {sessions.data.map((session) => (
+        <li key={session.id} className="flex flex-wrap items-center gap-3 p-3">
+          <Monitor size={18} className="shrink-0 text-stone-400" />
+          <div className="min-w-0 flex-1">
+            <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-stone-100">
+              <span className="truncate" title={session.userAgent || undefined}>{session.device}</span>
+              {session.current && <Badge tone="green">Dieses Gerät</Badge>}
+            </p>
+            <p className="text-xs text-stone-400">
+              {session.ip || 'Adresse unbekannt'} · zuletzt aktiv {formatRelative(session.lastSeenAt)} · angemeldet {formatDate(session.createdAt)}
+            </p>
+          </div>
+          <Button
+            variant={session.current ? 'ghost' : 'default'}
+            icon={<LogOut size={14} />}
+            loading={revoke.isPending && revoke.variables?.id === session.id}
+            onClick={() => revoke.mutate(session)}
+          >
+            Abmelden
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export default function ProfilePage() {
   const { user, adoptToken } = useAuth();
   const [confirmLogoutAll, setConfirmLogoutAll] = useState(false);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -35,6 +89,7 @@ export default function ProfilePage() {
     onSuccess: (res) => {
       adoptToken(res.token);
       toast.success('Alle anderen Sitzungen wurden abgemeldet.');
+      void queryClient.invalidateQueries({ queryKey: ['auth-sessions'] });
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -123,11 +178,12 @@ export default function ProfilePage() {
 
       <TotpPanel />
 
-      <Panel title="Sitzungen" icon={<LogOut size={16} />}>
+      <Panel title="Angemeldete Geräte" icon={<LogOut size={16} />}>
         <div className="space-y-3">
+          <SessionList />
           <p className="text-sm text-stone-350">
-            Meldet jedes andere Gerät und jeden offenen Browser ab – etwa nach einem verlorenen Handy oder
-            einer Anmeldung auf einem fremden Rechner. Dieses Fenster bleibt angemeldet.
+            Ein unbekanntes Gerät in der Liste? Einzeln abmelden – oder alles außer diesem Fenster auf einmal,
+            etwa nach einem verlorenen Handy. Ein geändertes Passwort meldet ebenfalls alle anderen ab.
           </p>
           <Button variant="danger" icon={<LogOut size={15} />} loading={logoutAll.isPending} onClick={() => setConfirmLogoutAll(true)}>
             Überall sonst abmelden

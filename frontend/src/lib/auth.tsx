@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { api, ApiError, NetworkError, tokenStore } from './api';
+import { api, ApiError, NetworkError, TOTP_REQUIRED_EVENT, tokenStore } from './api';
 import type { Me } from './types';
 import { useQueryClient } from '@tanstack/react-query';
 import { resetSocket } from './socket';
@@ -12,8 +12,8 @@ interface AuthContextValue {
   offline: boolean;
   /** Liefert ein Zwischen-Token, wenn noch der Einmalcode fehlt. */
   login: (login: string, password: string) => Promise<{ mfaToken: string } | null>;
-  /** Zweiter Schritt der Anmeldung mit aktivem zweitem Faktor. */
-  loginTotp: (mfaToken: string, code: string) => Promise<void>;
+  /** Zweiter Schritt der Anmeldung: Einmalcode oder Wiederherstellungscode. */
+  loginTotp: (mfaToken: string, code: string) => Promise<{ usedRecoveryCode?: boolean; recoveryCodesLeft?: number }>;
   /** Neues Token nach Passwortwechsel, „Überall abmelden“ oder 2FA-Aktivierung. */
   adoptToken: (token: string) => void;
   logout: () => void;
@@ -58,6 +58,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const onRequired = () => { if (!user?.totpRequired) void refresh(); };
+    window.addEventListener(TOTP_REQUIRED_EVENT, onRequired);
+    return () => window.removeEventListener(TOTP_REQUIRED_EVENT, onRequired);
+  }, [refresh, user?.totpRequired]);
+
   const startSession = useCallback(async (token: string) => {
     tokenStore.set(token);
     resetSocket();
@@ -76,8 +82,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [startSession]);
 
   const loginTotp = useCallback(async (mfaToken: string, code: string) => {
-    const res = await api.post<{ token: string }>('/auth/login/totp', { mfaToken, code: code.replace(/\s/g, '') });
+    const res = await api.post<{ token: string; usedRecoveryCode?: boolean; recoveryCodesLeft?: number }>(
+      '/auth/login/totp',
+      { mfaToken, code: code.replace(/\s/g, '') },
+    );
     await startSession(res.token);
+    return { usedRecoveryCode: res.usedRecoveryCode, recoveryCodesLeft: res.recoveryCodesLeft };
   }, [startSession]);
 
   // Alte Tokens sind danach ungültig – auch das der offenen Socket-Verbindung.
@@ -87,6 +97,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    // Die Sitzung auch auf dem Server beenden – sonst bliebe ein kopiertes
+    // Token bis zum Ablauf gültig. Scheitert das (offline), wird trotzdem
+    // lokal abgemeldet.
+    if (tokenStore.get()) void api.post('/auth/logout').catch(() => {});
     resetSocket();
     queryClient.clear();
     tokenStore.clear();
