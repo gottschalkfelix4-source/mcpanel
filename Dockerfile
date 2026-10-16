@@ -9,7 +9,7 @@
 # ---------------------------------------------------------------------------
 
 # --- Weboberfläche bauen ---------------------------------------------------
-FROM node:22-alpine AS frontend
+FROM node:25-alpine AS frontend
 WORKDIR /build
 COPY frontend/package*.json ./
 RUN npm install
@@ -20,7 +20,7 @@ RUN node scripts/gen-icons.mjs
 RUN npm run build
 
 # --- Backend bauen ---------------------------------------------------------
-FROM node:22-alpine AS backend
+FROM node:25-alpine AS backend
 WORKDIR /build
 RUN apk add --no-cache openssl openssl-dev libc6-compat
 COPY backend/package*.json ./
@@ -32,7 +32,7 @@ COPY backend/src ./src
 RUN npx tsc -p tsconfig.json
 
 # --- Laufzeit --------------------------------------------------------------
-FROM node:22-alpine
+FROM node:25-alpine
 
 # postgresql: die Datenbank läuft im selben Container
 # nginx:      liefert die Oberfläche aus und reicht /api weiter
