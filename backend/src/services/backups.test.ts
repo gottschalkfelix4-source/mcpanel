@@ -4,6 +4,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import * as tar from 'tar';
+import { openPromise } from 'yauzl';
 import type { Server } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -58,7 +59,7 @@ vi.mock('./backupTarget.js', () => ({
   removeBackup: vi.fn(),
 }));
 
-const { restoreBackup, verifyBackup } = await import('./backups.js');
+const { createBackup, restoreBackup, verifyBackup } = await import('./backups.js');
 const { notify } = await import('./notify.js');
 
 const SERVER_ID = 'srv-test';
@@ -69,6 +70,18 @@ const dir = () => serverDirOf(SERVER_ID);
 const archivePath = () => path.join(backupDirOf(SERVER_ID), FILENAME);
 
 const exists = (target: string) => fs.stat(target).then(() => true, () => false);
+
+/** Namen aller Einträge eines ZIPs. */
+async function zipNamen(file: string): Promise<string[]> {
+  const zip = await openPromise(file, { lazyEntries: true, autoClose: false });
+  const names: string[] = [];
+  try {
+    for await (const entry of zip.eachEntry()) names.push(entry.fileName);
+  } finally {
+    zip.close();
+  }
+  return names;
+}
 
 /** Legt einen kleinen Serverstand an, den ein Fehlschlag nicht kosten darf. */
 async function legeServerstandAn() {
@@ -175,9 +188,8 @@ describe('restoreBackup', () => {
     expect(data.origin).toBe('SAFETY');
     expect(mocks.prune).toHaveBeenCalledWith(server, ['bk-sicher', 'bk-1']);
     const copy = path.join(backupDirOf(SERVER_ID), data.filename);
-    const names: string[] = [];
-    await tar.list({ file: copy, onentry: (entry) => { names.push(entry.path); } });
-    expect(names).toContain('server.properties');
+    expect(data.filename).toMatch(/\.zip$/);
+    expect(await zipNamen(copy)).toContain('server.properties');
     expect(await fs.readFile(path.join(dir(), 'server.properties'), 'utf8')).toBe('motd=Alter Stand\n');
   });
 
@@ -247,6 +259,74 @@ describe('verifyBackup', () => {
   it('meldet ein fehlendes Archiv, ohne etwas zu verändern', async () => {
     const result: any = await verifyBackup(server, 'bk-1');
     expect(result).toMatchObject({ verifyStatus: 'FEHLER', verifyMessage: expect.stringMatching(/Archiv fehlt/) });
+    expect(mocks.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe('ZIP-Backups', () => {
+  /** Legt über createBackup eine neue Sicherung an und lässt findFirst darauf zeigen. */
+  async function neuesBackup() {
+    await createBackup(server);
+    const { data } = mocks.create.mock.calls.at(-1)![0];
+    mocks.findFirst.mockResolvedValue({ id: 'bk-zip', serverId: SERVER_ID, filename: data.filename });
+    return { data, file: path.join(backupDirOf(SERVER_ID), data.filename) };
+  }
+
+  it('packt als ZIP, lässt Ausschlüsse und Upload-Reste weg und prüft das Ergebnis', async () => {
+    await legeServerstandAn();
+    await fs.mkdir(path.join(dir(), 'logs'), { recursive: true });
+    await fs.writeFile(path.join(dir(), 'logs', 'latest.log'), 'nicht sichern');
+    await fs.writeFile(path.join(dir(), '.upload-abc'), 'halber Upload');
+    await fs.mkdir(path.join(dir(), 'leer'), { recursive: true });
+
+    const { data, file } = await neuesBackup();
+
+    expect(data.verifyStatus).toBe('OK');
+    expect(data.verifyMessage).toMatch(/Welt enthalten/);
+    const names = await zipNamen(file);
+    expect(names).toEqual(expect.arrayContaining(['server.properties', 'world/', 'world/level.dat', 'leer/']));
+    expect(names.some((n) => n.startsWith('logs'))).toBe(false);
+    expect(names).not.toContain('.upload-abc');
+  });
+
+  it('spielt ein ZIP-Backup vollständig wieder ein', async () => {
+    await legeServerstandAn();
+    const level = await fs.readFile(path.join(dir(), 'world', 'level.dat'));
+    await neuesBackup();
+
+    await fs.writeFile(path.join(dir(), 'server.properties'), 'motd=Neuer Stand\n');
+    await fs.rm(path.join(dir(), 'world'), { recursive: true });
+    await restoreBackup(server, 'bk-zip', undefined, { safetyBackup: false });
+
+    expect(await fs.readFile(path.join(dir(), 'server.properties'), 'utf8')).toBe('motd=Alter Stand\n');
+    expect((await fs.readFile(path.join(dir(), 'world', 'level.dat'))).equals(level)).toBe(true);
+    expect(await exists(path.join(dir(), '.restore-old'))).toBe(false);
+  });
+
+  it('erkennt ein verändertes Byte im ZIP an der Prüfsumme', async () => {
+    await legeServerstandAn();
+    const { file } = await neuesBackup();
+
+    // Ein Byte mitten in level.dat (unkomprimiert abgelegt) kippen.
+    const roh = await fs.readFile(file);
+    const at = roh.indexOf(Buffer.from('world/level.dat')) + 'world/level.dat'.length + 1000;
+    roh[at] ^= 0xff;
+    await fs.writeFile(file, roh);
+
+    const result: any = await verifyBackup(server, 'bk-zip');
+    expect(result).toMatchObject({ verifyStatus: 'FEHLER', verifyMessage: expect.stringMatching(/Prüfsumme/) });
+    await expect(restoreBackup(server, 'bk-zip')).rejects.toThrow(/beschädigt oder unvollständig/);
+    expect(mocks.stop).not.toHaveBeenCalled();
+  });
+
+  it('lässt bei einem abgeschnittenen ZIP die Serverdaten unangetastet', async () => {
+    await legeServerstandAn();
+    const { file } = await neuesBackup();
+    const heil = await fs.readFile(file);
+    await fs.writeFile(file, heil.subarray(0, Math.floor(heil.length / 2)));
+
+    await expect(restoreBackup(server, 'bk-zip')).rejects.toThrow(/beschädigt oder unvollständig/);
+    expect(await fs.readFile(path.join(dir(), 'server.properties'), 'utf8')).toBe('motd=Alter Stand\n');
     expect(mocks.stop).not.toHaveBeenCalled();
   });
 });

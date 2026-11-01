@@ -11,7 +11,7 @@ import {
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
-const TASK_TYPES = ['world.reset', 'world.import'];
+const TASK_TYPES = ['world.reset', 'world.import', 'world.export'];
 
 /** Nimmt dem Dateinamen die Endung – ergibt einen brauchbaren Vorschlag. */
 const nameFromFile = (file: File) => file.name.replace(/\.zip$/i, '').replace(/[^\w .-]/g, '').trim().slice(0, 64);
@@ -32,6 +32,12 @@ export default function WorldsTab() {
   const [upload, setUpload] = useState<{ file: File; name: string; activate: boolean } | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
+  // Nur Exporte, die dieser Tab gestartet hat, laden hier herunter – die
+  // Aufgaben-Meldung geht an alle, die den Server gerade offen haben.
+  const exportsStarted = useRef(new Set<string>());
+  // Ein kleiner Export kann fertig sein, bevor die Antwort auf den Start da ist.
+  const exportsFinished = useRef(new Set<string>());
 
   const worlds = useQuery({
     queryKey: ['worlds', server.id],
@@ -106,10 +112,39 @@ export default function WorldsTab() {
     onSettled: () => setUploadProgress(null),
   });
 
-  const download = (world: World) =>
-    downloadFile(`/servers/${server.id}/worlds/${encodeURIComponent(world.name)}/download`).catch((err: Error) =>
-      toast.error(err.message),
-    );
+  const fetchExport = (taskId: string) =>
+    downloadFile(`/servers/${server.id}/worlds/exports/${taskId}`).catch((err: Error) => toast.error(err.message));
+
+  const startExport = useMutation({
+    mutationFn: (world: World) =>
+      api.post<{ taskId: string }>(`/servers/${server.id}/worlds/${encodeURIComponent(world.name)}/export`),
+    onMutate: (world) => setExporting(world.name),
+    onSuccess: ({ taskId }) => {
+      if (exportsFinished.current.delete(taskId)) {
+        setExporting(null);
+        void fetchExport(taskId);
+      } else {
+        exportsStarted.current.add(taskId);
+      }
+    },
+    onError: (err: Error) => {
+      setExporting(null);
+      toast.error(err.message);
+    },
+  });
+
+  const taskFinished = (task: { id: string; type: string; status: string }) => {
+    if (task.type !== 'world.export') {
+      refresh();
+      return;
+    }
+    if (!exportsStarted.current.delete(task.id)) {
+      if (task.status === 'DONE') exportsFinished.current.add(task.id);
+      return;
+    }
+    setExporting(null);
+    if (task.status === 'DONE') void fetchExport(task.id);
+  };
 
   if (worlds.isLoading) return <LoadingBlock />;
   if (!worlds.data) return <LoadErrorBlock error={worlds.error} onRetry={() => void worlds.refetch()} />;
@@ -117,7 +152,7 @@ export default function WorldsTab() {
 
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
-      <TaskProgress serverId={server.id} types={TASK_TYPES} onFinished={refresh} />
+      <TaskProgress serverId={server.id} types={TASK_TYPES} onFinished={taskFinished} />
 
       <Panel
         title="Welten"
@@ -183,9 +218,11 @@ export default function WorldsTab() {
                       variant="ghost"
                       className="!px-2.5 !py-1.5 !text-xs"
                       icon={<Download size={13} />}
-                      title="Als Archiv herunterladen"
+                      title="Als ZIP herunterladen"
                       aria-label="Herunterladen"
-                      onClick={() => void download(world)}
+                      loading={exporting === world.name}
+                      disabled={exporting !== null && exporting !== world.name}
+                      onClick={() => startExport.mutate(world)}
                     />
                   )}
                   {canWrite && world.active && world.exists && (

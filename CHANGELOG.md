@@ -8,6 +8,13 @@ Die Oberfläche zeigt dieses Protokoll unter **Einstellungen → Was ist neu**.
 Neue Einträge kommen immer oben in einen Abschnitt „[Unveröffentlicht]“; beim
 Taggen wird daraus eine Versionsüberschrift.
 
+## [Unveröffentlicht]
+
+### Geändert
+- **Backups deutlich schneller**: Neue Sicherungen sind ZIP-Archive. Bereits komprimierte Dateien wie Regionsdateien und Mods werden unverändert abgelegt statt ein zweites Mal gepackt; in einer Messung mit 400 MB Weltdaten sank die Zeit von etwa 10 s auf 0,5 s bei gleicher Größe. Ältere tar.gz-Sicherungen bleiben prüf- und einspielbar.
+- **Fortschritt in Prozent** beim Erstellen, Prüfen und Einspielen eines Backups.
+- **Welt-Download mit Fortschrittsbalken**: Die Welt wird als Aufgabe gepackt („Welt wird gepackt … 43 %“), der Download startet danach von selbst. Heruntergeladen wird jetzt ein ZIP, das jedes Betriebssystem ohne Zusatzprogramm öffnet und das sich direkt wieder hochladen lässt.
+
 ## [1.0.0] – 2026-10-16
 
 ### Neu

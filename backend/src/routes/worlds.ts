@@ -8,12 +8,14 @@ import { audit, authenticate, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import { cacheDir } from '../config.js';
 import { attachment } from '../lib/contentDisposition.js';
-import { badRequest } from '../lib/errors.js';
+import { badRequest, notFound } from '../lib/errors.js';
+import { prisma } from '../db.js';
 import { byteLimit } from '../lib/byteLimit.js';
 import { runTask } from '../services/tasks.js';
 import { IMPORT_EXPANDED_LIMIT, IMPORT_UPLOAD_LIMIT } from '../services/serverImport.js';
 import {
-  activateWorld, assertWorldName, createWorld, deleteWorld, exportWorld, importWorld, inspectWorldZip, listWorlds, resetWorld,
+  activateWorld, assertWorldName, createWorld, deleteWorld, exportWorld, findWorldExport, importWorld, inspectWorldZip, listWorlds,
+  resetWorld,
 } from '../services/worlds.js';
 
 const seedSchema = z.string().trim().max(64).default('');
@@ -57,16 +59,37 @@ export default async function worldRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get('/:name/download', async (req, reply) => {
+  /**
+   * Welt zum Herunterladen packen. Läuft als Aufgabe mit Fortschritt – bei
+   * großen Welten dauert das, und der Browser zeigte vorher nur Stillstand.
+   * Fertig abgeholt wird über `GET /exports/:taskId`.
+   */
+  app.post('/:name/export', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
-    const { name } = req.params as { name: string };
-    const exported = await exportWorld(access.server, name);
+    const name = assertWorldName((req.params as { name: string }).name);
+    const taskId = await runTask(access.server.id, 'world.export', async (task) => {
+      await exportWorld(access.server, name, task);
+      await task.update(100, `Welt „${name}“ ist bereit zum Herunterladen`);
+    });
+    await audit(req.user!.id, access.server.id, 'world.download', name);
+    return { ok: true, taskId };
+  });
+
+  app.get('/exports/:taskId', async (req, reply) => {
+    const access = await requireServer(req, PERMISSIONS.FILES_READ);
+    const { taskId } = req.params as { taskId: string };
+    const task = await prisma.task.findFirst({
+      where: { id: taskId, serverId: access.server.id, type: 'world.export', status: 'DONE' },
+    });
+    const exported = task ? await findWorldExport(access.server, taskId) : null;
+    if (!exported) throw notFound('Der Export ist nicht mehr vorhanden – bitte die Welt erneut herunterladen.');
     const stat = await fs.stat(exported.file);
     const stream = createReadStream(exported.file);
-    stream.on('close', () => void exported.cleanup());
-    await audit(req.user!.id, access.server.id, 'world.download', name);
+    // Nur nach vollständigem Lesen löschen; ein abgebrochener Download darf
+    // erneut versucht werden, liegengebliebene Exporte räumt der nächste weg.
+    stream.on('end', () => void fs.rm(exported.file, { force: true }));
     reply
-      .header('Content-Type', 'application/gzip')
+      .header('Content-Type', 'application/zip')
       .header('Content-Length', stat.size)
       .header('Content-Disposition', attachment(exported.filename));
     return reply.send(stream);
