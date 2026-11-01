@@ -132,13 +132,43 @@ describe('askAssistant', () => {
     const res = await askAssistant(server, 'Und jetzt?', [
       { role: 'assistant', content: 'Erste Antwort' },
     ]);
-    expect(res).toEqual({ answer: 'Zweite Antwort', model: 'test-modell' });
+    expect(res).toEqual({ answer: 'Zweite Antwort', model: 'test-modell', actions: [] });
 
     const body = JSON.parse(String((m.fetch.mock.calls[0] as [string, RequestInit])[1].body));
     const rollen = body.messages.map((x: { role: string }) => x.role);
     expect(rollen).toEqual(['system', 'user', 'assistant', 'user']);
     expect(body.messages.at(-1).content).toBe('Und jetzt?');
     expect(body.messages[1].content).toContain('## Protokoll');
+  });
+});
+
+describe('askAssistant mit Reparaturen', () => {
+  const access = (perms: string[]) => ({
+    server, permissions: perms, isOwner: false, isAdmin: false, can: (p: string) => perms.includes(p),
+  }) as unknown as import('../auth/context.js').ServerAccess;
+
+  it('macht aus AKTION-Zeilen geprüfte Vorschläge und zeigt sie nicht als Text', async () => {
+    await saveAssistantConfig(cfg);
+    m.fetch.mockResolvedValueOnce(
+      antwort('Sodium ist eine Client-Mod.\nAKTION: {"typ":"mod_deaktivieren","datei":"sodium.jar","grund":"Client-Mod"}'),
+    );
+    const res = await askAssistant(server, null, [], { access: access(['console.read', 'modpack.manage']), userId: 'u1' });
+    expect(res.answer).toBe('Sodium ist eine Client-Mod.');
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0]).toMatchObject({ typ: 'mod_deaktivieren', blockiert: null, risiko: 'niedrig' });
+
+    const body = JSON.parse(String((m.fetch.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(body.messages[0].content).toContain('AKTION: ');
+  });
+
+  it('schlägt ohne Rechte nichts vor und sagt dem Modell, dass es nur liest', async () => {
+    await saveAssistantConfig(cfg);
+    m.fetch.mockResolvedValueOnce(antwort('Text\nAKTION: {"typ":"backup_anlegen"}'));
+    const res = await askAssistant(server, null, [], { access: access(['console.read']), userId: 'u1' });
+    expect(res).toMatchObject({ answer: 'Text', actions: [] });
+    const body = JSON.parse(String((m.fetch.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(body.messages[0].content).toContain('nichts verändern');
+    expect(body.messages[0].content).not.toContain('AKTION: ');
   });
 });
 

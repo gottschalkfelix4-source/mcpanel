@@ -21,6 +21,10 @@ import {
   getAssistantConfig, isConfigured as assistantConfigured, publicAssistantConfig,
   saveAssistantConfig, testAssistant,
 } from '../services/assistant.js';
+import {
+  actionsEnabled as assistantActionsEnabled,
+  setActionsEnabled as setAssistantActionsEnabled,
+} from '../services/assistantActions.js';
 
 export default async function settingsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -70,6 +74,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
     curseforgeAvailable: Boolean(await getCurseforgeKey()),
     // Damit der Absturz-Dialog weiss, ob er einen KI-Knopf anbieten kann.
     assistantAvailable: assistantConfigured(await getAssistantConfig()),
+    assistantActions: await assistantActionsEnabled(),
   }));
 
   app.get('/', { preHandler: requireAdmin }, async () => {
@@ -115,8 +120,19 @@ export default async function settingsRoutes(app: FastifyInstance) {
         adminsWithoutTotp: await prisma.user.count({ where: { active: true, totpEnabled: false, role: 'ADMIN' } }),
       },
       docker: dockerInfo,
-      assistant: publicAssistantConfig(await getAssistantConfig()),
+      assistant: {
+        ...publicAssistantConfig(await getAssistantConfig()),
+        actions: await assistantActionsEnabled(),
+      },
     };
+  });
+
+  /** Panelweiter Schalter: darf der Assistent Reparaturen vorschlagen? */
+  app.put('/assistant/actions', { preHandler: requireAdmin }, async (req) => {
+    const body = z.object({ enabled: z.boolean() }).parse(req.body);
+    await setAssistantActionsEnabled(body.enabled);
+    await audit(req.user!.id, null, 'settings.assistant', body.enabled ? 'Reparaturen an' : 'Reparaturen aus');
+    return { ok: true, actions: body.enabled };
   });
 
   /**

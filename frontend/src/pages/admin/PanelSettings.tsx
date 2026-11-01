@@ -10,7 +10,7 @@ import { DiskSpace, SecuritySettings, type DiskInfo, type SecurityInfo } from '.
 import { Link } from 'react-router-dom';
 import { formatDate } from '../../lib/format';
 import {
-  Badge, Button, ErrorNote, Field, InfoNote, LoadErrorBlock, LoadingBlock, Panel, useToast,
+  Badge, Button, ErrorNote, Field, InfoNote, LoadErrorBlock, LoadingBlock, Panel, Toggle, useToast,
 } from '../../components/ui';
 
 interface PanelInfo {
@@ -38,6 +38,8 @@ interface AssistantInfo {
   baseUrl: string;
   model: string;
   hasKey: boolean;
+  /** Darf der Assistent Reparaturen zur Freigabe vorschlagen? */
+  actions: boolean;
   masked: string | null;
 }
 
@@ -384,6 +386,16 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const aktionen = useMutation({
+    mutationFn: (enabled: boolean) => api.put<{ actions: boolean }>('/settings/assistant/actions', { enabled }),
+    onSuccess: (res) => {
+      toast.success(res.actions ? 'Reparaturvorschläge sind an.' : 'Reparaturvorschläge sind aus – der Assistent liest nur noch.');
+      void queryClient.invalidateQueries({ queryKey: ['settings-public'] });
+      onSaved();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   return (
     <Panel
       title="KI-Assistent"
@@ -509,6 +521,20 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
             )}
           </div>
         </Field>
+
+        <div className="space-y-1.5">
+          <Toggle
+            checked={data.actions}
+            disabled={aktionen.isPending}
+            onChange={(enabled) => aktionen.mutate(enabled)}
+            label="Reparaturen vorschlagen lassen"
+          />
+          <p className="text-xs text-stone-450">
+            Der Assistent kann dann z. B. eine Mod abschalten, eine fehlende Abhängigkeit
+            installieren oder neu starten – aber nur als Vorschlag. Ausgeführt wird erst, wenn der
+            Nutzer jeden einzeln freigibt, und nur mit dessen eigenen Serverrechten.
+          </p>
+        </div>
 
         <InfoNote>
           Beim Fragen gehen die letzten 400 Protokollzeilen, die Modliste und die Serverdaten an

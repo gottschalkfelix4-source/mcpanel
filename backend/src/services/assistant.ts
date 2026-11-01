@@ -5,8 +5,18 @@ import { contentDir, serverLoader } from './content.js';
 import { analyseCrash } from './crashAnalysis.js';
 import * as dockerSvc from './docker.js';
 import { cleanLog } from './notify.js';
+import { readProperties } from './properties.js';
 import { anthropicCompletion, testAnthropic } from './assistantAnthropic.js';
 import { getSetting, setSetting } from './settings.js';
+import type { ServerAccess } from '../auth/context.js';
+import {
+  actionsEnabled,
+  aktionsAnleitung,
+  erlaubteAktionen,
+  extractActions,
+  prepareActions,
+  type AktionsVorschlag,
+} from './assistantActions.js';
 
 /**
  * KI-Assistent für Absturzprotokolle.
@@ -15,9 +25,9 @@ import { getSetting, setSetting } from './settings.js';
  * oder ein beliebiger Dienst mit OpenAI-kompatibler `chat/completions`-
  * Schnittstelle – OpenRouter, OpenAI selbst, ein lokales Ollama oder vLLM.
  * Das Panel schickt Protokoll und Serverdaten hin und zeigt
- * die Antwort; mehr Rechte hat der Assistent nicht. Was er vorschlägt, führt
- * der Nutzer selbst aus – der Schalter zum Abschalten einer Mod steht direkt
- * daneben im Absturz-Dialog.
+ * die Antwort. Der Assistent darf zusätzlich Reparaturen aus einer festen
+ * Liste vorschlagen (`assistantActions.ts`) – ausgeführt werden sie erst,
+ * wenn der Nutzer sie einzeln freigibt. Selbst ausführen kann er nichts.
  */
 
 export type AssistantProvider = 'openai' | 'anthropic';
@@ -207,8 +217,17 @@ Regeln:
 - Wenn das Protokoll keine Ursache zeigt, sag das offen und frage nach dem, was fehlt.
 - Schreibe schlichten Text: Absätze, Listen mit "- ", keine Tabellen, keine Überschriften, kein Code außer Dateinamen.`;
 
+/** Wenn Reparaturen aus sind: der Nutzer muss alles selbst tun. */
+const NUR_LESEN = 'Du kannst am Server nichts verändern. Beschreibe die Schritte so, dass der Nutzer sie im Panel selbst ausführen kann.';
+
+/** Werte, nach denen der Assistent bei Rucklern und Watchdog-Abstürzen fragt. */
+const PROPERTY_AUSZUG = [
+  'max-tick-time', 'view-distance', 'simulation-distance', 'sync-chunk-writes', 'allow-flight',
+  'network-compression-threshold', 'entity-broadcast-range-percentage', 'max-players',
+];
+
 /** Alles, was der Assistent über den Server wissen muss, in einer Nachricht. */
-export async function buildContext(server: Server): Promise<string> {
+export async function buildContext(server: Server, opts: { eigenschaften?: boolean } = {}): Promise<string> {
   const roh = await dockerSvc.tailLogs(server, LOG_ZEILEN).catch(() => '');
   let log = cleanLog(roh).trim();
   if (log.length > LOG_ZEICHEN) log = '[…]\n' + log.slice(-LOG_ZEICHEN);
@@ -259,6 +278,12 @@ export async function buildContext(server: Server): Promise<string> {
     );
   }
 
+  if (opts.eigenschaften) {
+    const { values } = await readProperties(server.id).catch(() => ({ values: {} as Record<string, string> }));
+    const auszug = PROPERTY_AUSZUG.filter((k) => values[k] !== undefined).map((k) => `${k}=${values[k]}`);
+    if (auszug.length) teile.push('', '## server.properties (Auszug)', ...auszug);
+  }
+
   teile.push('', `## Protokoll (letzte ${LOG_ZEILEN} Zeilen)`, log || '(leer – der Container hat noch nichts ausgegeben)');
 
   return teile.join('\n');
@@ -267,29 +292,41 @@ export async function buildContext(server: Server): Promise<string> {
 /**
  * Eine Runde Gespräch. Ohne Frage bittet das Panel um die Absturzanalyse;
  * mit Verlauf bleibt der Kontext derselbe und die Frage schließt an.
+ *
+ * Mit `access` darf der Assistent Reparaturen vorschlagen – nur solche, für
+ * die der Fragende selbst die Rechte hat. Die Vorschläge kommen geprüft und
+ * vom Panel beschrieben zurück, ausgeführt wird noch nichts.
  */
 export async function askAssistant(
   server: Server,
   question: string | null,
   history: AssistantMessage[],
-): Promise<{ answer: string; model: string }> {
+  opts: { access?: ServerAccess; userId?: string } = {},
+): Promise<{ answer: string; model: string; actions: AktionsVorschlag[] }> {
   const cfg = await getAssistantConfig();
   if (!isConfigured(cfg)) {
     throw badRequest('Der KI-Assistent ist nicht eingerichtet. Ein Administrator kann ihn unter Panel-Einstellungen anbinden.');
   }
 
-  const kontext = await buildContext(server);
+  const typen = opts.access && opts.userId && (await actionsEnabled()) ? erlaubteAktionen(opts.access) : [];
+  const kontext = await buildContext(server, { eigenschaften: typen.includes('eigenschaft_setzen') });
   const auftrag =
     question?.trim() ||
     'Warum läuft dieser Server nicht bzw. was ist das Problem im Protokoll, und was soll ich tun?';
 
+  const system = `${SYSTEM_PROMPT}\n\n${typen.length ? aktionsAnleitung(typen) : NUR_LESEN}`;
   const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: system },
     { role: 'user', content: `${kontext}\n\n## Frage\n${history.length ? 'Siehe Verlauf.' : auftrag}` },
     ...history.map((m) => ({ role: m.role, content: m.content })),
   ];
   if (history.length) messages.push({ role: 'user', content: auftrag });
 
-  const answer = await chatCompletion(cfg, messages);
-  return { answer, model: cfg.model };
+  const roh = await chatCompletion(cfg, messages);
+  const { text, aktionen } = extractActions(roh);
+  // Ohne freigeschaltete Aktionen wird nichts vorgeschlagen – auch dann nicht,
+  // wenn das Modell sich nicht an die Anweisung hält. Vorschläge ohne Recht
+  // kommen als gesperrt zurück (prepareActions prüft jedes einzeln).
+  const actions = typen.length ? await prepareActions(opts.access!, opts.userId!, aktionen) : [];
+  return { answer: text || 'Siehe Vorschläge unten.', model: cfg.model, actions };
 }

@@ -259,6 +259,25 @@ export interface AssistantMessage {
   content: string;
 }
 
+/**
+ * Reparaturvorschlag des KI-Assistenten. Titel, Schritte und Risiko hat das
+ * Panel selbst ermittelt; nur `grund` stammt von der KI.
+ */
+export interface AssistantAction {
+  /** null: nicht ausfuehrbar, siehe `blockiert`. */
+  id: string | null;
+  typ: string;
+  titel: string;
+  schritte: string[];
+  grund: string;
+  risiko: 'niedrig' | 'mittel' | 'hoch';
+  rueckgaengig: string;
+  sicherung: 'keine' | 'angeboten' | 'empfohlen';
+  /** Muss zur Freigabe abgetippt werden. */
+  bestaetigungsText: string | null;
+  blockiert: string | null;
+}
+
 export interface ContentListing {
   /** null: Der Servertyp unterstuetzt weder Mods noch Plugins. */
   kind: ContentKind | null;
