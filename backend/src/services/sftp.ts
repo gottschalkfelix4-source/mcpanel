@@ -127,6 +127,19 @@ function attachSftp(stream: SFTPWrapper, user: User, touch: () => void) {
   return cleanup;
 }
 
+/**
+ * ssh2 erzeugt bei ed25519 gelegentlich (etwa jeder 170. Schlüssel) einen,
+ * den es selbst nicht wieder einlesen kann. Einmal gespeichert, startet SFTP
+ * nie wieder – deshalb nur einen Schlüssel ablegen, der sich lesen lässt.
+ */
+function generateHostKey(): string {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const key = utils.generateKeyPairSync('ed25519').private;
+    if (!(utils.parseKey(key) instanceof Error)) return key;
+  }
+  throw new Error('Es ließ sich kein gültiger SFTP-Hostschlüssel erzeugen');
+}
+
 export async function startSftp(log: (message: string) => void = console.info): Promise<void> {
   if (!config.sftp.enabled || listener) return;
   if (!Number.isInteger(config.sftp.port) || config.sftp.port < 0 || config.sftp.port > 65535 ||
@@ -139,7 +152,7 @@ export async function startSftp(log: (message: string) => void = console.info): 
   try { key = await fs.readFile(keyPath, 'utf8'); }
   catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    const generated = utils.generateKeyPairSync('ed25519').private;
+    const generated = generateHostKey();
     try { await fs.writeFile(keyPath, generated, { mode: 0o600, flag: 'wx' }); }
     catch (writeError) { if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError; }
     key = await fs.readFile(keyPath, 'utf8');
