@@ -150,3 +150,97 @@ describe('publicAssistantConfig', () => {
     expect(pub.configured).toBe(true);
   });
 });
+
+describe('Anthropic', () => {
+  const anthropic = {
+    provider: 'anthropic' as const, baseUrl: '', apiKey: 'sk-ant-geheim-9876', model: 'claude-opus-5-5',
+  };
+
+  function nachricht(text: string, stop_reason = 'end_turn') {
+    return new Response(
+      JSON.stringify({
+        id: 'msg_1', type: 'message', role: 'assistant', model: anthropic.model,
+        content: [{ type: 'thinking', thinking: '', signature: 'x' }, { type: 'text', text }],
+        stop_reason, stop_details: null,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }
+
+  function anfrage() {
+    const [url, init] = m.fetch.mock.calls[0] as [string, RequestInit];
+    // Das SDK schickt ein Headers-Objekt, kein einfaches Record.
+    const headers = init.headers as Headers;
+    return { url: String(url).split('?')[0], headers, body: init.body ? JSON.parse(String(init.body)) : null };
+  }
+
+  it('gilt mit Key und Modell als eingerichtet – ohne Adresse', () => {
+    expect(publicAssistantConfig(anthropic)).toMatchObject({ configured: true, provider: 'anthropic' });
+    expect(publicAssistantConfig({ ...anthropic, apiKey: '' }).configured).toBe(false);
+  });
+
+  it('spricht die Messages-API mit dem hinterlegten Key an und zieht den Systemprompt heraus', async () => {
+    m.fetch.mockResolvedValueOnce(nachricht('Ursache: Sodium'));
+    const text = await chatCompletion(anthropic, [
+      { role: 'system', content: 'Du bist ein Assistent.' },
+      { role: 'user', content: 'Warum?' },
+    ]);
+    expect(text).toBe('Ursache: Sodium');
+
+    const { url, headers, body } = anfrage();
+    expect(url).toBe('https://api.anthropic.com/v1/messages');
+    expect(headers.get('authorization')).toBe('Bearer sk-ant-geheim-9876');
+    expect(headers.get('anthropic-beta')).toContain('server-side-fallback-2026-07-01');
+    expect(body.system).toBe('Du bist ein Assistent.');
+    expect(body.messages).toEqual([{ role: 'user', content: 'Warum?' }]);
+    expect(body.fallbacks).toBe('default');
+    expect(body.cache_control).toEqual({ type: 'ephemeral' });
+    expect(body.temperature).toBeUndefined();
+  });
+
+  it('nimmt eine eigene Adresse und verdoppelt /v1 nicht', async () => {
+    m.fetch.mockResolvedValueOnce(nachricht('OK'));
+    await chatCompletion({ ...anthropic, baseUrl: 'https://proxy.example/v1/', model: 'claude-haiku-5-5' }, [
+      { role: 'user', content: 'Hi' },
+    ]);
+    const { url, body } = anfrage();
+    expect(url).toBe('https://proxy.example/v1/messages');
+    // Haiku kennt den serverseitigen Fallback nicht.
+    expect(body.fallbacks).toBeUndefined();
+  });
+
+  it('erklaert einen abgelehnten Key auf Deutsch', async () => {
+    m.fetch.mockResolvedValueOnce(
+      new Response('{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}', {
+        status: 401, headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await expect(chatCompletion(anthropic, [{ role: 'user', content: 'Hi' }])).rejects.toThrow(
+      'API-Key abgelehnt',
+    );
+  });
+
+  it('meldet eine Ablehnung durch Claude statt einer leeren Antwort', async () => {
+    m.fetch.mockResolvedValueOnce(nachricht('', 'refusal'));
+    await expect(chatCompletion(anthropic, [{ role: 'user', content: 'Hi' }])).rejects.toThrow('abgelehnt');
+  });
+
+  it('prueft beim Speichern nur Key und Modell, ohne Antwort zu erzeugen', async () => {
+    m.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ type: 'model', id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5', created_at: '2026-01-01T00:00:00Z' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const { testAssistant } = await import('./assistant.js');
+    await expect(testAssistant(anthropic)).resolves.toBe('Claude Opus 5.5');
+    expect(anfrage().url).toBe('https://api.anthropic.com/v1/models/claude-opus-5-5');
+  });
+
+  it('speichert den Anbieter und liest ihn wieder', async () => {
+    await saveAssistantConfig(anthropic);
+    const { getAssistantConfig } = await import('./assistant.js');
+    expect(await getAssistantConfig()).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5' });
+  });
+});

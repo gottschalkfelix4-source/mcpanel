@@ -62,7 +62,7 @@ das Panel steuert sie über den Docker-Socket.
 - Live-Fortschritt mit Protokoll im Panel
 - Vor Updates ist ein Paketvergleich verfügbar: neue, entfernte und anhand von Mod-ID und Inhalt aktualisierte Mods sowie Minecraft- und Loader-Version. Die zusätzliche Client-Mod-Prüfung erfolgt während der Installation.
 - Paket und einzelne Downloads werden vor dem Serverstopp vorbereitet. Ein Downloadfehler unterbricht den laufenden Server nicht.
-- Absturz-Dialog benennt die schuldige Mod; optional erklärt ein **KI-Assistent** (OpenRouter, OpenAI oder lokal) das ganze Protokoll – siehe [KI-Assistent](#ki-assistent-für-absturzprotokolle)
+- Absturz-Dialog benennt die schuldige Mod; optional erklärt ein **KI-Assistent** (Anthropic/Claude, OpenRouter, OpenAI oder lokal) das ganze Protokoll – siehe [KI-Assistent](#ki-assistent-für-absturzprotokolle)
 
 **Automatisierungen** (pro Server)
 - Auslöser: Zeitplan (Cron, 5 Felder) oder „Nach Absturz“ (Container unerwartet beendet)
@@ -416,10 +416,16 @@ eintragen; er wird dort direkt gegen die API geprüft und in der Datenbank abgel
 
 ### KI-Assistent für Absturzprotokolle
 
-Unter **Panel → Panel-Einstellungen → KI-Assistent** lässt sich ein beliebiger Dienst mit
-OpenAI-kompatibler `chat/completions`-Schnittstelle anbinden: OpenRouter, OpenAI oder ein
-eigenes Ollama/vLLM im Netz. Nötig sind Adresse (endet auf `/v1`), Modellname und – außer
-bei lokalen Diensten – ein API-Key. Beim Speichern wird die Verbindung sofort getestet;
+Unter **Panel → Panel-Einstellungen → KI-Assistent** gibt es zwei Schnittstellen:
+
+- **Anthropic (Claude)** – direkt über die Messages-API. Nötig sind nur ein API-Key aus
+  der [Anthropic Console](https://console.anthropic.com) (`sk-ant-…`) und ein Modell
+  (Vorgabe `claude-opus-5-5`; günstiger sind `claude-sonnet-5-5` und `claude-haiku-5-5`).
+  Die Adresse bleibt leer, außer man schaltet einen eigenen Proxy dazwischen.
+- **OpenAI-kompatibel** – ein beliebiger Dienst mit `chat/completions`-Schnittstelle:
+  OpenRouter, OpenAI oder ein eigenes Ollama/vLLM im Netz. Nötig sind Adresse (endet auf
+  `/v1`), Modellname und – außer bei lokalen Diensten – ein API-Key.
+ Beim Speichern wird die Verbindung sofort getestet;
 eine falsche Angabe wird nicht übernommen. Der Key wird nie an die Oberfläche
 zurückgegeben.
 
@@ -429,7 +435,7 @@ Konsole. Das Panel schickt die letzten 400 Protokollzeilen, die Modliste und die
 Serverdaten (Loader, Version, Modpack) an den Dienst und zeigt die Antwort; nachhaken ist
 im selben Dialog möglich. Der Assistent liest nur – abschalten oder starten bleibt ein
 Klick des Nutzers. Fragen darf, wer die Konsole lesen darf; jede Anfrage steht im
-Aktivitätsprotokoll. Bei OpenRouter und OpenAI verlassen die Protokolle damit das eigene
+Aktivitätsprotokoll. Bei Anthropic, OpenRouter und OpenAI verlassen die Protokolle damit das eigene
 Netz – wer das nicht will, nimmt ein lokales Modell.
 
 ### Mods und Plugins

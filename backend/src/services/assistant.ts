@@ -5,20 +5,27 @@ import { contentDir, serverLoader } from './content.js';
 import { analyseCrash } from './crashAnalysis.js';
 import * as dockerSvc from './docker.js';
 import { cleanLog } from './notify.js';
+import { anthropicCompletion, testAnthropic } from './assistantAnthropic.js';
 import { getSetting, setSetting } from './settings.js';
 
 /**
  * KI-Assistent für Absturzprotokolle.
  *
- * Angebunden wird ein beliebiger Dienst mit OpenAI-kompatibler
- * `chat/completions`-Schnittstelle – OpenRouter, OpenAI selbst, ein lokales
- * Ollama oder vLLM. Das Panel schickt Protokoll und Serverdaten hin und zeigt
+ * Angebunden wird entweder Anthropic (Claude) direkt über die Messages-API
+ * oder ein beliebiger Dienst mit OpenAI-kompatibler `chat/completions`-
+ * Schnittstelle – OpenRouter, OpenAI selbst, ein lokales Ollama oder vLLM.
+ * Das Panel schickt Protokoll und Serverdaten hin und zeigt
  * die Antwort; mehr Rechte hat der Assistent nicht. Was er vorschlägt, führt
  * der Nutzer selbst aus – der Schalter zum Abschalten einer Mod steht direkt
  * daneben im Absturz-Dialog.
  */
 
+export type AssistantProvider = 'openai' | 'anthropic';
+
 export interface AssistantConfig {
+  /** Fehlt bei alten Einstellungen – dann war es immer der OpenAI-Pfad. */
+  provider?: AssistantProvider;
+  /** Bei Anthropic optional: leer heißt offizielle Adresse. */
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -39,13 +46,16 @@ const MODS_MAX = 250;
 const TIMEOUT_MS = 120_000;
 
 const SCHLUESSEL = {
+  provider: 'assistant.provider',
   baseUrl: 'assistant.baseUrl',
   apiKey: 'assistant.apiKey',
   model: 'assistant.model',
 } as const;
 
 export async function getAssistantConfig(): Promise<AssistantConfig> {
+  const provider = (await getSetting(SCHLUESSEL.provider, 'openai')) === 'anthropic' ? 'anthropic' : 'openai';
   return {
+    provider,
     baseUrl: (await getSetting(SCHLUESSEL.baseUrl, '')).replace(/\/+$/, ''),
     apiKey: await getSetting(SCHLUESSEL.apiKey, ''),
     model: await getSetting(SCHLUESSEL.model, ''),
@@ -53,13 +63,19 @@ export async function getAssistantConfig(): Promise<AssistantConfig> {
 }
 
 export async function saveAssistantConfig(next: AssistantConfig): Promise<void> {
+  // "openai" ist der Standard und wird nicht eigens gespeichert.
+  await setSetting(SCHLUESSEL.provider, next.provider === 'anthropic' ? 'anthropic' : '');
   await setSetting(SCHLUESSEL.baseUrl, next.baseUrl.trim().replace(/\/+$/, ''));
   await setSetting(SCHLUESSEL.apiKey, next.apiKey.trim());
   await setSetting(SCHLUESSEL.model, next.model.trim());
 }
 
-/** Adresse und Modell sind Pflicht; ein Key nicht – lokale Dienste haben keinen. */
+/**
+ * OpenAI-kompatibel: Adresse und Modell sind Pflicht, ein Key nicht – lokale
+ * Dienste haben keinen. Anthropic: Key und Modell, die Adresse ist fest.
+ */
 export function isConfigured(cfg: AssistantConfig): boolean {
+  if (cfg.provider === 'anthropic') return Boolean(cfg.apiKey && cfg.model);
   return Boolean(cfg.baseUrl && cfg.model);
 }
 
@@ -67,6 +83,7 @@ export function isConfigured(cfg: AssistantConfig): boolean {
 export function publicAssistantConfig(cfg: AssistantConfig) {
   return {
     configured: isConfigured(cfg),
+    provider: cfg.provider ?? 'openai',
     baseUrl: cfg.baseUrl,
     model: cfg.model,
     hasKey: Boolean(cfg.apiKey),
@@ -100,6 +117,7 @@ export async function chatCompletion(
   if (!isConfigured(cfg)) {
     throw badRequest('Der KI-Assistent ist nicht eingerichtet. Ein Administrator kann ihn unter Panel-Einstellungen anbinden.');
   }
+  if (cfg.provider === 'anthropic') return anthropicCompletion(cfg, messages);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -163,6 +181,7 @@ export async function chatCompletion(
 
 /** Kurzer Aufruf, um Adresse, Key und Modell beim Speichern zu prüfen. */
 export async function testAssistant(cfg: AssistantConfig): Promise<string> {
+  if (cfg.provider === 'anthropic') return testAnthropic(cfg);
   return chatCompletion(
     cfg,
     [{ role: 'user', content: 'Antworte mit genau einem Wort: OK' }],

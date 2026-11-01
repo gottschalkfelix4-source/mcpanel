@@ -30,8 +30,11 @@ interface PanelInfo {
   assistant: AssistantInfo;
 }
 
+type AssistantProvider = 'openai' | 'anthropic';
+
 interface AssistantInfo {
   configured: boolean;
+  provider: AssistantProvider;
   baseUrl: string;
   model: string;
   hasKey: boolean;
@@ -328,26 +331,41 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 }
 
 /** Anbieter, die man nur auswaehlen muss – die Adresse tippt sonst niemand fehlerfrei. */
-const KI_VORLAGEN: { label: string; baseUrl: string; model: string }[] = [
-  { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4.5' },
-  { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' },
-  { label: 'Ollama (lokal)', baseUrl: 'http://host.docker.internal:11434/v1', model: 'qwen2.5:14b' },
+const KI_VORLAGEN: { label: string; provider: AssistantProvider; baseUrl: string; model: string }[] = [
+  { label: 'Anthropic (Claude)', provider: 'anthropic', baseUrl: '', model: 'claude-opus-5-5' },
+  { label: 'OpenRouter', provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4.5' },
+  { label: 'OpenAI', provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' },
+  { label: 'Ollama (lokal)', provider: 'openai', baseUrl: 'http://host.docker.internal:11434/v1', model: 'qwen2.5:14b' },
 ];
 
+/** Vorschlaege fuers Modellfeld bei Anthropic – frei eintippen geht trotzdem. */
+const CLAUDE_MODELLE = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+
 /**
- * KI-Assistent: ein beliebiger Dienst mit OpenAI-kompatibler Schnittstelle.
- * Der Key wird nie zurueckgegeben – leer lassen heisst "behalten".
+ * KI-Assistent: Anthropic direkt oder ein beliebiger Dienst mit
+ * OpenAI-kompatibler Schnittstelle. Der Key wird nie zurueckgegeben – leer
+ * lassen heisst "behalten", solange der Anbieter gleich bleibt.
  */
 function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: () => void }) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const [provider, setProvider] = useState<AssistantProvider>(data.provider ?? 'openai');
   const [baseUrl, setBaseUrl] = useState(data.baseUrl);
   const [model, setModel] = useState(data.model);
   const [apiKey, setApiKey] = useState('');
 
+  const anthropic = provider === 'anthropic';
+  // Ein gespeicherter Key gilt nur fuer den Anbieter, fuer den er hinterlegt wurde.
+  const keyBehalten = data.hasKey && data.provider === provider;
+
   const save = useMutation({
-    mutationFn: (body: { baseUrl: string; model: string; apiKey?: string }) =>
-      api.put<{ ok: boolean; configured?: boolean; error?: string }>('/settings/assistant', body),
+    mutationFn: (body: {
+      provider: AssistantProvider;
+      baseUrl: string;
+      model: string;
+      apiKey?: string;
+      entfernen?: boolean;
+    }) => api.put<{ ok: boolean; configured?: boolean; error?: string }>('/settings/assistant', body),
     onSuccess: (res) => {
       if (!res.ok) {
         toast.error(`Nicht gespeichert – der Test schlug fehl: ${res.error}`);
@@ -355,6 +373,10 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
       }
       toast.success(res.configured ? 'KI-Assistent angebunden und geprüft.' : 'KI-Assistent entfernt.');
       setApiKey('');
+      if (!res.configured) {
+        setBaseUrl('');
+        setModel('');
+      }
       // Absturz-Dialog und Konsole lesen die Verfuegbarkeit aus /settings/public.
       void queryClient.invalidateQueries({ queryKey: ['settings-public'] });
       onSaved();
@@ -366,14 +388,15 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
     <Panel
       title="KI-Assistent"
       icon={<Sparkles size={16} />}
-      subtitle="Erklärt Absturzprotokolle auf Knopfdruck – über OpenRouter, OpenAI oder einen eigenen OpenAI-kompatiblen Dienst."
+      subtitle="Erklärt Absturzprotokolle auf Knopfdruck – mit Claude direkt über Anthropic, über OpenRouter, OpenAI oder einen eigenen OpenAI-kompatiblen Dienst."
     >
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-stone-400">Status:</span>
           {data.configured ? (
             <Badge tone="green">
-              aktiv · {data.model}
+              aktiv · {data.provider === 'anthropic' ? 'Anthropic · ' : ''}
+              {data.model}
               {data.hasKey ? ` · Key ${data.masked}` : ' · ohne Key'}
             </Badge>
           ) : (
@@ -389,6 +412,7 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
               type="button"
               className="border border-stone-700 bg-stone-800/70 px-2 py-1 text-stone-200 transition hover:border-grass-light"
               onClick={() => {
+                setProvider(v.provider);
                 setBaseUrl(v.baseUrl);
                 setModel(v.model);
               }}
@@ -398,14 +422,29 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
           ))}
         </div>
 
+        <Field label="Schnittstelle">
+          <select
+            className="mc-input"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value as AssistantProvider)}
+          >
+            <option value="anthropic">Anthropic (Claude) – Messages-API</option>
+            <option value="openai">OpenAI-kompatibel – OpenRouter, OpenAI, Ollama, vLLM …</option>
+          </select>
+        </Field>
+
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
-            label="Adresse (Base-URL)"
-            hint="Muss auf /v1 enden. Leer lassen und speichern entfernt die Anbindung."
+            label={anthropic ? 'Adresse (optional)' : 'Adresse (Base-URL)'}
+            hint={
+              anthropic
+                ? 'Leer lassen für api.anthropic.com. Nur für einen eigenen Proxy ausfüllen.'
+                : 'Muss auf /v1 enden. Leer lassen und speichern entfernt die Anbindung.'
+            }
           >
             <input
               className="mc-input font-mono"
-              placeholder="https://openrouter.ai/api/v1"
+              placeholder={anthropic ? 'https://api.anthropic.com' : 'https://openrouter.ai/api/v1'}
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
             />
@@ -413,26 +452,34 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
           <Field label="Modell" hint="Genau so, wie der Anbieter es listet.">
             <input
               className="mc-input font-mono"
-              placeholder="anthropic/claude-sonnet-4.5"
+              placeholder={anthropic ? 'claude-opus-5-5' : 'anthropic/claude-sonnet-4.5'}
+              list={anthropic ? 'claude-modelle' : undefined}
               value={model}
               onChange={(e) => setModel(e.target.value)}
             />
+            <datalist id="claude-modelle">
+              {CLAUDE_MODELLE.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
           </Field>
         </div>
 
         <Field
           label="API-Key"
           hint={
-            data.hasKey
+            keyBehalten
               ? 'Ein Key ist hinterlegt. Leer lassen behält ihn; ein neuer ersetzt ihn.'
-              : 'Bei lokalen Diensten wie Ollama darf das Feld leer bleiben.'
+              : anthropic
+                ? 'Pflicht. Zu finden in der Anthropic Console unter „API Keys“.'
+                : 'Bei lokalen Diensten wie Ollama darf das Feld leer bleiben.'
           }
         >
           <div className="flex flex-wrap gap-2">
             <input
               className="mc-input flex-1 font-mono"
               type="password"
-              placeholder={data.hasKey ? '•••••••• (unverändert)' : 'sk-or-v1-…'}
+              placeholder={keyBehalten ? '•••••••• (unverändert)' : anthropic ? 'sk-ant-…' : 'sk-or-v1-…'}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               autoComplete="off"
@@ -442,6 +489,7 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
               loading={save.isPending}
               onClick={() =>
                 save.mutate({
+                  provider,
                   baseUrl: baseUrl.trim(),
                   model: model.trim(),
                   apiKey: apiKey || undefined,
@@ -450,12 +498,21 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
             >
               Speichern & testen
             </Button>
+            {data.configured && (
+              <Button
+                variant="ghost"
+                disabled={save.isPending}
+                onClick={() => save.mutate({ provider, baseUrl: '', model: '', entfernen: true })}
+              >
+                Entfernen
+              </Button>
+            )}
           </div>
         </Field>
 
         <InfoNote>
           Beim Fragen gehen die letzten 400 Protokollzeilen, die Modliste und die Serverdaten an
-          diesen Dienst. Bei OpenRouter und OpenAI verlassen sie damit dein Netz.
+          diesen Dienst. Bei Anthropic, OpenRouter und OpenAI verlassen sie damit dein Netz.
         </InfoNote>
       </div>
     </Panel>
