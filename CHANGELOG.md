@@ -13,6 +13,11 @@ Taggen wird daraus eine Versionsüberschrift.
 ### Neu
 - **KI-Assistent mit Anthropic (Claude)**: Neben OpenAI-kompatiblen Diensten lässt sich Claude jetzt direkt über die Anthropic-API anbinden – nur API-Key und Modell eintragen (Vorgabe `claude-opus-5-5`). Beim Speichern werden Key und Modell geprüft, ohne Kosten zu verursachen; Nachfragen im selben Dialog nutzen Prompt-Caching. Die Anbindung lässt sich jetzt auch per Knopf entfernen.
 
+### Geändert
+- **Backups deutlich schneller**: Neue Sicherungen sind ZIP-Archive. Bereits komprimierte Dateien wie Regionsdateien und Mods werden unverändert abgelegt statt ein zweites Mal gepackt; in einer Messung mit 400 MB Weltdaten sank die Zeit von etwa 10 s auf 0,5 s bei gleicher Größe. Ältere tar.gz-Sicherungen bleiben prüf- und einspielbar.
+- **Fortschritt in Prozent** beim Erstellen, Prüfen und Einspielen eines Backups.
+- **Welt-Download mit Fortschrittsbalken**: Die Welt wird als Aufgabe gepackt („Welt wird gepackt … 43 %“), der Download startet danach von selbst. Heruntergeladen wird jetzt ein ZIP, das jedes Betriebssystem ohne Zusatzprogramm öffnet und das sich direkt wieder hochladen lässt.
+
 ## [1.0.0] – 2026-10-16
 
 ### Neu

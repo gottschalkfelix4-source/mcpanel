@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import * as tar from 'tar';
+import { openPromise } from 'yauzl';
 import type { Server } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -143,8 +143,10 @@ describe('Welt zurücksetzen und löschen', () => {
 
 describe('Welt herunterladen', () => {
   async function entries(file: string) {
+    const zip = await openPromise(file, { lazyEntries: true, autoClose: false });
     const names: string[] = [];
-    await tar.list({ file, onentry: (entry) => void names.push(entry.path) });
+    for await (const entry of zip.eachEntry()) names.push(entry.fileName);
+    zip.close();
     return names;
   }
 
@@ -155,7 +157,7 @@ describe('Welt herunterladen', () => {
     expect(names).toEqual(expect.arrayContaining(['world/level.dat', 'world_nether/level.dat', 'world/region/r.0.0.mca']));
     expect(names.some((n) => n.endsWith('session.lock'))).toBe(false);
     expect(names.some((n) => n.startsWith('Kreativ'))).toBe(false);
-    expect(exported.filename).toBe('world.tar.gz');
+    expect(exported.filename).toBe('world.zip');
     expect(m.rcon).not.toHaveBeenCalled();
     await exported.cleanup();
     await expect(fs.stat(exported.file)).rejects.toThrow();
@@ -166,5 +168,19 @@ describe('Welt herunterladen', () => {
     const exported = await worlds.exportWorld(server(), 'world');
     expect(m.calls).toEqual(['rcon:save-off', 'rcon:save-all flush', 'rcon:save-on']);
     await exported.cleanup();
+  });
+
+  it('meldet Fortschritt und legt den Export zum Abholen unter der Aufgaben-ID ab', async () => {
+    const updates: [number, string][] = [];
+    const task = { id: 'task123abc', update: async (p: number, msg: string) => void updates.push([p, msg]) } as any;
+    const exported = await worlds.exportWorld(server(), 'world', task);
+    expect(updates.some(([, msg]) => /Welt wird gepackt … 100 %/.test(msg))).toBe(true);
+
+    const found = await worlds.findWorldExport(server(), 'task123abc');
+    expect(found).toEqual({ file: exported.file, filename: 'world.zip' });
+    expect(await worlds.findWorldExport(server(), 'andere-id')).toBeNull();
+    expect(await worlds.findWorldExport(server(), '../../etc')).toBeNull();
+    await exported.cleanup();
+    expect(await worlds.findWorldExport(server(), 'task123abc')).toBeNull();
   });
 });

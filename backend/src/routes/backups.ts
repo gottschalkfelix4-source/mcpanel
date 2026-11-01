@@ -100,7 +100,7 @@ export default async function backupRoutes(app: FastifyInstance) {
     stream.on('close', () => void file.cleanup());
 
     reply
-      .header('Content-Type', 'application/gzip')
+      .header('Content-Type', file.contentType)
       .header('Content-Length', String(stat.size))
       .header('Content-Disposition', attachment(file.filename));
     return reply.send(stream);

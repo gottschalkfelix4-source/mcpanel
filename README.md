@@ -46,7 +46,7 @@ das Panel steuert sie über den Docker-Socket.
 | Mods / Plugins | Inhalt von `mods/` bzw. `plugins/`, einzeln aktivieren/deaktivieren/löschen, einzelne nachinstallieren – siehe [Mods und Plugins](#mods-und-plugins) |
 | Dateien | Dateimanager mit Editor, Upload, Download, Umbenennen, ZIP entpacken und SFTP-Zugang für externe Clients |
 | Konfiguration | `server.properties` als gruppiertes Formular + Rohwerte |
-| Backups | tar.gz-Sicherungen erstellen, herunterladen, einspielen, löschen, optional mit Zweitkopie |
+| Backups | ZIP-Sicherungen erstellen, herunterladen, einspielen, löschen, optional mit Zweitkopie |
 | Spieler | Online-Liste, Whitelist, Operatoren, Bans – Aktionen laufen über RCON |
 | Automation | Zeitgesteuerte Regeln (Befehle, Backups, Neustarts, Modpack-Updates) und Benachrichtigungskanäle |
 | Zugriff | Mitglieder einladen und Rechte einzeln vergeben |
@@ -73,7 +73,12 @@ das Panel steuert sie über den Docker-Socket.
 - Der Scheduler prüft alle 20 Sekunden; Zeitzone über `TZ` (Vorgabe `Europe/Berlin`)
 
 **Backups**
-- tar.gz je Server; Welt, Mods und Konfiguration, ohne `cache/`, `logs/`, `libraries/`
+- ZIP je Server; Welt, Mods und Konfiguration, ohne `cache/`, `logs/`, `libraries/`
+- Schnell auch bei großen Welten: bereits komprimierte Dateien (Regionsdateien `.mca`,
+  `.jar`, Bilder …) werden unverändert abgelegt, nur Konfiguration und Text gepackt – das
+  spart gegenüber dem früheren tar.gz kaum Platz, aber den Großteil der Zeit. Fortschritt
+  in Prozent während Packen, Prüfen und Einspielen. Ältere tar.gz-Sicherungen lassen sich
+  weiterhin prüfen, herunterladen und einspielen
 - Vor jedem Modpack-Update wird automatisch eines angelegt
 - Beim Einspielen wird das Archiv erst geprüft und das Serververzeichnis danach geleert –
   bei einer beschädigten Datei wäre am Ende sonst beides weg
@@ -531,7 +536,7 @@ im Tab *Mods* lässt sich jede mit einem Klick wieder einschalten.
 ```
 $HOST_DATA_ROOT/
 ├── servers/<serverId>/     # /data des jeweiligen Minecraft-Containers
-├── backups/<serverId>/     # backup-<zeitstempel>.tar.gz
+├── backups/<serverId>/     # backup-<zeitstempel>.zip (ältere: .tar.gz)
 └── cache/modpacks/         # heruntergeladene Modpack-Archive
 ```
 
@@ -825,7 +830,7 @@ unangetastet.
 
 ## Die Panel-Datenbank sichern
 
-Die tar.gz-Sicherungen aus dem Tab *Backups* enthalten Welt, Mods und Konfiguration
+Die Sicherungen aus dem Tab *Backups* enthalten Welt, Mods und Konfiguration
 eines Servers – **nicht** aber das, was das Panel selbst weiß: Konten und Passwort-Hashes,
 die vergebenen Rechte, RCON-Passwörter, Automatisierungen, Benachrichtigungskanäle und
 die Zugangsdaten der Zweitablage. Das alles steht in PostgreSQL, und zwei Gelegenheiten

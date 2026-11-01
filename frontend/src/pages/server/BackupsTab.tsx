@@ -138,7 +138,7 @@ export default function BackupsTab() {
           <EmptyState
             icon={<HardDriveDownload size={40} />}
             title="Noch keine Backups"
-            description="Ein Backup sichert Welt, Mods und Konfiguration als tar.gz-Archiv. Vor jedem Modpack-Update wird automatisch eines angelegt."
+            description="Ein Backup sichert Welt, Mods und Konfiguration als ZIP-Archiv. Vor jedem Modpack-Update wird automatisch eines angelegt."
           />
         ) : (
           <ul className="divide-y divide-stone-875">

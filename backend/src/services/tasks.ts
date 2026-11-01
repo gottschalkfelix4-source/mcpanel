@@ -115,6 +115,7 @@ const AUFGABEN_NAMEN: Record<string, string> = {
   'server.reinstall': 'Eine Neuinstallation',
   'world.reset': 'Ein Weltreset',
   'world.import': 'Ein Welt-Upload',
+  'world.export': 'Ein Welt-Export',
 };
 
 const aufgabenName = (type: string) => AUFGABEN_NAMEN[type] ?? `Die Aufgabe "${type}"`;

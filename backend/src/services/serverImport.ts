@@ -48,8 +48,21 @@ const ignored = (name: string) => name.startsWith('__MACOSX/') || name.split('/'
 export interface ZipMarker { file: string; missing: string }
 const SERVER_MARKER: ZipMarker = { file: 'server.properties', missing: 'Das ZIP muss einen eindeutigen Serverordner mit server.properties enthalten.' };
 
-/** ZIP-Metadaten vollständig prüfen, bevor Dateien oder ein Server angelegt werden. */
-export async function inspectServerZip(file: string, maxBytes = IMPORT_EXPANDED_LIMIT, marker: ZipMarker = SERVER_MARKER): Promise<ImportPlan> {
+export interface ZipLimits {
+  /** Obergrenze der entpackten Größe. */
+  maxBytes?: number;
+  /** Obergrenze der Einträge – beim Hochladen fremder ZIPs eng, bei eigenen Backups offen. */
+  maxEntries?: number;
+}
+
+/**
+ * Liest das Inhaltsverzeichnis eines ZIPs und lehnt alles ab, was beim
+ * Entpacken gefährlich wäre: Pfade außerhalb des Ziels, Links und
+ * Spezialdateien, Verschlüsselung, doppelte oder widersprüchliche Pfade.
+ */
+export async function readZipEntries(file: string, limits: ZipLimits = {}): Promise<{ entries: Entry[]; bytes: number }> {
+  const maxBytes = limits.maxBytes ?? IMPORT_EXPANDED_LIMIT;
+  const maxEntries = limits.maxEntries ?? 100_000;
   let zip;
   try {
     zip = await openPromise(file, { lazyEntries: true, autoClose: false });
@@ -58,13 +71,13 @@ export async function inspectServerZip(file: string, maxBytes = IMPORT_EXPANDED_
     const files = new Set<string>();
     let bytes = 0;
     for await (const entry of zip.eachEntry()) {
-      if (entries.length >= 100_000) throw badRequest('Das ZIP enthält zu viele Dateien (höchstens 100.000).');
+      if (entries.length >= maxEntries) throw badRequest(`Das ZIP enthält zu viele Dateien (höchstens ${maxEntries.toLocaleString('de-DE')}).`);
       const name = entry.fileName;
       archivePath(path.dirname(file), name);
       const parts = name.replace(/\/$/, '').split('/');
       if (parts.some(p => !p || p === '.' || /[:\x00-\x1f]/.test(p))) throw badRequest('Das ZIP enthält einen ungültigen Dateipfad.');
       const kind = (entry.externalFileAttributes >>> 16) & 0o170000;
-      if (kind && kind !== 0o100000 && kind !== 0o040000) throw badRequest('Links und Spezialdateien sind im Server-ZIP nicht erlaubt.');
+      if (kind && kind !== 0o100000 && kind !== 0o040000) throw badRequest('Links und Spezialdateien sind im ZIP nicht erlaubt.');
       if (entry.isEncrypted()) throw badRequest('Verschlüsselte ZIP-Dateien werden nicht unterstützt.');
       if (/(?:^|\/)server\.properties$/.test(name) && entry.uncompressedSize > 1024 * 1024) throw badRequest('server.properties ist ungewöhnlich groß.');
       const key = parts.join('/').toLowerCase();
@@ -79,19 +92,24 @@ export async function inspectServerZip(file: string, maxBytes = IMPORT_EXPANDED_
       const parts = key.split('/');
       while (parts.length > 1) { parts.pop(); if (files.has(parts.join('/'))) throw badRequest('Dateien und Ordner im ZIP haben widersprüchliche Pfade.'); }
     }
-    const usable = entries.filter(e => !ignored(e.fileName));
-    const properties = usable.filter(e => e.fileName === marker.file || e.fileName.endsWith(`/${marker.file}`));
-    const direct = properties.find(e => e.fileName === marker.file);
-    if (!direct && properties.length !== 1) throw badRequest(marker.missing);
-    const root = direct ? '' : properties[0].fileName.slice(0, -marker.file.length);
-    if (usable.some(e => !e.fileName.startsWith(root) && !(e.fileName.endsWith('/') && root.startsWith(e.fileName)))) {
-      throw badRequest('Bitte nur den Serverordner oder dessen Inhalt als ZIP hochladen.');
-    }
-    return { root, entries: usable.filter(e => e.fileName.startsWith(root) && e.fileName !== root), bytes };
+    return { entries: entries.filter(e => !ignored(e.fileName)), bytes };
   } catch (error) {
     if ((error as { statusCode?: number }).statusCode) throw error;
     throw badRequest('Das ZIP ist beschädigt oder enthält unzulässige Dateien.');
   } finally { zip?.close(); }
+}
+
+/** ZIP-Metadaten vollständig prüfen, bevor Dateien oder ein Server angelegt werden. */
+export async function inspectServerZip(file: string, maxBytes = IMPORT_EXPANDED_LIMIT, marker: ZipMarker = SERVER_MARKER): Promise<ImportPlan> {
+  const { entries: usable, bytes } = await readZipEntries(file, { maxBytes });
+  const properties = usable.filter(e => e.fileName === marker.file || e.fileName.endsWith(`/${marker.file}`));
+  const direct = properties.find(e => e.fileName === marker.file);
+  if (!direct && properties.length !== 1) throw badRequest(marker.missing);
+  const root = direct ? '' : properties[0].fileName.slice(0, -marker.file.length);
+  if (usable.some(e => !e.fileName.startsWith(root) && !(e.fileName.endsWith('/') && root.startsWith(e.fileName)))) {
+    throw badRequest('Bitte nur den Serverordner oder dessen Inhalt als ZIP hochladen.');
+  }
+  return { root, entries: usable.filter(e => e.fileName.startsWith(root) && e.fileName !== root), bytes };
 }
 
 /** Große Welten dateiweise übertragen, Größen und CRC prüfen, niemals Skripte ausführen. */

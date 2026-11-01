@@ -1,12 +1,10 @@
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import * as tar from 'tar';
 import type { Server } from '@prisma/client';
 import { serverBackupDir, serverDir } from '../config.js';
 import { safePath } from '../lib/safePath.js';
+import { collectSources, writeZip } from '../lib/zipWriter.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import * as dockerSvc from './docker.js';
@@ -206,23 +204,45 @@ export function deleteWorld(server: Server, rawName: string) {
   });
 }
 
+/** Fertige Exporte bleiben so lange zum Abholen liegen. */
+const EXPORT_TTL_MS = 60 * 60 * 1000;
+const EXPORT_PREFIX = '.world-export-';
+const exportIdRegex = /^[A-Za-z0-9_-]{6,64}$/;
+
+/** Liegengebliebene Exporte (Download abgebrochen, Tab geschlossen) wegräumen. */
+async function cleanupWorldExports(serverId: string) {
+  const dir = serverBackupDir(serverId);
+  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  for (const name of names.filter((n) => n.startsWith(EXPORT_PREFIX))) {
+    const stat = await fs.stat(path.join(dir, name)).catch(() => null);
+    if (stat && Date.now() - stat.mtimeMs > EXPORT_TTL_MS) await fs.rm(path.join(dir, name), { force: true });
+  }
+}
+
+const downloadName = (world: string) => `${world.replace(/[^A-Za-z0-9._-]+/g, '-')}.zip`;
+
 /**
- * Packt die Welt in eine temporäre Datei. Läuft der Server und ist es die
- * aktive Welt, wird wie beim Backup vorher gespeichert und das Speichern
- * währenddessen pausiert – sonst landen halb geschriebene Regionen im Archiv.
+ * Packt die Welt als ZIP in eine Datei neben den Backups. Läuft der Server und
+ * ist es die aktive Welt, wird wie beim Backup vorher gespeichert und das
+ * Speichern währenddessen pausiert – sonst landen halb geschriebene Regionen
+ * im Archiv. Mit Aufgabe meldet der Export seinen Fortschritt und bleibt unter
+ * deren ID liegen, bis er abgeholt wird.
  */
-export function exportWorld(server: Server, rawName: string): Promise<{ file: string; filename: string; cleanup: () => Promise<void> }> {
+export function exportWorld(server: Server, rawName: string, task?: TaskHandle): Promise<{ file: string; filename: string; cleanup: () => Promise<void> }> {
   return withServerOperation(server.id, OPERATION, async () => {
     const name = assertWorldName(rawName);
     await assertExists(server, name);
+    await cleanupWorldExports(server.id);
     const parts = await worldParts(server.id, name);
     const { state } = await dockerSvc.getState(server);
     const running = state === 'running';
     const paused = running && (await activeWorld(server.id)).name === name;
     const dir = serverBackupDir(server.id);
     await fs.mkdir(dir, { recursive: true });
-    const file = path.join(dir, `.world-export-${crypto.randomBytes(6).toString('hex')}.tar.gz`);
+    const id = task?.id ?? crypto.randomBytes(6).toString('hex');
+    const file = path.join(dir, `${EXPORT_PREFIX}${id}-${name}.zip`);
     if (paused) {
+      await task?.update(5, 'Welt wird gespeichert …');
       try {
         await rconCommand(server, 'save-off');
         await rconCommand(server, 'save-all flush');
@@ -232,10 +252,14 @@ export function exportWorld(server: Server, rawName: string): Promise<{ file: st
       }
     }
     try {
-      await pipeline(
-        tar.create({ gzip: true, cwd: serverDir(server.id), portable: true, filter: (entry) => !/(^|\/)session\.lock$/.test(entry) }, parts),
-        fsSync.createWriteStream(file, { flags: 'wx', mode: 0o600 }),
-      );
+      await task?.update(10, 'Dateien werden gesammelt …');
+      const sources = await collectSources(serverDir(server.id), parts, (relative) => !/(^|[\\/])session\.lock$/.test(relative));
+      await writeZip(file, sources, {
+        onProgress: (done, total) => {
+          const percent = total > 0 ? Math.round((done / total) * 100) : 100;
+          void task?.update(10 + Math.round(percent * 0.88), `Welt wird gepackt … ${percent} %`);
+        },
+      });
     } catch (err) {
       await fs.rm(file, { force: true });
       throw err;
@@ -244,10 +268,20 @@ export function exportWorld(server: Server, rawName: string): Promise<{ file: st
     }
     return {
       file,
-      filename: `${name.replace(/[^A-Za-z0-9._-]+/g, '-')}.tar.gz`,
+      filename: downloadName(name),
       cleanup: () => fs.rm(file, { force: true }),
     };
   });
+}
+
+/** Fertigen Export einer Aufgabe finden – `null`, wenn er abgeholt oder verfallen ist. */
+export async function findWorldExport(server: Server, taskId: string): Promise<{ file: string; filename: string } | null> {
+  if (!exportIdRegex.test(taskId)) return null;
+  const dir = serverBackupDir(server.id);
+  const prefix = `${EXPORT_PREFIX}${taskId}-`;
+  const match = (await fs.readdir(dir).catch(() => [] as string[])).find((n) => n.startsWith(prefix) && n.endsWith('.zip'));
+  if (!match) return null;
+  return { file: path.join(dir, match), filename: downloadName(match.slice(prefix.length, -'.zip'.length)) };
 }
 
 export const WORLD_ZIP_MARKER = {

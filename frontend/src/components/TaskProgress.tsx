@@ -23,6 +23,7 @@ const TYPE_LABELS: Record<string, string> = {
   'backup.create': 'Backup wird erstellt',
   'backup.restore': 'Backup wird eingespielt',
   'server.reinstall': 'Server wird neu installiert',
+  'world.export': 'Welt wird zum Herunterladen gepackt',
 };
 
 /**

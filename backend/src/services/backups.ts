@@ -1,7 +1,10 @@
-import fsSync from 'node:fs';
+import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { byteLimit } from '../lib/byteLimit.js';
+import { crc32 } from 'node:zlib';
+import { openPromise } from 'yauzl';
+import { collectSources, writeZip } from '../lib/zipWriter.js';
 import { dirSize, isUploadTemp } from './files.js';
+import { extractServerZip, readZipEntries } from './serverImport.js';
 import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths } from './restoreRecovery.js';
 import { archivePath } from '../lib/safePath.js';
 import { withServerOperation } from './operations.js';
@@ -71,7 +74,7 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
   await fs.mkdir(backupDir, { recursive: true });
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `backup-${stamp}.tar.gz`;
+  const filename = `backup-${stamp}.zip`;
   const target = path.join(backupDir, filename);
 
   // Kontingent vor dem Packen pruefen - danach laege das Archiv schon da.
@@ -94,11 +97,18 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
 
   let entries: string[] = [];
   try {
-    await task?.update(25, 'Archiv wird erstellt …');
+    await task?.update(15, 'Dateien werden gesammelt …');
     entries = (await fs.readdir(dir)).filter((e) => !EXCLUDE.has(e));
+    const sources = await collectSources(dir, entries, (relative) => !isUploadTemp(relative));
     const budget = await remainingDiskBytes(server);
     try {
-      await pipeline(tar.create({ gzip: true, cwd: dir, portable: true, filter: (entry) => !isUploadTemp(entry) }, entries), byteLimit(budget), fsSync.createWriteStream(target));
+      await writeZip(target, sources, {
+        maxBytes: budget,
+        onProgress: (done, total) => {
+          const percent = total > 0 ? Math.round((done / total) * 100) : 100;
+          void task?.update(20 + Math.round(percent * 0.6), `Archiv wird erstellt … ${percent} %`);
+        },
+      });
     } catch (err) {
       await fs.rm(target, { force: true });
       throw err;
@@ -113,10 +123,10 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
 
   // Einmal komplett durchlesen: ein Archiv, das sich nicht entpacken ließe,
   // soll gar nicht erst als Sicherung in der Liste stehen.
-  await task?.update(85, 'Archiv wird geprüft …');
+  await task?.update(80, 'Archiv wird geprüft …');
   let check: ArchiveCheck;
   try {
-    check = await inspectArchive(target);
+    check = await inspectArchive(target, (percent) => task?.update(80 + Math.round(percent * 0.1), `Archiv wird geprüft … ${percent} %`));
     if (check.entries === 0 && entries.length > 0) throw new Error('Archiv ist leer');
   } catch (err) {
     await fs.rm(target, { force: true });
@@ -212,8 +222,62 @@ export interface ArchiveCheck {
   hasWorld: boolean;
 }
 
-/** Liest das ganze Archiv (gzip-Prüfsumme inklusive), ohne etwas zu schreiben. */
-export async function inspectArchive(archive: string): Promise<ArchiveCheck> {
+export type ArchiveFormat = 'zip' | 'tar.gz';
+
+/**
+ * Seit Fassung 1.1 sind Backups ZIPs, ältere tar.gz. Erkannt wird am Inhalt,
+ * nicht am Namen – Kopien aus der Zweitablage liegen unter festem Namen.
+ */
+export async function archiveFormat(archive: string): Promise<ArchiveFormat> {
+  const fh = await fs.open(archive, 'r');
+  try {
+    const head = Buffer.alloc(4);
+    await fh.read(head, 0, 4, 0);
+    return head[0] === 0x50 && head[1] === 0x4b ? 'zip' : 'tar.gz';
+  } finally {
+    await fh.close();
+  }
+}
+
+/** Eigene Backups dürfen beliebig groß sein und beliebig viele Dateien haben. */
+const BACKUP_ZIP_LIMITS = { maxBytes: Number.MAX_SAFE_INTEGER, maxEntries: Number.MAX_SAFE_INTEGER };
+
+/** Jede Datei im ZIP einmal entpacken und gegen ihre CRC-Prüfsumme halten. */
+async function inspectZip(archive: string, onProgress?: (percent: number) => unknown): Promise<ArchiveCheck> {
+  const { entries, bytes } = await readZipEntries(archive, BACKUP_ZIP_LIMITS);
+  const check: ArchiveCheck = { entries: entries.length, bytes, hasWorld: false };
+  const zip = await openPromise(archive, { lazyEntries: true, autoClose: false });
+  try {
+    let read = 0;
+    let lastReport = 0;
+    for (const entry of entries) {
+      if (/(^|\/)level\.dat$/.test(entry.fileName)) check.hasWorld = true;
+      if (entry.fileName.endsWith('/')) continue;
+      let crc = 0;
+      const sink = new Writable({
+        write(chunk: Buffer, _encoding, callback) {
+          crc = crc32(chunk, crc);
+          read += chunk.length;
+          callback();
+        },
+      });
+      await pipeline(await zip.openReadStreamPromise(entry), sink);
+      if (crc !== entry.crc32) throw new Error(`Prüfsumme stimmt nicht: ${entry.fileName}`);
+      const now = Date.now();
+      if (onProgress && now - lastReport > 250) {
+        lastReport = now;
+        await onProgress(bytes > 0 ? Math.round((read / bytes) * 100) : 100);
+      }
+    }
+  } finally {
+    zip.close();
+  }
+  return check;
+}
+
+/** Liest das ganze Archiv (Prüfsummen inklusive), ohne etwas zu schreiben. */
+export async function inspectArchive(archive: string, onProgress?: (percent: number) => unknown): Promise<ArchiveCheck> {
+  if ((await archiveFormat(archive)) === 'zip') return inspectZip(archive, onProgress);
   const check: ArchiveCheck = { entries: 0, bytes: 0, hasWorld: false };
   await tar.list({
     file: archive,
@@ -250,7 +314,7 @@ export async function verifyBackup(server: Server, backupId: string, task?: Task
   } else {
     try {
       await task?.update(20, 'Archiv wird vollständig gelesen …');
-      const check = await inspectArchive(source.path);
+      const check = await inspectArchive(source.path, (percent) => task?.update(20 + Math.round(percent * 0.75), `Archiv wird vollständig gelesen … ${percent} %`));
       if (check.entries === 0) throw new Error('Archiv ist leer');
       status = 'OK';
       message = `${describeCheck(check)}${fromPrimary ? '' : ' (aus der Zweitablage)'}`;
@@ -342,11 +406,21 @@ async function restoreBackupUnlocked(server: Server, backupId: string, task?: Ta
     await fs.mkdir(stage);
     try {
       await task?.update(35, 'Backup wird in einen separaten Ordner entpackt …');
-      await tar.extract({ file: archive, cwd: stage, strict: true, filter: (name, entry) => {
-        archivePath(stage, name);
-        if ('type' in entry && ['SymbolicLink', 'Link'].includes(entry.type)) throw badRequest('Links sind in Sicherungen nicht erlaubt');
-        return !EXCLUDE.has(name.split('/')[0]);
-      } });
+      if ((await archiveFormat(archive)) === 'zip') {
+        // Derselbe abgesicherte Entpacker wie beim Welt- und Server-Import:
+        // Pfadgrenzen, keine Links, CRC je Datei.
+        const { entries, bytes } = await readZipEntries(archive, BACKUP_ZIP_LIMITS);
+        const plan = { root: '', bytes, entries: entries.filter((e) => !EXCLUDE.has(e.fileName.split('/')[0])) };
+        await extractServerZip(archive, plan, stage, (percent) =>
+          task ? task.update(35 + Math.round(percent * 0.45), `Backup wird entpackt … ${Math.round(percent)} %`) : Promise.resolve(),
+        );
+      } else {
+        await tar.extract({ file: archive, cwd: stage, strict: true, filter: (name, entry) => {
+          archivePath(stage, name);
+          if ('type' in entry && ['SymbolicLink', 'Link'].includes(entry.type)) throw badRequest('Links sind in Sicherungen nicht erlaubt');
+          return !EXCLUDE.has(name.split('/')[0]);
+        } });
+      }
       for (const name of EXCLUDE) {
         if (name === RESTORE_OLD) continue;
         const source = path.join(dir, name);
@@ -386,12 +460,17 @@ async function deleteBackupUnlocked(server: Server, backupId: string) {
 export async function backupFilePath(
   server: Server,
   backupId: string,
-): Promise<{ path: string; filename: string; cleanup: () => Promise<void> }> {
+): Promise<{ path: string; filename: string; contentType: string; cleanup: () => Promise<void> }> {
   const backup = await prisma.backup.findFirst({ where: { id: backupId, serverId: server.id } });
   if (!backup) throw notFound('Backup nicht gefunden');
   const source = await resolveArchive(server.id, backup.filename, backup.targetId);
   if (!source) throw badRequest('Backup-Datei fehlt');
-  return { ...source, filename: `${slug(backup.name)}.tar.gz` };
+  const zip = (await archiveFormat(source.path)) === 'zip';
+  return {
+    ...source,
+    filename: `${slug(backup.name)}.${zip ? 'zip' : 'tar.gz'}`,
+    contentType: zip ? 'application/zip' : 'application/gzip',
+  };
 }
 
 function slug(value: string): string {
