@@ -8,6 +8,11 @@ Die Oberfläche zeigt dieses Protokoll unter **Einstellungen → Was ist neu**.
 Neue Einträge kommen immer oben in einen Abschnitt „[Unveröffentlicht]“; beim
 Taggen wird daraus eine Versionsüberschrift.
 
+## [Unveröffentlicht]
+
+### Neu
+- **KI-Assistent mit Anthropic (Claude)**: Neben OpenAI-kompatiblen Diensten lässt sich Claude jetzt direkt über die Anthropic-API anbinden – nur API-Key und Modell eintragen (Vorgabe `claude-opus-5-5`). Beim Speichern werden Key und Modell geprüft, ohne Kosten zu verursachen; Nachfragen im selben Dialog nutzen Prompt-Caching. Die Anbindung lässt sich jetzt auch per Knopf entfernen.
+
 ## [1.0.0] – 2026-10-16
 
 ### Neu

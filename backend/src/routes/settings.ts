@@ -120,37 +120,47 @@ export default async function settingsRoutes(app: FastifyInstance) {
   });
 
   /**
-   * KI-Assistent: beliebiger OpenAI-kompatibler Dienst. Ein leer gelassener
-   * Key bedeutet "unveraendert lassen" - die Oberflaeche sieht ihn nie. Eine
-   * leere Adresse loest die Anbindung komplett.
+   * KI-Assistent: Anthropic direkt oder ein beliebiger OpenAI-kompatibler
+   * Dienst. Ein leer gelassener Key bedeutet "unveraendert lassen" - die
+   * Oberflaeche sieht ihn nie. `entfernen` (oder beim OpenAI-Pfad eine leere
+   * Adresse) loest die Anbindung komplett.
    */
   app.put('/assistant', { preHandler: requireAdmin }, async (req) => {
     const body = z
       .object({
-        baseUrl: z.string().trim().max(300),
-        model: z.string().trim().max(200),
+        provider: z.enum(['openai', 'anthropic']).default('openai'),
+        baseUrl: z.string().trim().max(300).default(''),
+        model: z.string().trim().max(200).default(''),
         apiKey: z.string().max(500).optional(),
+        entfernen: z.boolean().optional(),
       })
       .parse(req.body);
 
-    if (!body.baseUrl) {
-      await saveAssistantConfig({ baseUrl: '', apiKey: '', model: '' });
+    if (body.entfernen || (body.provider === 'openai' && !body.baseUrl)) {
+      await saveAssistantConfig({ provider: 'openai', baseUrl: '', apiKey: '', model: '' });
       await audit(req.user!.id, null, 'settings.assistant', 'entfernt');
       return { ok: true, configured: false, assistant: publicAssistantConfig(await getAssistantConfig()) };
     }
-    if (!/^https?:\/\//.test(body.baseUrl)) {
+    if (body.baseUrl && !/^https?:\/\//.test(body.baseUrl)) {
       throw badRequest('Die Adresse muss mit http:// oder https:// beginnen.');
     }
     if (!body.model) throw badRequest('Bitte ein Modell angeben.');
 
     const current = await getAssistantConfig();
+    // Einen gespeicherten Key nur behalten, wenn der Anbieter gleich bleibt -
+    // ein OpenRouter-Key wird bei Anthropic nie funktionieren.
+    const gleicherAnbieter = (current.provider ?? 'openai') === body.provider;
     const next = {
+      provider: body.provider,
       // Ohne Schraegstrich am Ende, sonst wird daraus /v1//chat/completions -
       // und der Test scheitert an einem 404, den niemand versteht.
       baseUrl: body.baseUrl.replace(/\/+$/, ''),
       model: body.model,
-      apiKey: body.apiKey?.length ? body.apiKey : current.apiKey,
+      apiKey: body.apiKey?.trim().length ? body.apiKey.trim() : gleicherAnbieter ? current.apiKey : '',
     };
+    if (next.provider === 'anthropic' && !next.apiKey) {
+      throw badRequest('Bitte einen Anthropic-API-Key angeben (beginnt mit sk-ant-).');
+    }
 
     // Erst pruefen, dann speichern - eine falsche Adresse soll nicht dazu
     // fuehren, dass ab jetzt jeder Klick im Absturz-Dialog ins Leere laeuft.
@@ -165,7 +175,12 @@ export default async function settingsRoutes(app: FastifyInstance) {
     }
 
     await saveAssistantConfig(next);
-    await audit(req.user!.id, null, 'settings.assistant', `${next.baseUrl} · ${next.model}`);
+    await audit(
+      req.user!.id,
+      null,
+      'settings.assistant',
+      `${next.provider === 'anthropic' ? 'Anthropic' : next.baseUrl} · ${next.model}`,
+    );
     return { ok: true, configured: true, assistant: publicAssistantConfig(next) };
   });
 
