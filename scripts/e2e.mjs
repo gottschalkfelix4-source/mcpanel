@@ -193,7 +193,7 @@ ok(sessionInQuery.status === 401, 'Sitzungs-Token in der URL abgelehnt', String(
 const dlt = (await api('POST', '/auth/download-token', { token: admin, body: { path: dlPath } })).json?.token;
 const dl = await fetch(`${BASE}${dlPath}?token=${dlt}`);
 const dlBody = Buffer.from(await dl.arrayBuffer());
-ok(dl.status === 200 && dlBody[0] === 0x1f && dlBody[1] === 0x8b, 'Backup-Download mit Kurzzeit-Token (gzip)', String(dl.status));
+ok(dl.status === 200 && dlBody[0] === 0x50 && dlBody[1] === 0x4b, 'Backup-Download mit Kurzzeit-Token (ZIP)', String(dl.status));
 const otherPath = `/api/servers/${serverId}/files/download?path=%2Fwelt.txt`;
 ok((await fetch(`${BASE}${otherPath}&token=${dlt}`)).status === 401, 'Download-Token gilt nicht für andere Pfade');
 const ft = (await api('POST', '/auth/download-token', { token: admin, body: { path: '/api/servers/' + serverId + '/files/download?path=/welt.txt' } })).json?.token;
@@ -320,11 +320,15 @@ worlds = (await api('GET', worldPath, { token: admin })).json;
 ok(worlds?.active === 'Hochgeladen' && worlds.worlds.some((w) => w.name === 'Hochgeladen' && w.exists && w.sizeBytes > 0), 'hochgeladene Welt aktiv');
 ok((await upload(`${worldPath}/upload?name=..%2Fausbruch`, admin, 'welt.zip', worldZip)).status === 400, 'Weltname mit Pfad abgelehnt');
 ok((await upload(`${worldPath}/upload?name=Ohne`, admin, 'welt.zip', zip([{ name: 'readme.txt', data: 'keine Welt' }]))).status === 400, 'ZIP ohne level.dat abgelehnt');
-const worldDl = `/api${worldPath}/Hochgeladen/download`;
+// Welt-Download: erst als Aufgabe packen, dann die fertige Datei abholen.
+const wex = await api('POST', `${worldPath}/Hochgeladen/export`, { token: admin });
+const wext = await waitTask(admin, serverId, wex.json?.taskId);
+ok(wext?.status === 'DONE', 'Welt für den Download gepackt', wext?.error ?? wext?.status ?? '');
+const worldDl = `/api${worldPath}/exports/${wex.json?.taskId}`;
 const wdt = (await api('POST', '/auth/download-token', { token: admin, body: { path: worldDl } })).json?.token;
 const wdl = await fetch(`${BASE}${worldDl}?token=${wdt}`);
 const wdlBody = Buffer.from(await wdl.arrayBuffer());
-ok(wdl.status === 200 && wdlBody[0] === 0x1f && wdlBody[1] === 0x8b, 'Welt-Download (gzip)', String(wdl.status));
+ok(wdl.status === 200 && wdlBody[0] === 0x50 && wdlBody[1] === 0x4b && wdlBody.includes('level.dat'), 'Welt-Download (ZIP mit level.dat)', String(wdl.status));
 const nw = await api('POST', worldPath, { token: admin, body: { name: 'Neu', seed: '42' } });
 ok(nw.json?.active === 'Neu', 'neue Welt angelegt und aktiv', nw.json?.error ?? '');
 ok((await api('POST', worldPath, { token: admin, body: { name: 'Hochgeladen' } })).status === 409, 'vorhandener Weltname abgelehnt');
