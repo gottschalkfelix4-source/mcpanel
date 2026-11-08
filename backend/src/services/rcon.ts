@@ -2,20 +2,37 @@ import net from 'node:net';
 import type { Server } from '@prisma/client';
 import { nodeIdOf, nodeLocation } from '../lib/serverLocation.js';
 import { rconPreamble } from '../node/protocol.js';
+import { rawNodeDocker } from './nodeClients.js';
+
+/** Label, mit dem das Panel seine Minecraft-Container markiert (wie `LABEL_SERVER` in docker.ts). */
+const SERVER_LABEL = 'mcpanel.server';
 
 /**
  * Wohin die RCON-Verbindung geht: lokal über das Docker-Netz an den
- * Containernamen. Auf einer Node an die RCON-Weiterleitung des Agenten; die
- * erste Zeile nennt Token und Container, danach spricht man normales RCON.
- * So muss kein Minecraft-Container seinen RCON-Port veröffentlichen.
+ * Containernamen (dort ein Alias im Netz). Auf einer Node an die
+ * RCON-Weiterleitung des Agenten; die erste Zeile nennt Token und Container,
+ * danach spricht man normales RCON. So muss kein Minecraft-Container seinen
+ * RCON-Port veröffentlichen.
  */
-export function rconTarget(server: Pick<Server, 'id' | 'containerName'>): { host: string; port: number; preamble?: string } {
+export function rconTarget(server: Pick<Server, 'id' | 'containerName'>): { host: string; port: number; node?: { id: string; token: string } } {
   const nodeId = nodeIdOf(server.id);
   const node = nodeId ? nodeLocation(nodeId) : null;
   if (nodeId && !node) throw new Error(`Node ${nodeId} ist dem Panel nicht bekannt`);
   return node
-    ? { host: node.tunnelIp, port: node.ports.rcon, preamble: rconPreamble(node.agentToken, server.containerName) }
+    ? { host: node.tunnelIp, port: node.ports.rcon, node: { id: node.id, token: node.agentToken } }
     : { host: server.containerName, port: 25575 };
+}
+
+/**
+ * Container eines Servers auf einer Node, als Docker-ID. Der Agent schlägt den
+ * Container über die Docker-API nach – dort zählt der echte Containername,
+ * und der folgt dem Anzeigenamen („Mein-Server“). `containerName` ist nur ein
+ * Alias im Minecraft-Netz und würde dort nicht gefunden.
+ */
+async function nodeContainerId(nodeId: string, serverId: string): Promise<string> {
+  const running = await rawNodeDocker(nodeId).listContainers({ filters: { label: [`${SERVER_LABEL}=${serverId}`] } });
+  if (running.length === 0) throw new Error('Der Container läuft auf der Node nicht');
+  return running[0].Id;
 }
 
 const TYPE_AUTH = 3;
@@ -40,11 +57,12 @@ export class RconClient {
     private password: string,
     private timeoutMs = 8000,
     private onClose?: () => void,
-    /** Erste Zeile für die RCON-Weiterleitung eines Node-Agenten */
-    private preamble?: string,
+    /** Erste Zeile für die RCON-Weiterleitung eines Node-Agenten (auch erst beim Verbinden ermittelt) */
+    private preamble?: string | (() => Promise<string>),
   ) {}
 
-  connect(): Promise<void> {
+  async connect(): Promise<void> {
+    const preamble = typeof this.preamble === 'function' ? await this.preamble() : this.preamble;
     return new Promise((resolve, reject) => {
       this.rejectConnect = reject;
       const socket = net.createConnection({ host: this.host, port: this.port });
@@ -64,7 +82,7 @@ export class RconClient {
         socket.setTimeout(0);
         socket.removeListener('error', onError);
         socket.on('error', (e) => this.cleanup(e));
-        if (this.preamble) socket.write(this.preamble);
+        if (preamble) socket.write(preamble);
         this.send(TYPE_AUTH, this.password)
           .then(() => { this.rejectConnect = undefined; resolve(); })
           .catch(reject);
@@ -192,7 +210,11 @@ export function rconNotDelivered(error: unknown): boolean {
 
 function getConnection(server: Server): Connection {
   const key = server.containerName;
-  const { host, port, preamble } = rconTarget(server);
+  const { host, port, node } = rconTarget(server);
+  // Bei jedem Verbindungsaufbau neu nachschlagen: ein neu angelegter Container hat eine neue ID.
+  const preamble = node
+    ? async () => rconPreamble(node.token, await nodeContainerId(node.id, server.id))
+    : undefined;
   const target = `${host}:${port}`;
   const existing = connections.get(key);
   if (existing?.password === server.rconPassword && existing.target === target) return existing;

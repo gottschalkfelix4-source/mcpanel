@@ -442,6 +442,7 @@ function startRconProxy(profile: NodeProfile, allowed: (address: string | undefi
       const rest = buffered.subarray(end + 1);
       if (!request || !tokenMatches(profile.token, request.token)) {
         clearTimeout(timeout);
+        log(`RCON-Verbindung von ${normalize(client.remoteAddress)} abgelehnt: ${request ? 'falsches Token' : 'ungültige erste Zeile'}`);
         client.destroy();
         return;
       }
@@ -449,7 +450,10 @@ function startRconProxy(profile: NodeProfile, allowed: (address: string | undefi
         clearTimeout(timeout);
         const upstream = net.createConnection({ host: ip, port: 25575 });
         const close = () => { client.destroy(); upstream.destroy(); };
-        upstream.on('error', close);
+        upstream.on('error', (err) => {
+          log(`RCON zu ${request.container.slice(0, 32)} (${ip}:25575) gescheitert: ${err.message}`);
+          close();
+        });
         client.on('error', close);
         upstream.on('close', close);
         client.on('close', close);
@@ -458,8 +462,9 @@ function startRconProxy(profile: NodeProfile, allowed: (address: string | undefi
           client.pipe(upstream).pipe(client);
           client.resume();
         });
-      }, () => {
+      }, (err) => {
         clearTimeout(timeout);
+        log(`RCON-Weiterleitung abgelehnt: ${err instanceof Error ? err.message : err}`);
         client.destroy();
       });
     };
