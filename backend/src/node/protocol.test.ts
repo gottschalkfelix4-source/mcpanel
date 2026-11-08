@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nodeProfileSchema, rconHostPort, tokenMatches } from './protocol.js';
+import { agentPorts, nodeProfileSchema, parseRconPreamble, rconPreamble, tokenMatches } from './protocol.js';
 
 const base = {
   v: 1, nodeId: 'n1', name: 'Test', nodeIp: '192.168.1.50',
@@ -33,9 +33,25 @@ describe('Agent-Token', () => {
   });
 });
 
-describe('RCON-Port auf der Node', () => {
-  it('liegt 10000 über dem Spielport und bleibt im gültigen Bereich', () => {
-    expect(rconHostPort(25565)).toBe(35565);
-    expect(rconHostPort(60000)).toBe(50000);
+describe('RCON-Weiterleitung', () => {
+  it('nennt Token und Container in der ersten Zeile und liest sie wieder', () => {
+    const line = rconPreamble('t'.repeat(43), 'mc-abc123');
+    expect(line).toBe(`MCPANEL-RCON ${'t'.repeat(43)} mc-abc123\n`);
+    expect(parseRconPreamble(line)).toEqual({ token: 't'.repeat(43), container: 'mc-abc123' });
+  });
+
+  it('lässt keine Containernamen durch, mit denen sich die Docker-API umbiegen ließe', () => {
+    expect(() => rconPreamble('t', '../containers')).toThrow();
+    expect(parseRconPreamble('MCPANEL-RCON t ../../info')).toBeNull();
+    expect(parseRconPreamble('MCPANEL-RCON t mc-a extra')).toBeNull();
+    expect(parseRconPreamble('GET / HTTP/1.1')).toBeNull();
+  });
+});
+
+describe('Agent-Ports', () => {
+  it('veröffentlicht unter Windows ohne VPN einen eigenen Bereich, sonst die Standardports', () => {
+    expect(agentPorts('linux', 'direct')).toEqual({ docker: 2375, status: 7480, rcon: 7481, smb: 445 });
+    expect(agentPorts('windows', 'wireguard')).toEqual({ docker: 2375, status: 7480, rcon: 7481, smb: 445 });
+    expect(agentPorts('windows', 'direct')).toEqual({ docker: 24375, status: 24480, rcon: 24481, smb: 24445 });
   });
 });

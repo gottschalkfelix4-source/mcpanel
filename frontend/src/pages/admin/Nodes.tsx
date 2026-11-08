@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Check, CheckCircle2, ChevronDown, ChevronUp, Copy, Cpu, HardDrive, Home, KeyRound, Loader2, MemoryStick,
-  Network, Plus, RefreshCw, Server, ShieldCheck, Terminal, Trash2, Wifi,
+  Monitor, Network, Plus, RefreshCw, Server, ShieldCheck, Terminal, Trash2, Wifi,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatMemory, formatRelative } from '../../lib/format';
@@ -71,10 +71,22 @@ function StatusBadge({ node }: { node: NodeOverview }) {
 
 function ConnectionBadge({ node }: { node: NodeOverview }) {
   if (node.local) return <Badge tone="neutral"><Home size={11} />Hauptserver</Badge>;
-  return node.connection === 'direct'
-    ? <Badge tone="blue"><Wifi size={11} />LAN, ohne VPN</Badge>
-    : <Badge tone="purple"><ShieldCheck size={11} />WireGuard</Badge>;
+  return (
+    <>
+      {node.connection === 'direct'
+        ? <Badge tone="blue"><Wifi size={11} />LAN, ohne VPN</Badge>
+        : <Badge tone="purple"><ShieldCheck size={11} />WireGuard</Badge>}
+      {node.platform === 'windows' && <Badge tone="neutral"><Monitor size={11} />Windows</Badge>}
+    </>
+  );
 }
+
+type Platform = 'linux' | 'windows';
+
+const PLATFORMS: { value: Platform; label: string; hint: string }[] = [
+  { value: 'linux', label: 'Linux', hint: 'VPS, Root-Server oder Linux-PC – Befehl per SSH im Terminal' },
+  { value: 'windows', label: 'Windows', hint: 'PC mit Docker Desktop – Befehl in der PowerShell' },
+];
 
 function Meter({ icon, label, value, detail }: { icon: React.ReactNode; label: string; value: number; detail: string }) {
   return (
@@ -146,14 +158,22 @@ function NodeCard({ node, onInstall, onDelete }: { node: NodeOverview; onInstall
 
 // ---------------------------------------------------------------- Wizard ---
 
-function InstallInstructions({ install, direct }: { install: NodeInstall; direct: boolean }) {
+function InstallInstructions({ install, direct, platform }: { install: NodeInstall; direct: boolean; platform: Platform }) {
   const [showScript, setShowScript] = useState(false);
   return (
     <div className="space-y-3">
-      <p className="text-sm text-stone-300">
-        Melde dich per SSH auf {direct ? 'dem Rechner' : 'dem VPS'} an und füge diesen <strong>einen</strong> Befehl ein.
-        Er installiert bei Bedarf Docker, legt das Profil ab und startet den Node-Agenten.
-      </p>
+      {platform === 'windows' ? (
+        <p className="text-sm text-stone-300">
+          Starte auf dem Windows-PC <strong>Docker Desktop</strong>, öffne dann <strong>PowerShell als Administrator</strong>{' '}
+          (Rechtsklick auf Start → „Terminal (Administrator)“) und füge diesen <strong>einen</strong> Befehl ein. Er legt
+          Datenvolume und Firewall-Regeln an und startet den Node-Agenten.
+        </p>
+      ) : (
+        <p className="text-sm text-stone-300">
+          Melde dich per SSH auf {direct ? 'dem Rechner' : 'dem VPS'} an und füge diesen <strong>einen</strong> Befehl ein.
+          Er installiert bei Bedarf Docker, legt das Profil ab und startet den Node-Agenten.
+        </p>
+      )}
       <CopyBlock text={install.command} label="Befehl kopieren" />
       <button type="button" className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-200" onClick={() => setShowScript(!showScript)}>
         {showScript ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Skript im Klartext ansehen
@@ -174,6 +194,7 @@ function AddNodeWizard({ open, onClose }: { open: boolean; onClose: () => void }
   const [name, setName] = useState('');
   const [host, setHost] = useState('');
   const [direct, setDirect] = useState(false);
+  const [platform, setPlatform] = useState<Platform>('linux');
   const [listenPort, setListenPort] = useState(51820);
   const [dataRoot, setDataRoot] = useState('/opt/mcpanel-node');
   const [advanced, setAdvanced] = useState(false);
@@ -181,13 +202,14 @@ function AddNodeWizard({ open, onClose }: { open: boolean; onClose: () => void }
 
   useEffect(() => {
     if (!open) return;
-    setStep(1); setName(''); setHost(''); setDirect(false); setListenPort(51820);
+    setStep(1); setName(''); setHost(''); setDirect(false); setPlatform('linux'); setListenPort(51820);
     setDataRoot('/opt/mcpanel-node'); setAdvanced(false); setInstall(null);
   }, [open]);
 
   const create = useMutation({
     mutationFn: () => api.post<NodeInstall>('/nodes', {
-      name, publicHost: host, connection: direct ? 'direct' : 'wireguard', listenPort, dataRoot,
+      name, publicHost: host, connection: direct ? 'direct' : 'wireguard', platform, listenPort,
+      ...(platform === 'linux' ? { dataRoot } : {}),
     }),
     onSuccess: (data) => {
       setInstall(data);
@@ -241,6 +263,29 @@ function AddNodeWizard({ open, onClose }: { open: boolean; onClose: () => void }
             <input className="mc-input" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} autoFocus />
           </Field>
 
+          <Field label="Betriebssystem der Node">
+            <div className="grid grid-cols-2 gap-2">
+              {PLATFORMS.map((entry) => (
+                <button
+                  key={entry.value}
+                  type="button"
+                  onClick={() => setPlatform(entry.value)}
+                  className={clsx(
+                    'border p-3 text-left transition',
+                    platform === entry.value
+                      ? 'border-grass-dark bg-grass/20 text-white'
+                      : 'border-stone-700 bg-stone-800/60 text-stone-400 hover:text-stone-100',
+                  )}
+                >
+                  <span className="flex items-center gap-2 text-sm font-bold">
+                    {entry.value === 'windows' ? <Monitor size={15} /> : <Terminal size={15} />}{entry.label}
+                  </span>
+                  <span className="mt-1 block text-xs text-stone-400">{entry.hint}</span>
+                </button>
+              ))}
+            </div>
+          </Field>
+
           <div className="mc-well p-3">
             <Toggle checked={direct} onChange={setDirect} label={<span className="text-sm text-stone-200">Im selben Netzwerk wie der Hauptserver (ohne VPN)</span>} />
             <p className="mt-2 text-xs text-stone-400">
@@ -251,10 +296,14 @@ function AddNodeWizard({ open, onClose }: { open: boolean; onClose: () => void }
           </div>
 
           <Field
-            label={direct ? 'LAN-IP der Node' : 'Öffentliche Adresse der Node'}
+            label={direct ? (platform === 'windows' ? 'LAN-IP des Windows-PCs' : 'LAN-IP der Node') : 'Öffentliche Adresse der Node'}
             hint={direct
-              ? 'Feste private IPv4-Adresse, z. B. 192.168.1.50. Am besten im Router fest vergeben.'
-              : 'IP-Adresse oder DNS-Name des VPS. Spieler verbinden sich ebenfalls mit dieser Adresse.'}
+              ? platform === 'windows'
+                ? 'Feste private IPv4-Adresse des PCs (ipconfig → IPv4-Adresse), z. B. 192.168.1.50. Am besten im Router fest vergeben.'
+                : 'Feste private IPv4-Adresse, z. B. 192.168.1.50. Am besten im Router fest vergeben.'
+              : platform === 'windows'
+                ? 'Öffentliche IP oder DynDNS-Name des Anschlusses, an dem der PC hängt. Im Router UDP-Port und Spielports auf den PC weiterleiten.'
+                : 'IP-Adresse oder DNS-Name des VPS. Spieler verbinden sich ebenfalls mit dieser Adresse.'}
           >
             <input className="mc-input font-mono" value={host} onChange={(e) => setHost(e.target.value.trim())}
               placeholder={direct ? '192.168.1.50' : 'vps.example.com'} />
@@ -271,21 +320,31 @@ function AddNodeWizard({ open, onClose }: { open: boolean; onClose: () => void }
                     onChange={(e) => setListenPort(Number(e.target.value) || 51820)} />
                 </Field>
               )}
-              <Field label="Datenverzeichnis auf der Node" hint="Hier liegen die Serverdaten.">
-                <input className="mc-input font-mono" value={dataRoot} onChange={(e) => setDataRoot(e.target.value.trim())} />
-              </Field>
+              {platform === 'linux' && (
+                <Field label="Datenverzeichnis auf der Node" hint="Hier liegen die Serverdaten.">
+                  <input className="mc-input font-mono" value={dataRoot} onChange={(e) => setDataRoot(e.target.value.trim())} />
+                </Field>
+              )}
             </div>
           )}
 
-          <InfoNote>
-            Voraussetzung: Linux mit root-Zugang (Debian, Ubuntu, Fedora, Alpine …). Docker wird bei Bedarf automatisch installiert.
-          </InfoNote>
+          {platform === 'windows' ? (
+            <InfoNote>
+              Voraussetzung: Windows 10/11 mit <strong>Docker Desktop</strong> (Linux-Container, WSL 2) – installierbar mit{' '}
+              <span className="font-mono">winget install -e --id Docker.DockerDesktop</span>. Die Serverdaten liegen in einem
+              Docker-Volume; Docker Desktop muss laufen, damit die Node erreichbar ist.
+            </InfoNote>
+          ) : (
+            <InfoNote>
+              Voraussetzung: Linux mit root-Zugang (Debian, Ubuntu, Fedora, Alpine …). Docker wird bei Bedarf automatisch installiert.
+            </InfoNote>
+          )}
         </div>
       )}
 
       {step === 2 && install && (
         <div className="space-y-4">
-          <InstallInstructions install={install} direct={direct} />
+          <InstallInstructions install={install} direct={direct} platform={platform} />
           <div className="flex items-start gap-3 border border-stone-700 bg-stone-900/60 p-3 text-sm">
             <Loader2 size={18} className="mt-0.5 shrink-0 animate-spin text-gold" />
             <div>
@@ -393,8 +452,10 @@ export default function NodesPage() {
         footer={<Button variant="primary" onClick={() => setInstallFor(null)}>Schließen</Button>}>
         {install.isLoading ? <LoadingBlock /> : install.data ? (
           <div className="space-y-4">
-            <InstallInstructions install={install.data} direct={installFor?.connection === 'direct'} />
-            <Field label="Node später wieder entfernen" hint="Auf der Node ausführen. Die Serverdaten im Datenverzeichnis bleiben liegen.">
+            <InstallInstructions install={install.data} direct={installFor?.connection === 'direct'} platform={installFor?.platform === 'windows' ? 'windows' : 'linux'} />
+            <Field label="Node später wieder entfernen" hint={installFor?.platform === 'windows'
+              ? 'In der PowerShell auf dem PC ausführen. Die Serverdaten im Volume „mcpanel-node-data“ bleiben liegen.'
+              : 'Auf der Node ausführen. Die Serverdaten im Datenverzeichnis bleiben liegen.'}>
               <CopyBlock text={install.data.uninstall} label="Befehl kopieren" />
             </Field>
           </div>

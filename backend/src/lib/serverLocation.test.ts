@@ -5,7 +5,7 @@ import {
   setNodeLocation, setServerNode,
 } from './serverLocation.js';
 
-const vps = { id: 'vps', name: 'VPS', tunnelIp: '10.66.0.2', agentToken: 't', publicHost: 'vps.example.test', dataRoot: '/opt/mcpanel-node' };
+const vps = { id: 'vps', name: 'VPS', tunnelIp: '10.66.0.2', agentToken: 't', publicHost: 'vps.example.test', dataRoot: '/opt/mcpanel-node', ports: { docker: 2375, status: 7480, rcon: 7481, smb: 445 }, dataVolume: null };
 
 afterEach(() => {
   replaceServerLocations([]);

@@ -34,13 +34,13 @@ import net from 'node:net';
 import os from 'node:os';
 import { promisify } from 'node:util';
 import {
-  AGENT_DOCKER_PORT,
-  AGENT_STATUS_PORT,
+  AGENT_INTERNAL_PORTS,
   AGENT_TOKEN_HEADER,
   NODE_MARKER,
   SMB_SHARE,
   SMB_USER,
   nodeProfileSchema,
+  parseRconPreamble,
   tokenMatches,
   type AgentStatus,
   type NodeProfile,
@@ -59,7 +59,8 @@ function loadProfile(): NodeProfile {
   const file = process.env.NODE_CONFIG ?? '/opt/mcpanel-node/node.json';
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    // Eine BOM (Windows-Editoren, PowerShell 5.1) ist kein Grund zum Abbruch.
+    raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   } catch (err) {
     throw new Error(`Profil ${file} nicht lesbar: ${err instanceof Error ? err.message : err}`);
   }
@@ -70,9 +71,23 @@ function loadProfile(): NodeProfile {
 
 const normalize = (address: string | undefined) => (address ?? '').replace(/^::ffff:/, '');
 
+/** Linux: Host-Netz. Windows (Docker Desktop): eigenes Netz mit veröffentlichten Ports. */
+const bridged = (profile: NodeProfile) => profile.platform === 'windows';
+
+/**
+ * Wo lauschen die Dienste? Im Tunnel auf der Tunneladresse. Ohne VPN unter
+ * Linux auf der LAN-IP des Rechners; unter Docker Desktop gehört die LAN-IP
+ * Windows, nicht dem Container – dort auf allen Adressen des Containers.
+ */
+const bindAddress = (profile: NodeProfile) =>
+  profile.mode === 'direct' && bridged(profile) ? '0.0.0.0' : profile.nodeIp;
+
 /** Wer darf überhaupt anklopfen? Im Tunnel nur das Panel, im LAN nur private Adressen. */
 function sourceAllowed(profile: NodeProfile): (address: string | undefined) => boolean {
   if (profile.mode === 'wireguard') return (address) => normalize(address) === profile.panelIp;
+  // Docker Desktop reicht veröffentlichte Ports mit eigener Absenderadresse
+  // weiter – die echte Adresse im LAN ist hier nicht zu sehen. Es bleibt das Token.
+  if (bridged(profile)) return () => true;
   const list = new net.BlockList();
   for (const range of PRIVATE_RANGES) {
     const [address, prefix] = range.split('/');
@@ -169,14 +184,16 @@ async function setupSamba(profile: NodeProfile): Promise<void> {
   const allowed = profile.mode === 'wireguard'
     ? profile.panelIp!
     : '10.0.0.0/255.0.0.0 172.16.0.0/255.240.0.0 192.168.0.0/255.255.0.0 127.0.0.1';
+  const bindAll = profile.mode === 'direct' && bridged(profile);
   const conf = [
     '[global]',
     '  server role = standalone server',
     '  workgroup = MCPANEL',
     // Samba übergeht Punkt-zu-Punkt-Schnittstellen wie WireGuard, wenn sie nur
     // als Adresse oder Name genannt sind – mit Netzmaske nimmt es sie an.
-    `  interfaces = ${profile.mode === 'wireguard' ? `${profile.nodeIp}/${profile.prefix}` : profile.nodeIp}`,
-    '  bind interfaces only = yes',
+    ...(bindAll
+      ? ['  bind interfaces only = no']
+      : [`  interfaces = ${profile.mode === 'wireguard' ? `${profile.nodeIp}/${profile.prefix}` : profile.nodeIp}`, '  bind interfaces only = yes']),
     `  hosts allow = ${allowed}`,
     '  hosts deny = 0.0.0.0/0 ::/0',
     '  smb ports = 445',
@@ -292,7 +309,7 @@ function startDockerProxy(profile: NodeProfile, allowed: (address: string | unde
     client.on('data', onData);
     client.on('error', () => client.destroy());
   });
-  server.listen(AGENT_DOCKER_PORT, profile.nodeIp, () => log(`Docker-API auf ${profile.nodeIp}:${AGENT_DOCKER_PORT}`));
+  server.listen(AGENT_INTERNAL_PORTS.docker, bindAddress(profile), () => log(`Docker-API auf ${bindAddress(profile)}:${AGENT_INTERNAL_PORTS.docker}`));
   return server;
 }
 
@@ -363,7 +380,93 @@ function startStatusServer(profile: NodeProfile, allowed: (address: string | und
       (err) => res.writeHead(500).end(String(err)),
     );
   });
-  server.listen(AGENT_STATUS_PORT, profile.nodeIp, () => log(`Zustandsabfrage auf ${profile.nodeIp}:${AGENT_STATUS_PORT}`));
+  server.listen(AGENT_INTERNAL_PORTS.status, bindAddress(profile), () => log(`Zustandsabfrage auf ${bindAddress(profile)}:${AGENT_INTERNAL_PORTS.status}`));
+  return server;
+}
+
+// ---------------------------------------------------------------------------
+// RCON-Weiterleitung
+// ---------------------------------------------------------------------------
+
+/** Adresse eines Panel-Containers im Minecraft-Netz der Node. */
+function containerAddress(profile: NodeProfile, name: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ socketPath: DOCKER_SOCKET, path: `/containers/${encodeURIComponent(name)}/json`, timeout: 5000 }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          if (res.statusCode !== 200) throw new Error(`Container ${name} nicht gefunden`);
+          const info = JSON.parse(body) as {
+            Config?: { Labels?: Record<string, string> };
+            NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> };
+          };
+          // Nur Container, die das Panel angelegt hat – kein Sprungbrett zu beliebigen Diensten.
+          if (!info.Config?.Labels?.['mcpanel.server']) throw new Error(`${name} ist kein Panel-Container`);
+          const ip = info.NetworkSettings?.Networks?.[profile.dockerNetwork]?.IPAddress;
+          if (!ip) throw new Error(`${name} hängt nicht im Netz ${profile.dockerNetwork}`);
+          resolve(ip);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Docker antwortet nicht')); });
+  });
+}
+
+/**
+ * RCON der Minecraft-Server wird nirgends veröffentlicht. Das Panel verbindet
+ * sich hierher, nennt in der ersten Zeile Token und Container, und der Agent
+ * reicht die Verbindung an Port 25575 des Containers durch.
+ */
+function startRconProxy(profile: NodeProfile, allowed: (address: string | undefined) => boolean): net.Server {
+  const server = net.createServer((client) => {
+    if (!allowed(client.remoteAddress)) {
+      client.destroy();
+      return;
+    }
+    let buffered = Buffer.alloc(0);
+    const timeout = setTimeout(() => client.destroy(), 10_000);
+    const onData = (chunk: Buffer) => {
+      buffered = Buffer.concat([buffered, chunk]);
+      const end = buffered.indexOf('\n');
+      if (end < 0) {
+        if (buffered.length > 512) client.destroy();
+        return;
+      }
+      client.removeListener('data', onData);
+      client.pause();
+      const request = parseRconPreamble(buffered.subarray(0, end).toString('utf8'));
+      const rest = buffered.subarray(end + 1);
+      if (!request || !tokenMatches(profile.token, request.token)) {
+        clearTimeout(timeout);
+        client.destroy();
+        return;
+      }
+      containerAddress(profile, request.container).then((ip) => {
+        clearTimeout(timeout);
+        const upstream = net.createConnection({ host: ip, port: 25575 });
+        const close = () => { client.destroy(); upstream.destroy(); };
+        upstream.on('error', close);
+        client.on('error', close);
+        upstream.on('close', close);
+        client.on('close', close);
+        upstream.once('connect', () => {
+          if (rest.length) upstream.write(rest);
+          client.pipe(upstream).pipe(client);
+          client.resume();
+        });
+      }, () => {
+        clearTimeout(timeout);
+        client.destroy();
+      });
+    };
+    client.on('data', onData);
+    client.on('error', () => client.destroy());
+  });
+  server.listen(AGENT_INTERNAL_PORTS.rcon, bindAddress(profile), () => log(`RCON-Weiterleitung auf ${bindAddress(profile)}:${AGENT_INTERNAL_PORTS.rcon}`));
   return server;
 }
 
@@ -371,18 +474,20 @@ function startStatusServer(profile: NodeProfile, allowed: (address: string | und
 
 async function main(): Promise<void> {
   const profile = loadProfile();
-  log(`MCPanel-Node „${profile.name}“ (${VERSION}) startet – ${profile.mode === 'wireguard' ? 'über WireGuard' : 'im selben Netz ohne VPN'}`);
+  log(`MCPanel-Node „${profile.name}“ (${VERSION}, ${profile.platform === 'windows' ? 'Docker Desktop' : 'Linux'}) startet – ${profile.mode === 'wireguard' ? 'über WireGuard' : 'im selben Netz ohne VPN'}`);
   await fsp.mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
   await fsp.rm(`${RUN_DIR}/ready`, { force: true });
   if (profile.mode === 'wireguard') {
     await setupWireGuard(profile);
-    await isolateContainers();
-  } else {
+    // Im Host-Netz könnten Container über die Node in den Tunnel; unter Docker
+    // Desktop lebt der Tunnel im Agent-Container, dort kommt keiner hin.
+    if (!bridged(profile)) await isolateContainers();
+  } else if (!bridged(profile)) {
     assertLocalAddress(profile);
   }
   await setupSamba(profile);
   const allowed = sourceAllowed(profile);
-  const servers: net.Server[] = [startDockerProxy(profile, allowed), startStatusServer(profile, allowed)];
+  const servers: net.Server[] = [startDockerProxy(profile, allowed), startStatusServer(profile, allowed), startRconProxy(profile, allowed)];
   await fsp.writeFile(`${RUN_DIR}/ready`, new Date().toISOString());
   log('Bereit – wartet auf das Panel');
 

@@ -32,14 +32,18 @@ import {
   setNodeLocation,
 } from '../lib/serverLocation.js';
 import {
-  AGENT_DOCKER_PORT,
-  AGENT_STATUS_PORT,
+  AGENT_INTERNAL_PORTS,
   AGENT_TOKEN_HEADER,
+  WINDOWS_DATA_ROOT,
+  WINDOWS_DATA_VOLUME,
+  WINDOWS_PUBLISHED_PORTS,
+  agentPorts,
   NODE_MARKER,
   SMB_SHARE,
   SMB_USER,
   type AgentStatus,
   type NodeConnection,
+  type NodePlatform,
   type NodeProfile,
 } from '../node/protocol.js';
 import * as dockerSvc from './docker.js';
@@ -100,10 +104,16 @@ function registerNode(node: Node): void {
     agentToken: node.agentToken,
     publicHost: node.publicHost,
     dataRoot: node.dataRoot,
+    ports: portsOf(node),
+    dataVolume: isWindowsNode(node) ? WINDOWS_DATA_VOLUME : null,
   });
 }
 
 const isTunnelNode = (node: Pick<Node, 'connection'>) => node.connection !== 'direct';
+const isWindowsNode = (node: Pick<Node, 'platform'>) => node.platform === 'windows';
+const platformOf = (node: Pick<Node, 'platform'>): NodePlatform => (isWindowsNode(node) ? 'windows' : 'linux');
+const portsOf = (node: Pick<Node, 'platform' | 'connection'>) =>
+  agentPorts(platformOf(node), isTunnelNode(node) ? 'wireguard' : 'direct');
 
 /** Lädt Nodes und Serverstandorte in die Registry. Muss vor allen Serveroperationen laufen. */
 export async function loadNodes(): Promise<void> {
@@ -183,6 +193,7 @@ async function mountNode(node: Node): Promise<void> {
     // Dateimanager soll das zeitnah sehen.
     'actimeo=1',
     'nobrl',
+    `port=${portsOf(node).smb}`,
     // Ohne Tunnel verlangt der Agent SMB3-Verschlüsselung.
     ...(isTunnelNode(node) ? [] : ['seal']),
   ].join(',');
@@ -205,7 +216,7 @@ async function mountNode(node: Node): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function fetchAgentStatus(node: Node): Promise<AgentStatus> {
-  const response = await fetch(`http://${node.tunnelIp}:${AGENT_STATUS_PORT}/status`, {
+  const response = await fetch(`http://${node.tunnelIp}:${portsOf(node).status}/status`, {
     headers: { [AGENT_TOKEN_HEADER]: node.agentToken },
     signal: AbortSignal.timeout(5000),
   });
@@ -245,7 +256,7 @@ async function checkNode(node: Node, peers: Map<string, PeerStatus>, peerErrors:
       reason = !isTunnelNode(node)
         ? /Token/.test(detail)
           ? detail
-          : `Agent unter ${node.tunnelIp} nicht erreichbar – läuft er, und lässt die Firewall der Node TCP ${AGENT_STATUS_PORT}, ${AGENT_DOCKER_PORT} und 445 aus dem LAN durch?`
+          : `Agent unter ${node.tunnelIp} nicht erreichbar – läuft er, und lässt die Firewall der Node TCP ${Object.values(portsOf(node)).join(', ')} aus dem LAN durch?`
         : !handshake || Date.now() - handshake > HANDSHAKE_STALE_MS
         ? 'Kein Tunnel-Handschlag – läuft der Agent, und ist UDP-Port ' + node.listenPort + ' auf der Node offen?'
         : `Agent nicht erreichbar: ${err instanceof Error ? err.message : err}`;
@@ -372,6 +383,8 @@ export interface NodeInput {
   publicHost: string;
   /** `direct`: im selben Netz ohne VPN, `publicHost` ist dann die LAN-IP */
   connection?: NodeConnection;
+  /** `windows`: Docker Desktop, Installation per PowerShell */
+  platform?: NodePlatform;
   listenPort?: number;
   dataRoot?: string;
 }
@@ -421,8 +434,10 @@ export async function createNode(input: NodeInput): Promise<Node> {
       name: input.name.trim(),
       publicHost,
       connection: direct ? 'direct' : 'wireguard',
+      platform: input.platform === 'windows' ? 'windows' : 'linux',
       listenPort: input.listenPort ?? 51820,
-      dataRoot: input.dataRoot?.trim() || '/opt/mcpanel-node',
+      // Unter Windows liegen die Daten im Volume, das der Agent hier einhängt.
+      dataRoot: input.platform === 'windows' ? WINDOWS_DATA_ROOT : input.dataRoot?.trim() || '/opt/mcpanel-node',
       tunnelIp: direct ? publicHost : nextTunnelIp([panelTunnelIp(), ...used.map((row) => row.tunnelIp)]),
       publicKey: keys.publicKey,
       privateKey: keys.privateKey,
@@ -494,10 +509,12 @@ export async function nodeProfile(node: Node): Promise<NodeProfile> {
     v: 1 as const,
     nodeId: node.id,
     name: node.name,
+    platform: platformOf(node),
     nodeIp: node.tunnelIp,
     token: node.agentToken,
     smbPassword: node.smbPassword,
     dataRoot: node.dataRoot,
+    dockerNetwork: config.dockerNetwork,
   };
   if (!isTunnelNode(node)) return { ...base, mode: 'direct' };
   const panel = await panelKeyPair();
@@ -520,6 +537,7 @@ export async function nodeProfile(node: Node): Promise<NodeProfile> {
  * jeder Befehl, der von stdin liest, den Rest des Skripts verschlucken.
  */
 export async function installScript(node: Node): Promise<string> {
+  if (isWindowsNode(node)) return installScriptWindows(node);
   const profile = JSON.stringify(await nodeProfile(node));
   const image = nodeImage();
   if (!/^[a-z0-9./:_@-]+$/i.test(image)) throw new Error('NODE_IMAGE enthält unzulässige Zeichen');
@@ -540,7 +558,7 @@ export async function installScript(node: Node): Promise<string> {
       "  EXTRA=''",
       '  ip -4 addr 2>/dev/null | grep -q " $NODE_IP/" || warn "Die Adresse $NODE_IP ist auf diesem Rechner nicht zu finden – stimmt die LAN-IP im Panel?"',
     ].join('\n');
-  const agentPorts = `${AGENT_DOCKER_PORT} ${AGENT_STATUS_PORT} 445`;
+  const agentPortList = Object.values(AGENT_INTERNAL_PORTS).join(' ');
   const firewall = tunnel
     ? [
       '  # Firewall: WireGuard braucht UDP; die Spielports veröffentlicht Docker selbst.',
@@ -554,11 +572,11 @@ export async function installScript(node: Node): Promise<string> {
       '  # Firewall: Agent (Docker-API, Zustand) und Samba nur aus privaten Netzen.',
       "  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then",
       '    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do',
-      `      for port in ${agentPorts}; do ufw allow from "$net" to any port "$port" proto tcp >/dev/null; done`,
+      `      for port in ${agentPortList}; do ufw allow from "$net" to any port "$port" proto tcp >/dev/null; done`,
       '    done',
       '    say "ufw: Agent-Ports aus dem LAN freigegeben"',
       '  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then',
-      `    for port in ${agentPorts}; do firewall-cmd -q --permanent --add-port="$port/tcp"; done`,
+      `    for port in ${agentPortList}; do firewall-cmd -q --permanent --add-port="$port/tcp"; done`,
       '    firewall-cmd -q --reload && say "firewalld: Agent-Ports freigegeben"',
       '  fi',
     ].join('\n');
@@ -608,7 +626,7 @@ MCPANEL_PROFIL
   umask 022
 
   say "Lade $IMAGE ..."
-  docker pull -q "$IMAGE" >/dev/null
+  docker pull -q "$IMAGE" >/dev/null || docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "Abbild $IMAGE nicht ladbar."
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker run -d --name "$NAME" --restart unless-stopped \\
     --network host $EXTRA \\
@@ -643,13 +661,128 @@ main "$@" </dev/null
 `;
 }
 
+/** PowerShell-Zeichenkette in einfachen Anführungszeichen. */
+const psQuote = (value: string) => `'${value.replace(/'/g, "''")}'`;
+
+/**
+ * Installationsskript für Windows mit Docker Desktop (PowerShell 5.1 und 7).
+ *
+ * Unterschiede zu Linux: kein Host-Netz – der Agent hängt im Minecraft-Netz
+ * und Docker Desktop veröffentlicht seine Ports am Windows-Rechner; Port 445
+ * gehört Windows selbst; die Daten liegen in einem Docker-Volume statt auf
+ * NTFS. Bewusst mit `ErrorActionPreference = Continue`: in Windows PowerShell
+ * 5.1 würde sonst jede stderr-Zeile von docker zum Abbruch.
+ */
+async function installScriptWindows(node: Node): Promise<string> {
+  const profile = JSON.stringify(await nodeProfile(node));
+  const image = nodeImage();
+  if (!/^[a-z0-9./:_@-]+$/i.test(image)) throw new Error('NODE_IMAGE enthält unzulässige Zeichen');
+  const tunnel = isTunnelNode(node);
+  const p = WINDOWS_PUBLISHED_PORTS;
+  const i = AGENT_INTERNAL_PORTS;
+  const portArgs = tunnel
+    ? `'--cap-add', 'NET_ADMIN', '--device', '/dev/net/tun', '-p', "$($WgPort):$($WgPort)/udp"`
+    : `'-p', '${p.docker}:${i.docker}', '-p', '${p.status}:${i.status}', '-p', '${p.rcon}:${i.rcon}', '-p', '${p.smb}:${i.smb}'`;
+  const firewall = tunnel
+    ? `    New-NetFirewallRule -DisplayName 'MCPanel Node WireGuard' -Direction Inbound -Protocol UDP -LocalPort $WgPort -Action Allow | Out-Null`
+    : `    New-NetFirewallRule -DisplayName 'MCPanel Node Agent' -Direction Inbound -Protocol TCP -LocalPort ${p.docker},${p.status},${p.rcon},${p.smb} -RemoteAddress LocalSubnet -Action Allow | Out-Null`;
+  const hint = tunnel
+    ? 'Im Router UDP $WgPort sowie TCP/UDP $McPorts (Minecraft) auf diesen Rechner weiterleiten.'
+    : 'Spieler im LAN verbinden sich mit ' + node.tunnelIp + '; für Zugriff von außen die Ports $McPorts im Router auf diesen Rechner weiterleiten.';
+  const safeName = node.name.replace(/[^\p{L}\p{N} ._-]/gu, '');
+  return `# MCPanel – Installation der Node "${safeName}" (Windows, Docker Desktop)
+# Erneut ausführen ist unschädlich: der Agent wird mit demselben Profil neu gestartet.
+& {
+  $ErrorActionPreference = 'Continue'
+  $Image = ${psQuote(image)}
+  $Name = 'mcpanel-node'
+  $Volume = '${WINDOWS_DATA_VOLUME}'
+  $Network = ${psQuote(config.dockerNetwork)}
+  $WgPort = ${node.listenPort}
+  $McPorts = '${config.portRange.min}-${config.portRange.max}'
+  function Say([string]$Text) { Write-Host "[mcpanel-node] $Text" -ForegroundColor Green }
+  function Warn([string]$Text) { Write-Host "[mcpanel-node] $Text" -ForegroundColor Yellow }
+  function Fail([string]$Text) { Write-Host "[mcpanel-node] $Text" -ForegroundColor Red; throw $Text }
+
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    Fail 'Docker Desktop fehlt. Installieren (z. B. "winget install -e --id Docker.DockerDesktop"), starten und den Befehl erneut ausführen.'
+  }
+  $osType = docker info --format '{{.OSType}}' 2>$null
+  if ($LASTEXITCODE -ne 0) { Fail 'Docker Desktop läuft nicht. Bitte starten und den Befehl erneut ausführen.' }
+  if ("$osType".Trim() -ne 'linux') { Fail 'Docker Desktop nutzt Windows-Container. Bitte auf Linux-Container umschalten.' }
+  $api = "$(docker version --format '{{.Server.APIVersion}}' 2>$null)".Trim()
+  if (-not $api -or [version]$api -lt [version]'1.45') { Fail 'Docker Desktop ist zu alt (Docker Engine 26 oder neuer nötig). Bitte aktualisieren.' }
+
+  Say "Lade $Image ..."
+  docker pull -q $Image | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    docker image inspect $Image 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Abbild $Image nicht ladbar." }
+  }
+
+  docker volume create $Volume | Out-Null
+  docker network inspect $Network 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { docker network create $Network | Out-Null }
+
+  # Das Profil reist Base64-kodiert: Windows PowerShell 5.1 setzt beim Weiterleiten
+  # an Programme sonst eine BOM davor oder verstümmelt Umlaute.
+  $profileData = '${Buffer.from(profile, 'utf8').toString('base64')}'
+  docker run --rm -v "$($Volume):/opt/mcpanel-node" --entrypoint sh $Image -c "umask 077 && mkdir -p /opt/mcpanel-node/servers && echo $profileData | base64 -d > /opt/mcpanel-node/node.json"
+  if ($LASTEXITCODE -ne 0) { Fail 'Das Profil ließ sich nicht im Volume ablegen.' }
+
+  docker rm -f $Name 2>$null | Out-Null
+  $runArgs = @('run', '-d', '--name', $Name, '--restart', 'unless-stopped', '--network', $Network,
+    '--health-cmd', 'test -f /run/mcpanel-node/ready', '--health-interval', '30s',
+    '-e', 'MCPANEL_ROLE=node', '-e', 'NODE_CONFIG=/opt/mcpanel-node/node.json',
+    '-v', '/var/run/docker.sock:/var/run/docker.sock', '-v', "$($Volume):/opt/mcpanel-node",
+    ${portArgs}, $Image)
+  docker @runArgs | Out-Null
+  if ($LASTEXITCODE -ne 0) { Fail 'Der Agent-Container ließ sich nicht starten.' }
+
+  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+  if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Get-NetFirewallRule -DisplayName 'MCPanel Node*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+${firewall}
+    New-NetFirewallRule -DisplayName 'MCPanel Node Minecraft TCP' -Direction Inbound -Protocol TCP -LocalPort $McPorts -Action Allow | Out-Null
+    New-NetFirewallRule -DisplayName 'MCPanel Node Minecraft UDP' -Direction Inbound -Protocol UDP -LocalPort $McPorts -Action Allow | Out-Null
+    Say 'Windows-Firewall: Regeln „MCPanel Node …“ angelegt'
+  } else {
+    Warn 'Ohne Administratorrechte keine Firewall-Regeln. Für Zugriff aus dem Netz PowerShell als Administrator öffnen und den Befehl erneut ausführen.'
+  }
+
+  Say 'Warte auf den Agenten ...'
+  for ($try = 0; $try -lt 60; $try++) {
+    $logs = (docker logs $Name 2>&1 | Out-String)
+    if ($logs -match 'Bereit') {
+      Say 'Fertig! Das Panel verbindet sich jetzt mit dieser Node.'
+      Say "${hint}"
+      Say 'Docker Desktop muss laufen, damit die Node erreichbar ist – am besten mit Windows starten lassen.'
+      return
+    }
+    if ($logs -match 'ABBRUCH') {
+      Write-Host $logs
+      Fail 'Der Agent konnte nicht starten.'
+    }
+    Start-Sleep -Seconds 2
+  }
+  docker logs --tail 20 $Name
+  Fail "Der Agent meldet sich nicht. Protokoll: docker logs $Name"
+}
+`;
+}
+
 /** Ein Befehl zum Einfügen auf der Node – das Skript steckt darin, Base64-kodiert. */
 export async function installCommand(node: Node): Promise<string> {
   const script = Buffer.from(await installScript(node), 'utf8').toString('base64');
-  return `echo '${script}' | base64 -d | $(command -v sudo) sh`;
+  return isWindowsNode(node)
+    ? `iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${script}')))`
+    : `echo '${script}' | base64 -d | $(command -v sudo) sh`;
 }
 
-export function uninstallCommand(node: Pick<Node, 'dataRoot' | 'connection'>): string {
+export function uninstallCommand(node: Pick<Node, 'dataRoot' | 'connection' | 'platform'>): string {
+  if (isWindowsNode(node)) {
+    return `docker rm -f mcpanel-node; Get-NetFirewallRule -DisplayName 'MCPanel Node*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule`;
+  }
   return isTunnelNode(node)
     ? `docker rm -f mcpanel-node; ip link del wg-mcpanel 2>/dev/null; rm -f ${node.dataRoot}/node.json`
     : `docker rm -f mcpanel-node; rm -f ${node.dataRoot}/node.json`;
@@ -677,6 +810,7 @@ export interface NodeOverview {
   local: boolean;
   /** `null` beim Hauptserver */
   connection: NodeConnection | null;
+  platform: NodePlatform | null;
   publicHost: string;
   listenPort: number | null;
   tunnelIp: string | null;
@@ -739,6 +873,7 @@ export async function nodeOverview(): Promise<NodeOverview[]> {
     name: 'Hauptserver',
     local: true,
     connection: null,
+    platform: null,
     publicHost: host,
     listenPort: null,
     tunnelIp: null,
@@ -763,6 +898,7 @@ export async function nodeOverview(): Promise<NodeOverview[]> {
       name: node.name,
       local: false,
       connection: isTunnelNode(node) ? 'wireguard' : 'direct',
+      platform: platformOf(node),
       publicHost: node.publicHost,
       listenPort: isTunnelNode(node) ? node.listenPort : null,
       tunnelIp: node.tunnelIp,

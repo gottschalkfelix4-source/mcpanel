@@ -411,6 +411,8 @@ export interface NodeOverview {
   local: boolean;
   /** Verbindungsart, `null` beim Hauptserver */
   connection: 'wireguard' | 'direct' | null;
+  /** `windows` = Docker Desktop, `null` beim Hauptserver */
+  platform: 'linux' | 'windows' | null;
   publicHost: string;
   listenPort: number | null;
   tunnelIp: string | null;
