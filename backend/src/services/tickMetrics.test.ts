@@ -94,6 +94,26 @@ it('lässt fehlende TPS unverfügbar, wenn der Server die Spielzeit-Abfrage nich
   expect(result.history).toHaveLength(0);
 });
 
+it('nennt den RCON-Fehler, wenn keine einzige Abfrage durchkommt', async () => {
+  vi.mocked(getState).mockResolvedValue({ state: 'running', health: 'healthy', startedAt: 'rcon-weg' });
+  const refused = Object.assign(new Error('connect ECONNREFUSED 10.66.0.2:7481'), { code: 'ECONNREFUSED', address: '10.66.0.2', port: 7481 });
+  vi.mocked(rconCommand).mockRejectedValue(refused);
+  const onNode = await getTickMetrics({ id: 'rcon-node', type: 'FABRIC', nodeId: 'node-1' } as any);
+  expect(onNode.available).toBe(false);
+  expect(onNode.message).toBe('RCON ist nicht erreichbar: Verbindung abgelehnt (10.66.0.2:7481). Der Server liegt auf einer Node – RCON läuft dort über den Agenten; ist er aktuell und erreichbar?');
+  vi.mocked(rconCommand).mockRejectedValue(new Error('RCON: Passwort falsch'));
+  expect((await getTickMetrics({ id: 'rcon-lokal', type: 'FABRIC', nodeId: null } as any)).message).toBe('RCON ist nicht erreichbar: RCON: Passwort falsch.');
+});
+
+it('bleibt beim allgemeinen Hinweis, wenn RCON antwortet, aber nichts Messbares liefert', async () => {
+  vi.mocked(getState).mockResolvedValue({ state: 'running', health: 'healthy', startedAt: 'teils-fehler' });
+  vi.mocked(rconCommand).mockImplementation(async (_server, command) => {
+    if (command === 'spark tps') throw new Error('RCON Timeout');
+    return 'Unknown command at position 0';
+  });
+  expect((await getTickMetrics({ id: 'teils-fehler', type: 'FABRIC' } as any)).message).toMatch(/^Keine Tick-Messwerte verfügbar/);
+});
+
 it('verwendet langsame RCON-Antworten nicht als TPS-Messung', async () => {
   vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1500);
   vi.mocked(getState).mockResolvedValue({ state: 'running', health: 'healthy', startedAt: 'langsame-antwort' });

@@ -60,6 +60,21 @@ export function gameTimeTps(previous: GameTime, current: GameTime): number | nul
   return tps <= 20.5 ? Math.min(20, tps) : null;
 }
 
+/** RCON-Fehler für die Anzeige auf Deutsch beschreiben (Systemfehler kommen englisch). */
+export function describeRconError(error: unknown): string {
+  const err = error as NodeJS.ErrnoException & { address?: string; port?: number; hostname?: string };
+  const target = err?.address ? ` (${err.address}${err.port ? `:${err.port}` : ''})` : '';
+  switch (err?.code) {
+    case 'ECONNREFUSED': return `Verbindung abgelehnt${target}`;
+    case 'ECONNRESET': return `Verbindung von der Gegenseite getrennt${target}`;
+    case 'ETIMEDOUT': return `Zeitüberschreitung beim Verbinden${target}`;
+    case 'EHOSTUNREACH': case 'ENETUNREACH': return `Ziel nicht erreichbar${target}`;
+    case 'ENOTFOUND': case 'EAI_AGAIN': return `Adresse${err.hostname ? ` ${err.hostname}` : ''} nicht auflösbar`;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return message || 'Unbekannter Fehler';
+}
+
 export async function getTickMetrics(server: Server): Promise<Measurement> {
   const existing = pending.get(server.id);
   if (existing) return existing;
@@ -73,7 +88,12 @@ export async function getTickMetrics(server: Server): Promise<Measurement> {
     const previous = entries.get(server.id);
     const reusable = previous?.startedAt === state.startedAt ? previous : undefined;
     if (reusable && Date.now() - reusable.at < 30_000) return reusable.result;
-    const ask = (command: string) => rconCommand(server, command).catch(() => '');
+    // Fehler einzelner Befehle nicht weiterwerfen, aber merken: Antwortet RCON
+    // überhaupt nicht, soll die Anzeige den Grund nennen statt nur „keine Werte“.
+    const rcon: { answered: boolean; error: string | null } = { answered: false, error: null };
+    const ask = (command: string) => rconCommand(server, command).then(
+      response => { rcon.answered = true; return response; },
+      error => { rcon.error ??= describeRconError(error); return ''; });
     let source: Source | 'gametime' = 'spark';
     let metrics = parseTickMetrics(await ask('spark tps'), source);
     const loader = serverLoader(server);
@@ -115,8 +135,11 @@ export async function getTickMetrics(server: Server): Promise<Measurement> {
     const measuredAt = new Date().toISOString();
     const available = metrics.tps !== null || metrics.mspt !== null;
     const history = available ? [...(reusable?.result.history ?? []), { at: measuredAt, ...metrics }].slice(-240) : reusable?.result.history ?? [];
+    const unreachable = !rcon.answered && rcon.error !== null
+      ? `RCON ist nicht erreichbar: ${rcon.error}.${server.nodeId ? ' Der Server liegt auf einer Node – RCON läuft dort über den Agenten; ist er aktuell und erreichbar?' : ''}`
+      : null;
     const result: Measurement = { at: measuredAt, ...metrics, source: available ? source : null, msptSource, tpsWindowSeconds, available, history,
-      message: available ? '' : 'Keine Tick-Messwerte verfügbar. Spark oder ein unterstützter Serverbefehl muss vorhanden und über RCON erreichbar sein.' };
+      message: available ? '' : unreachable ?? 'Keine Tick-Messwerte verfügbar. Spark oder ein unterstützter Serverbefehl muss vorhanden und über RCON erreichbar sein.' };
     entries.set(server.id, { at: Date.now(), startedAt: state.startedAt, counter, result });
     return result;
   };

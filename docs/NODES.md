@@ -116,6 +116,26 @@ Panel (Hauptserver)                                   Node
   ihnen lehnt das Panel ab, statt halbe Zustände zu erzeugen. Autostart-Server
   starten, sobald die Node wieder verbunden ist.
 
+## Agent aktualisieren
+
+Nach einem Panel-Update sollte der Agent dieselbe Fassung haben – die Karte der
+Node zeigt dann „Update auf …“. Nodes → Node → **Agent aktualisieren** genügt:
+
+1. Das Panel lädt das Abbild (`NODE_IMAGE` bzw. die Fassung des Panels) über die
+   Docker-API der Node.
+2. Aus dem neuen Abbild startet es den Helfer `mcpanel-node-update`
+   (`MCPANEL_ROLE=node-update`, nur mit dem Docker-Socket, ohne Netz).
+3. Der Helfer stoppt `mcpanel-node`, legt ihn als `mcpanel-node-alt` beiseite und
+   startet den neuen Agenten mit denselben Einstellungen (Netz, Rechte,
+   Einhängungen, Ports). Bei Windows ohne VPN ergänzt er fehlende Agent-Ports.
+4. Meldet der neue Agent „Bereit“, wird der alte gelöscht. Bricht er ab oder
+   meldet sich nicht binnen 2 Minuten, läuft wieder der alte.
+
+Minecraft-Server laufen dabei weiter; Konsole, Dateien und RCON fehlen für etwa
+eine halbe Minute. Das Profil (`node.json`) und die Windows-Firewall bleiben
+unverändert – dafür weiterhin den Installationsbefehl verwenden. Geht etwas
+schief: auf der Node `docker logs mcpanel-node-update`.
+
 ## Rechte des Panel-Containers
 
 | Recht | Wofür |

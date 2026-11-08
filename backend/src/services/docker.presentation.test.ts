@@ -8,6 +8,9 @@ vi.mock('../config.js', () => ({
   config: { dockerNetwork: 'mc-network', mcDns: [], mcImageRepo: 'itzg/minecraft-server' },
   serverHostDir: (id: string) => `/host/servers/${id}`,
 }));
+// Läuft der Test selbst in einem Container (/.dockerenv), sucht die echte Funktion
+// den eigenen Panel-Container – das hat mit diesen Tests nichts zu tun.
+vi.mock('./dockerNetwork.js', () => ({ connectPanelToNetwork: vi.fn() }));
 vi.mock('dockerode', () => ({ default: class {
   getContainer = m.get;
   listContainers = m.list;
