@@ -68,11 +68,21 @@ endgültig.
 - **Anlegen:** Sobald es Nodes gibt, fragt die Serveranlage nach der Node.
   „Automatisch“ nimmt die verbundene Node mit dem meisten noch nicht
   zugewiesenen Arbeitsspeicher (Summe der Container-Grenzen).
-- **Umziehen:** Server → Einstellungen → **Node**. Das Panel stoppt den Server,
-  kopiert die Dateien auf das Ziel, prüft Anzahl und Größe, legt den Container
-  dort neu an und startet ihn wieder. Erst danach verschwinden die alten
-  Dateien. Scheitert der Umzug vorher, läuft der Server an der alten Stelle
-  weiter.
+- **Umziehen:** Server → Einstellungen → **Node**. Das ist ein Live-Umzug:
+  1. Vorkopie aller Dateien, der Server bleibt online. Das Minecraft-Abbild
+     wird dabei schon auf dem Ziel geladen.
+  2. `save-all`, dann zweiter Abgleich: nur das seither Geänderte, noch online.
+  3. Ansage im Chat, Server stoppen, letzter Abgleich mit geänderten und
+     gelöschten Dateien, Prüfung von Anzahl und Größe.
+  4. Container am Ziel anlegen und starten.
+
+  Offline ist der Server nur in Schritt 3 und 4. Die Auszeit hängt also an
+  den zuletzt geänderten Dateien, nicht an der Weltgröße. Während des Umzugs
+  warten Backups, Dateiänderungen und Neustarts. Spieler und Konsole sind
+  nicht betroffen. Scheitert der Umzug vor dem Umschalten, läuft der Server an
+  der alten Stelle weiter. Der Zwischenstand auf dem Ziel bleibt liegen, ein
+  neuer Versuch gleicht nur noch ab. Die alten Dateien verschwinden erst, wenn
+  der Server am Ziel läuft.
 - **Spieleradresse:** Server auf einer Node erreicht man unter der Adresse der
   Node und dem Spielport. Subdomains des Minecraft-Proxys leitet der Proxy auf
   dem Hauptserver automatisch weiter.
