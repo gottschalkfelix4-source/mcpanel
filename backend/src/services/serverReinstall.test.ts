@@ -8,7 +8,7 @@ vi.mock('../db.js', () => ({ prisma: { server: {
   findUniqueOrThrow: async () => ({ ...m.row }),
   update: async ({ data }: any) => (m.row = { ...m.row, ...data }),
 } } }));
-vi.mock('./docker.js', () => ({ getState: async () => ({ state: m.state }), stop: m.stop, start: m.start, recreateContainer: m.recreate, ensureImage: m.image, imageForServer: () => 'java21' }));
+vi.mock('./docker.js', () => ({ getState: async () => ({ state: m.state }), stop: m.stop, start: m.start, recreateContainer: m.recreate, ensureImage: m.image, ensureServerImage: (server: { mcVersion: string }) => m.image('java21', server), imageForServer: () => 'java21' }));
 vi.mock('./backups.js', () => ({ createBackup: m.backup }));
 vi.mock('./modpack.js', () => ({ installModpack: m.pack }));
 vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));

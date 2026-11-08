@@ -5,6 +5,18 @@ const active = new Map<string, { token: symbol; label: string }>();
 const context = new AsyncLocalStorage<Map<string, symbol>>();
 const queues = new Map<string, Promise<unknown>>();
 
+/**
+ * Vorbedingung für jede neue (nicht verschachtelte) Serveroperation. Die
+ * Nodes hängen hier ihre Erreichbarkeitsprüfung ein: liegt ein Server auf
+ * einer getrennten Node, ist auch ihre Freigabe weg – eine Operation würde
+ * dann ins leere lokale Einhängeverzeichnis schreiben. Als Rückruf gelöst,
+ * damit dieses Modul nichts importieren muss.
+ */
+let operationGuard: ((serverId: string) => void) | null = null;
+export function setOperationGuard(fn: ((serverId: string) => void) | null): void {
+  operationGuard = fn;
+}
+
 export async function withQueuedOperation<T>(id: string, label: string, fn: () => Promise<T>): Promise<T> {
   if (active.get(id)?.token && context.getStore()?.get(id) === active.get(id)?.token) return fn();
   const previous = queues.get(id) ?? Promise.resolve();
@@ -21,6 +33,7 @@ export async function withServerOperation<T>(serverId: string, label: string, fn
     if (context.getStore()?.get(serverId) === existing.token) return fn();
     throw conflict(`${existing.label} läuft für diesen Server bereits. Bitte abwarten.`);
   }
+  operationGuard?.(serverId);
   const token = Symbol(label);
   active.set(serverId, { token, label });
   const owned = new Map(context.getStore());

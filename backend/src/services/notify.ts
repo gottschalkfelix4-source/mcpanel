@@ -436,7 +436,12 @@ async function checkStates(): Promise<void> {
   healthMonitor.retain(new Set(servers.map(server => server.id)));
 
   for (const server of servers) {
-    const { state, health, startedAt } = await dockerSvc.getState(server);
+    // Eine kurz getrennte Node ist kein Absturz ihrer Server: ohne Verbindung
+    // ist über den Zustand nichts bekannt, also auch nichts zu melden. Der
+    // letzte bekannte Stand bleibt stehen, bis die Node wieder antwortet.
+    const result = await dockerSvc.getState(server).catch(() => null);
+    if (!result || result.state === 'unreachable') continue;
+    const { state, health, startedAt } = result;
     const healthEvent = healthMonitor.observe(server.id, state, health, startedAt);
     if (healthEvent) await notify(healthEvent === 'failed' ? 'server.unhealthy' : 'server.recovered', {
       serverId: server.id, serverName: server.name,

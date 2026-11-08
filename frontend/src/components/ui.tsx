@@ -119,6 +119,7 @@ const STATE_META: Record<
   stopped: { label: 'Offline', tone: 'neutral', dot: 'bg-stone-500' },
   missing: { label: 'Kein Container', tone: 'neutral', dot: 'bg-stone-600' },
   error: { label: 'Fehler', tone: 'red', dot: 'bg-redstone animate-pulse-soft' },
+  unreachable: { label: 'Node getrennt', tone: 'gold', dot: 'bg-gold' },
 };
 
 export function StateBadge({ state, health, className }: { state: PowerState; health?: string | null; className?: string }) {

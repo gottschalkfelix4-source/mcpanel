@@ -14,6 +14,7 @@ import { prepareSetupCode } from './routes/setup.js';
 import { runDataMigrations } from './services/migrations.js';
 import { pruneExpiredSessions } from './auth/sessions.js';
 import { startPlayerStats } from './services/playerStats.js';
+import { loadNodes, startNodeMonitor } from './services/nodes.js';
 
 /** Beispielwert, der frueher in .env.example stand und im Repository nachlesbar ist. */
 const BEISPIEL_JWT_SECRET = 'bitte-hier-ein-langes-zufaelliges-secret-eintragen';
@@ -67,6 +68,11 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
   } catch (err) {
     log(`WARNUNG: Docker nicht erreichbar – ${err instanceof Error ? err.message : err}`);
   }
+
+  // Standorte vor allem anderen laden: ab hier zeigen serverDir() und die
+  // Docker-Aufrufe für Server auf Nodes an die richtige Stelle.
+  await loadNodes();
+  await startNodeMonitor(log).catch((err) => log(`Nodes nicht gestartet: ${err instanceof Error ? err.message : err}`));
 
   if (config.jwtSecret === BEISPIEL_JWT_SECRET) {
     log(

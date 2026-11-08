@@ -23,6 +23,8 @@ import { getProxyConfig, normalizeHostnames, syncProxyRoutes } from '../services
 import { withServerOperation, withQueuedOperation } from '../services/operations.js';
 import { cloneServer } from '../services/serverClone.js';
 import { runTask } from '../services/tasks.js';
+import { getNode, pickNodeForServer } from '../services/nodes.js';
+import { migrateServer } from '../services/nodeMigration.js';
 import { getTickMetrics } from '../services/tickMetrics.js';
 import reinstallRoutes from './reinstall.js';
 import serverImportRoutes from './serverImport.js';
@@ -54,6 +56,8 @@ const createSchema = z.object({
   quotaDiskMb: z.number().int().min(0).max(10_000_000).optional(),
   quotaBackups: z.number().int().min(0).max(500).optional(),
   quotaMemoryMb: z.number().int().min(0).max(65536).optional(),
+  /** Node-ID, `null`/fehlend = Hauptserver, `auto` = Lastverteilung */
+  nodeId: z.string().min(1).nullable().optional(),
 });
 
 /** Kontingente – nur Administratoren duerfen sie setzen. */
@@ -130,8 +134,12 @@ export default async function serverRoutes(app: FastifyInstance) {
     }
 
     const data = createSchema.parse(req.body);
+    const nodeId = data.nodeId === 'auto'
+      ? await pickNodeForServer(data.memoryMb)
+      : data.nodeId ? (await getNode(data.nodeId)).id : null;
 
     const server = await createServer({
+      nodeId,
       quota: {
         quotaDiskMb: data.quotaDiskMb ?? 0,
         quotaBackups: data.quotaBackups ?? 0,
@@ -159,6 +167,19 @@ export default async function serverRoutes(app: FastifyInstance) {
     const taskId = await runTask(access.server.id, 'server.clone', async task => {
       const copy = await cloneServer(access.server, body, task);
       await audit(req.user!.id, copy.id, 'server.clone', `Testkopie von ${access.server.name}`);
+    });
+    return { taskId };
+  });
+
+  // --- Umzug auf eine andere Node ------------------------------------------
+  app.post('/:id/migrate', async (req) => {
+    const access = await requireServer(req);
+    if (!access.isAdmin) throw forbidden('Nur Administratoren können Server umziehen');
+    const body = z.object({ nodeId: z.string().min(1).nullable() }).parse(req.body);
+    const target = body.nodeId ? (await getNode(body.nodeId)).id : null;
+    if ((access.server.nodeId ?? null) === target) throw badRequest('Der Server liegt bereits dort.');
+    const taskId = await runTask(access.server.id, 'server.migrate', async (task) => {
+      await migrateServer(access.server, target, task, req.user!.id);
     });
     return { taskId };
   });

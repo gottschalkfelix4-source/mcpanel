@@ -25,6 +25,7 @@ const TYPE_LABELS: Record<string, string> = {
   'server.reinstall': 'Server wird neu installiert',
   'world.export': 'Welt wird zum Herunterladen gepackt',
   'assistant.action': 'KI-Reparatur wird ausgeführt',
+  'server.migrate': 'Server zieht auf eine andere Node um',
 };
 
 /**

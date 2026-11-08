@@ -12,6 +12,8 @@ import { getPlayerCount } from './playerCount.js';
 import { getPublicHost } from './settings.js';
 import { getProxyConfig } from './proxy.js';
 import { removeBackup } from './backupTarget.js';
+import { forgetServer, nodeLocation, setServerNode } from '../lib/serverLocation.js';
+import { assertNodeReady } from './nodeClients.js';
 
 export interface CreateServerInput {
   name: string;
@@ -22,6 +24,8 @@ export interface CreateServerInput {
   memoryMb: number;
   port?: number;
   extraEnv?: Record<string, string>;
+  /** Node, auf der der Server laufen soll; leer = Hauptserver. */
+  nodeId?: string | null;
   /** Kontingente; 0 bedeutet unbegrenzt. */
   quota?: { quotaDiskMb: number; quotaBackups: number; quotaMemoryMb: number };
 }
@@ -50,6 +54,7 @@ export async function allocatePort(preferred?: number, database: Pick<typeof pri
 async function createServerUnlocked(input: CreateServerInput): Promise<Server> {
   const rconPassword = crypto.randomBytes(16).toString('hex');
   const id = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+  if (input.nodeId) assertNodeReady(input.nodeId);
 
   const server = await prisma.$transaction(async tx => {
     await tx.$executeRaw`LOCK TABLE "Server" IN EXCLUSIVE MODE`;
@@ -71,9 +76,12 @@ async function createServerUnlocked(input: CreateServerInput): Promise<Server> {
       quotaDiskMb: input.quota?.quotaDiskMb ?? 0,
       quotaBackups: input.quota?.quotaBackups ?? 0,
       quotaMemoryMb: input.quota?.quotaMemoryMb ?? 0,
+      nodeId: input.nodeId || null,
     },
     });
   });
+  // Ab hier zeigen serverDir() und dockerFor() auf die gewählte Node.
+  setServerNode(server.id, server.nodeId);
 
   try {
   await fs.mkdir(serverDir(server.id), { recursive: true });
@@ -81,8 +89,7 @@ async function createServerUnlocked(input: CreateServerInput): Promise<Server> {
   // itzg akzeptiert EULA über die Umgebung, wir legen die Datei trotzdem an.
   await fs.writeFile(path.join(serverDir(server.id), 'eula.txt'), 'eula=true\n', 'utf8').catch(() => {});
 
-  await dockerSvc.ensureNetwork();
-  await dockerSvc.ensureImage(dockerSvc.imageForServer(server));
+  await dockerSvc.ensureServerImage(server);
   await dockerSvc.createContainer(server);
 
   return server;
@@ -92,6 +99,7 @@ async function createServerUnlocked(input: CreateServerInput): Promise<Server> {
     await prisma.server.delete({ where: { id: server.id } });
     await fs.rm(serverDir(server.id), { recursive: true, force: true });
     await fs.rm(serverBackupDir(server.id), { recursive: true, force: true });
+    forgetServer(server.id);
     throw err;
   }
 }
@@ -105,12 +113,16 @@ async function deleteServerUnlocked(server: Server, deleteFiles: boolean): Promi
     : [];
   await prisma.server.delete({ where: { id: server.id } });
   invalidateDiskUsage(server.id);
-  if (deleteFiles) {
-    await fs.rm(serverDir(server.id), { recursive: true, force: true });
-    await fs.rm(serverBackupDir(server.id), { recursive: true, force: true });
-    for (const backup of mirrored) {
-      await removeBackup(server.id, backup.filename, backup.targetId).catch(() => {});
+  try {
+    if (deleteFiles) {
+      await fs.rm(serverDir(server.id), { recursive: true, force: true });
+      await fs.rm(serverBackupDir(server.id), { recursive: true, force: true });
+      for (const backup of mirrored) {
+        await removeBackup(server.id, backup.filename, backup.targetId).catch(() => {});
+      }
     }
+  } finally {
+    forgetServer(server.id);
   }
 }
 
@@ -193,7 +205,10 @@ export async function serializeServer(server: Server, extra?: { withStats?: bool
     getProxyConfig(),
   ]);
   const running = state === 'running';
-  const directAddress = `${host.includes(':') && !host.startsWith('[') ? `[${host}]` : host}:${server.port}`;
+  // Auf einer Node verbinden Spieler direkt mit deren öffentlicher Adresse.
+  const node = server.nodeId ? nodeLocation(server.nodeId) : null;
+  const playerHost = node?.publicHost ?? host;
+  const directAddress = `${playerHost.includes(':') && !playerHost.startsWith('[') ? `[${playerHost}]` : playerHost}:${server.port}`;
   const stats = extra?.withStats && running ? await dockerSvc.getStats(server) : null;
   const players = extra?.withStats ? getPlayerCount(server, running) : null;
 
@@ -211,6 +226,7 @@ export async function serializeServer(server: Server, extra?: { withStats?: bool
     directConnect: server.directConnect,
     proxy: { ...proxy, hostnames: hostnames.map(row => row.hostname) },
     autoStart: server.autoStart,
+    node: node ? { id: node.id, name: node.name } : null,
     state,
     health,
     startedAt,
@@ -236,7 +252,8 @@ export async function serverDiskUsage(server: Server) {
 
 /** Startet beim Panel-Start alle Server mit aktiviertem Autostart. */
 export async function runAutostart(): Promise<void> {
-  const servers = await prisma.server.findMany({ where: { autoStart: true } });
+  // Server auf Nodes startet der Node-Dienst, sobald die Verbindung steht.
+  const servers = await prisma.server.findMany({ where: { autoStart: true, nodeId: null } });
   for (const server of servers) {
     try {
       await dockerSvc.start(server);

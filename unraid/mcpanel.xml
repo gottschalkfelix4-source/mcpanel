@@ -49,13 +49,14 @@ Die Minecraft-Server oeffnen ihre Ports selbst auf dem Host (Vorgabe 25565-25700
   <Requires>Docker-Socket (/var/run/docker.sock)</Requires>
 
   <!--
-    SYS_ADMIN und DAC_READ_SEARCH werden nur gebraucht, wenn Backups auf eine
-    Samba-Freigabe gespiegelt werden sollen - das Panel haengt sie dann selbst
-    per CIFS ein. Wer das nicht nutzt, kann die Zeile leeren. Gemessen am
-    Docker-Socket, der ohnehin root-gleiche Rechte gibt, aendert sie nichts am
-    Risiko.
+    SYS_ADMIN und DAC_READ_SEARCH werden gebraucht, wenn Backups auf eine
+    Samba-Freigabe gespiegelt werden oder weitere Nodes angebunden sind - das
+    Panel haengt die Freigaben dann selbst per CIFS ein. NET_ADMIN braucht nur
+    der WireGuard-Tunnel zu Nodes im Internet. Wer nichts davon nutzt, kann die
+    Zeile leeren. Gemessen am Docker-Socket, der ohnehin root-gleiche Rechte
+    gibt, aendert sie nichts am Risiko.
   -->
-  <ExtraParams>--cap-add=SYS_ADMIN --cap-add=DAC_READ_SEARCH --security-opt apparmor=unconfined</ExtraParams>
+  <ExtraParams>--cap-add=SYS_ADMIN --cap-add=DAC_READ_SEARCH --cap-add=NET_ADMIN --security-opt apparmor=unconfined</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>

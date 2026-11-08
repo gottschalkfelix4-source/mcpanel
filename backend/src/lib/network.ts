@@ -96,8 +96,22 @@ export function setServerNetwork(subnets: string[], gateways: string[]): void {
   serverGateways = new Set(gateways.map(normalizeAddress).filter(Boolean));
 }
 
+/**
+ * Tunnelnetz der Nodes. Das Panel wählt sich dort ein, nie umgekehrt – eine
+ * Anfrage, die aus dem Tunnel kommt, stammt von einer Node (oder einem dort
+ * ausgebrochenen Minecraft-Container) und wird wie das Minecraft-Netz
+ * abgewiesen.
+ */
+let tunnelNetwork = new AddressList();
+export function setTunnelNetwork(cidr: string): void {
+  const list = new AddressList();
+  list.add(cidr);
+  tunnelNetwork = list;
+}
+
 export function isServerNetworkAddress(address: string | undefined | null): boolean {
   const value = normalizeAddress(address);
+  if (value && tunnelNetwork.has(value)) return true;
   return Boolean(value) && !serverGateways.has(value) && serverNetwork.has(value);
 }
 

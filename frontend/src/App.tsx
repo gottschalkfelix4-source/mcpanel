@@ -28,6 +28,7 @@ import ReinstallTab from './pages/server/ReinstallTab';
 import UsersPage from './pages/admin/Users';
 import PanelSettingsPage from './pages/admin/PanelSettings';
 import ProxyPage from './pages/admin/Proxy';
+import NodesPage from './pages/admin/Nodes';
 import ProfilePage from './pages/Profile';
 
 /**
@@ -145,6 +146,7 @@ export default function App() {
             <Route path="/admin/users" element={<UsersPage />} />
             <Route path="/admin/settings" element={<PanelSettingsPage />} />
             <Route path="/admin/proxy" element={<ProxyPage />} />
+            <Route path="/admin/nodes" element={<NodesPage />} />
           </>
         )}
         <Route path="*" element={<Navigate to="/" replace />} />

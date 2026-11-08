@@ -8,6 +8,12 @@
 # ---------------------------------------------------------------------------
 set -e
 
+# Dasselbe Abbild dient auch als Node-Agent auf weiteren Docker-Hosts. Dort
+# laufen weder Datenbank noch Oberflaeche – nur der Agent.
+if [ "${MCPANEL_ROLE:-panel}" = "node" ]; then
+  exec node /app/dist/node/agent.js
+fi
+
 DATA_ROOT="${DATA_ROOT:-/data}"
 PGDATA="${PGDATA:-$DATA_ROOT/postgres}"
 PGUSER=postgres

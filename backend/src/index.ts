@@ -20,6 +20,7 @@ import { isServerNetworkAddress, trustProxy } from './lib/network.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import serverRoutes from './routes/servers.js';
+import nodeRoutes from './routes/nodes.js';
 import catalogRoutes from './routes/catalog.js';
 import settingsRoutes from './routes/settings.js';
 import setupRoutes from './routes/setup.js';
@@ -131,6 +132,7 @@ await app.register(setupRoutes, { prefix: '/api/setup' });
 await app.register(authRoutes, { prefix: '/api/auth' });
 await app.register(userRoutes, { prefix: '/api/users' });
 await app.register(serverRoutes, { prefix: '/api/servers' });
+await app.register(nodeRoutes, { prefix: '/api/nodes' });
 await app.register(catalogRoutes, { prefix: '/api/catalog' });
 await app.register(settingsRoutes, { prefix: '/api/settings' });
 

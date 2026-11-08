@@ -1,8 +1,10 @@
 FROM node:22-alpine
 
 # tar/unzip für Backups & Modpacks, curl für Healthchecks,
-# cifs-utils für die Samba-Zweitablage (wird zur Laufzeit eingehängt)
-RUN apk add --no-cache tar curl tzdata openssl openssl-dev libc6-compat cifs-utils postgresql16-client
+# cifs-utils für die Samba-Zweitablage und die Freigaben der Nodes,
+# wireguard-tools/iproute2 für den Tunnel zu den Nodes
+RUN apk add --no-cache tar curl tzdata openssl openssl-dev libc6-compat cifs-utils postgresql16-client \
+      wireguard-tools wireguard-go iproute2
 
 WORKDIR /app
 

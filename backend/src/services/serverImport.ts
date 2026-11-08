@@ -179,7 +179,7 @@ export async function importServerZip(id: string, file: string, plan: ImportPlan
         const { reinstallEnvironment, reinstallMetadata } = await import('./reinstallationData.js');
         assertMemoryAllowed(server, request.memoryMb, actor.isAdmin);
         if (server.quotaDiskMb > 0 && plan.bytes > server.quotaDiskMb * 1024 ** 2) throw badRequest('Das ZIP überschreitet das Speicherkontingent des Servers.');
-        await docker.ensureImage(docker.imageForServer({ ...server, type: request.type, mcVersion: request.mcVersion }));
+        await docker.ensureServerImage({ ...server, type: request.type, mcVersion: request.mcVersion });
         changing = true;
         await docker.stop(server);
         const backup = await createBackup(server, { name: `Vor ZIP-Import ${new Date().toISOString().slice(0, 16)}`, note: 'Automatisch vor ZIP-Import', createdById: actor.id, origin: 'SAFETY' });

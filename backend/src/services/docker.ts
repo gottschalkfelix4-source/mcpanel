@@ -12,12 +12,33 @@ import { connectPanelToNetwork } from './dockerNetwork.js';
 import { setServerNetwork } from '../lib/network.js';
 import { serverLoader } from './content.js';
 import { hasFatalServerLog } from './serverLog.js';
+import { nodeIdOf, serverNodeLocation } from '../lib/serverLocation.js';
+import { isNodeReady, nodeDocker } from './nodeClients.js';
+import { rconHostPort } from '../node/protocol.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
 });
 
-export type PowerState = 'running' | 'starting' | 'stopped' | 'missing' | 'error';
+/**
+ * Docker-Daemon, auf dem der Container eines Servers lebt: der lokale oder
+ * der einer Node (über den Tunnel). Maßgeblich ist die Standort-Registry,
+ * nicht ein Feld am übergebenen Objekt – Teilobjekte aus `select`-Abfragen
+ * sollen nie versehentlich lokal landen.
+ */
+export function dockerFor(server: Pick<Server, 'id'>): Docker {
+  const nodeId = nodeIdOf(server.id);
+  return nodeId ? nodeDocker(nodeId) : docker;
+}
+
+/** Läuft der Server auf einer Node statt auf dem Hauptserver? */
+export const isRemoteServer = (server: Pick<Server, 'id'>) => nodeIdOf(server.id) !== null;
+
+/**
+ * `unreachable`: der Server liegt auf einer Node, zu der gerade keine
+ * Verbindung besteht. Über seinen tatsächlichen Zustand ist nichts bekannt.
+ */
+export type PowerState = 'running' | 'starting' | 'stopped' | 'missing' | 'error' | 'unreachable';
 
 export const LABEL_SERVER = 'mcpanel.server';
 
@@ -128,15 +149,20 @@ export function imageForServer(server: Server): string {
   return `${config.mcImageRepo}:${javaTagForVersion(server.mcVersion)}`;
 }
 
-export async function ensureNetwork(): Promise<void> {
-  const nets = await docker.listNetworks({ filters: { name: [config.dockerNetwork] } });
+/**
+ * Legt das Minecraft-Netz an. Mit `client` auf einer Node: dort gibt es kein
+ * Panel, das sich ins Netz hängen müsste – RCON läuft über den Tunnel.
+ */
+export async function ensureNetwork(client: Docker = docker): Promise<void> {
+  const nets = await client.listNetworks({ filters: { name: [config.dockerNetwork] } });
   if (!nets.find((n) => n.Name === config.dockerNetwork)) {
     try {
-      await docker.createNetwork({ Name: config.dockerNetwork, Driver: 'bridge' });
+      await client.createNetwork({ Name: config.dockerNetwork, Driver: 'bridge' });
     } catch (error) {
       if ((error as { statusCode?: number }).statusCode !== 409) throw error;
     }
   }
+  if (client !== docker) return;
   await connectPanelToNetwork(docker, config.dockerNetwork);
   // Merken, aus welchem Netz die Minecraft-Container kommen: von dort wird
   // das Panel (HTTP, Socket.IO, SFTP) nicht beantwortet.
@@ -153,13 +179,13 @@ export async function ensureNetwork(): Promise<void> {
   );
 }
 
-export async function ensureImage(image: string, onProgress?: (msg: string) => void): Promise<void> {
-  const local = await docker.listImages({ filters: { reference: [image] } });
+export async function ensureImage(image: string, onProgress?: (msg: string) => void, client: Docker = docker): Promise<void> {
+  const local = await client.listImages({ filters: { reference: [image] } });
   if (local.length > 0) return;
   onProgress?.(`Lade Image ${image} ...`);
-  const stream = await docker.pull(image);
+  const stream = await client.pull(image);
   await new Promise<void>((resolve, reject) => {
-    docker.modem.followProgress(
+    client.modem.followProgress(
       stream,
       (err) => (err ? reject(err) : resolve()),
       (event: { status?: string; progress?: string }) => {
@@ -171,8 +197,14 @@ export async function ensureImage(image: string, onProgress?: (msg: string) => v
   });
 }
 
+/** Abbild eines Servers auf dem Daemon, auf dem er läuft. */
+export function ensureServerImage(server: Server, onProgress?: (msg: string) => void): Promise<void> {
+  return ensureImage(imageForServer(server), onProgress, dockerFor(server));
+}
+
 /** Sucht den Container; liefert die Inspect-Daten mit, wenn sie schon angefallen sind. */
 async function locateContainer(server: Server): Promise<{ container: Container; info?: Docker.ContainerInspectInfo } | null> {
+  const docker = dockerFor(server);
   try {
     const c = docker.getContainer(server.containerName);
     const info = await c.inspect();
@@ -267,8 +299,29 @@ export function effectiveHeapMb(server: Server): number {
 
 export const serverMemoryLimitBytes = (server: Server) => containerMemoryBytes(effectiveHeapMb(server));
 
+/**
+ * Portfreigaben des Containers.
+ *
+ * Auf einer Node wird der Spielport immer veröffentlicht – auch der
+ * Subdomain-Proxy des Hauptservers erreicht den Server nur darüber. RCON geht
+ * zusätzlich auf die Tunneladresse der Node, damit das Panel Befehle schicken
+ * kann; von außen ist er dort nicht erreichbar.
+ */
+function portBindings(server: Server): Docker.PortMap {
+  const node = serverNodeLocation(server.id);
+  const publishGame = node !== null || server.directConnect !== false;
+  return {
+    ...(publishGame ? {
+      '25565/tcp': [{ HostPort: String(server.port) }],
+      '25565/udp': [{ HostPort: String(server.port) }],
+    } : {}),
+    ...(node ? { '25575/tcp': [{ HostIp: node.tunnelIp, HostPort: String(rconHostPort(server.port)) }] } : {}),
+  };
+}
+
 export async function createContainer(server: Server): Promise<Container> {
-  await ensureNetwork();
+  const docker = dockerFor(server);
+  await ensureNetwork(docker);
 
   const memBytes = serverMemoryLimitBytes(server);
 
@@ -293,12 +346,7 @@ export async function createContainer(server: Server): Promise<Container> {
     },
     HostConfig: {
       Binds: [`${serverHostDir(server.id)}:/data`],
-      PortBindings: {
-        ...(server.directConnect !== false ? {
-          '25565/tcp': [{ HostPort: String(server.port) }],
-          '25565/udp': [{ HostPort: String(server.port) }],
-        } : {}),
-      },
+      PortBindings: portBindings(server),
       RestartPolicy: { Name: 'no' },
       Memory: memBytes,
       NetworkMode: config.dockerNetwork,
@@ -332,7 +380,13 @@ async function configMatches(container: Container, server: Server): Promise<bool
 
     const dns = info.HostConfig.Dns ?? [];
     if (dns.join(',') !== config.mcDns.join(',')) return false;
-    if (info.HostConfig.PortBindings?.['25565/tcp']?.[0]?.HostPort !== (server.directConnect !== false ? String(server.port) : undefined)) {
+    const wanted = portBindings(server);
+    if (info.HostConfig.PortBindings?.['25565/tcp']?.[0]?.HostPort !== wanted['25565/tcp']?.[0]?.HostPort) {
+      return false;
+    }
+    const rcon = info.HostConfig.PortBindings?.['25575/tcp']?.[0];
+    const wantedRcon = wanted['25575/tcp']?.[0];
+    if ((rcon?.HostPort || undefined) !== wantedRcon?.HostPort || (wantedRcon && rcon?.HostIp !== wantedRcon.HostIp)) {
       return false;
     }
 
@@ -364,7 +418,7 @@ export async function ensureContainer(server: Server): Promise<Container> {
     return existing;
   }
 
-  await ensureImage(imageForServer(server));
+  await ensureServerImage(server);
   return createContainer(server);
 }
 
@@ -382,7 +436,7 @@ async function removeContainerUnlocked(server: Server): Promise<void> {
 /** Container löschen und mit den aktuellen Einstellungen neu anlegen. */
 async function recreateContainerUnlocked(server: Server): Promise<Container> {
   await removeContainer(server);
-  await ensureImage(imageForServer(server));
+  await ensureServerImage(server);
   return createContainer(server);
 }
 
@@ -395,6 +449,8 @@ export async function getState(server: Server): Promise<{
   /** Ende des letzten Laufs – erkennt Abstürze auch zwischen zwei Abfragen. */
   finishedAt?: string | null;
 }> {
+  const nodeId = nodeIdOf(server.id);
+  if (nodeId && !isNodeReady(nodeId)) return { state: 'unreachable', health: null, startedAt: null };
   const found = await locateContainer(server);
   if (!found) return { state: 'missing', health: null, startedAt: null };
   const c = found.container;

@@ -69,3 +69,20 @@ it('does not persist requested configuration after a Docker failure', async () =
   await expect(configureProxy({ enabled: true, port: 25565 })).rejects.toThrow('allocated');
   expect(m.set).not.toHaveBeenCalled();
 });
+
+it('leitet Subdomains von Servern auf Nodes an deren öffentliche Adresse und Spielport', async () => {
+  const { routesDocument } = await import('./proxy.js');
+  const { setNodeLocation, removeNodeLocation } = await import('../lib/serverLocation.js');
+  setNodeLocation({ id: 'vps', name: 'VPS', tunnelIp: '10.66.0.2', agentToken: 't', publicHost: 'vps.example.test', dataRoot: '/opt/mcpanel-node' });
+  try {
+    expect(routesDocument([
+      { hostname: 'lokal.example.test', server: { containerName: 'mc-one', port: 25566, nodeId: null } },
+      { hostname: 'fern.example.test', server: { containerName: 'mc-two', port: 25567, nodeId: 'vps' } },
+    ]).mappings).toEqual({
+      'lokal.example.test': 'mc-one:25565',
+      'fern.example.test': 'vps.example.test:25567',
+    });
+  } finally {
+    removeNodeLocation('vps');
+  }
+});

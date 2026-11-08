@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Boxes, Check, Package, Server as ServerIcon, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
-import type { ProjectSummary, ProjectVersion, ServerDetail, ServerSummary, ServerType } from '../lib/types';
+import type { NodesResponse, ProjectSummary, ProjectVersion, ServerDetail, ServerSummary, ServerType } from '../lib/types';
 import { ModpackBrowser } from '../components/ModpackBrowser';
 import { Button, ConfirmDialog, ErrorNote, Field, InfoNote, Panel, Toggle, useToast } from '../components/ui';
 import { TaskProgress } from '../components/TaskProgress';
@@ -57,6 +57,16 @@ export default function CreateServerPage({ existingServer }: { existingServer?: 
     staleTime: 3_600_000,
   });
 
+  // Nodes nur zum Anlegen – eine Neuinstallation bleibt, wo der Server liegt.
+  const nodesQuery = useQuery({
+    queryKey: ['nodes'],
+    queryFn: () => api.get<NodesResponse>('/nodes'),
+    enabled: !existingServer,
+    staleTime: 15_000,
+  });
+  const remoteNodes = nodesQuery.data?.nodes.filter((node) => !node.local) ?? [];
+  const [nodeChoice, setNodeChoice] = useState<string>('auto');
+
   function validSelection() {
     setError(null);
     if (name.trim().length < 2) {
@@ -94,6 +104,7 @@ export default function CreateServerPage({ existingServer }: { existingServer?: 
         mcVersion:
           mode === 'modpack' ? (pack!.version.gameVersions[0] ?? 'LATEST') : mcVersion,
         memoryMb,
+        ...(remoteNodes.length > 0 ? { nodeId: nodeChoice === 'local' ? null : nodeChoice } : {}),
       });
 
       if (mode === 'modpack' && pack) {
@@ -297,6 +308,25 @@ export default function CreateServerPage({ existingServer }: { existingServer?: 
                 ))}
               </div>
             </Field>
+
+            {!existingServer && remoteNodes.length > 0 && (
+              <Field label="Node" hint={nodeChoice === 'auto'
+                ? 'Das Panel wählt die verbundene Node mit dem meisten noch nicht zugewiesenen Arbeitsspeicher.'
+                : 'Auf welchem Rechner der Server laufen soll. Umziehen geht später jederzeit.'}>
+                <select className="mc-select" value={nodeChoice} onChange={(e) => setNodeChoice(e.target.value)}>
+                  <option value="auto">Automatisch (Lastverteilung)</option>
+                  {nodesQuery.data!.nodes.map((node) => {
+                    const free = node.metrics ? node.metrics.memTotalMb - node.allocatedMemoryMb : null;
+                    return (
+                      <option key={node.id ?? 'local'} value={node.id ?? 'local'} disabled={node.status !== 'online'}>
+                        {node.name}
+                        {node.status !== 'online' ? ' – getrennt' : free !== null ? ` – ${(free / 1024).toFixed(1)} GB frei` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </Field>
+            )}
 
             {existingServer && <>
               <Field label="Weltdaten"><Toggle checked={keepWorld} onChange={setKeepWorld} label="Vorhandene Welt und Spielerdaten behalten" /></Field>

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { serverNodeLocation } from './lib/serverLocation.js';
 
 const dataRoot = process.env.DATA_ROOT ?? path.resolve(process.cwd(), 'data');
 
@@ -103,6 +104,19 @@ export const config = {
   curseforgeApiKey: process.env.CURSEFORGE_API_KEY ?? '',
 
   /**
+   * Nodes: weitere Docker-Hosts hinter einem WireGuard-Tunnel. Das Netz muss
+   * ein /24 sein, das weder zu Hause noch auf dem VPS schon vergeben ist –
+   * das Panel bekommt die .1, die Nodes ab .2.
+   */
+  nodes: {
+    tunnelSubnet: process.env.NODE_TUNNEL_SUBNET?.trim() || '10.66.0.0/24',
+    interfaceName: 'wg-mcpanel',
+    /** Abbild für den Node-Agenten. Leer = dasselbe Abbild wie das Panel. */
+    image: process.env.NODE_IMAGE?.trim() || '',
+    imageRepo: process.env.NODE_IMAGE_REPO?.trim() || 'ghcr.io/gottschalkfelix4-source/mcpanel',
+  },
+
+  /**
    * Bauinformationen aus dem Abbild. Beim Bauen von Hand leer - dann laeuft
    * das Panel aus dem Quellcode und es gibt keine Fassung zu melden.
    */
@@ -129,11 +143,27 @@ export const serversDir = () => path.join(config.dataRoot, 'servers');
 export const backupsDir = () => path.join(config.dataRoot, 'backups');
 export const cacheDir = () => path.join(config.dataRoot, 'cache');
 
-/** Datenverzeichnis eines Servers – im Backend-Container. */
-export const serverDir = (id: string) => path.join(serversDir(), id);
+/**
+ * Einhängepunkt der Samba-Freigabe einer Node im Backend-Container. Darunter
+ * liegt dieselbe Struktur wie im lokalen Datenverzeichnis (`servers/<id>`).
+ */
+export const nodeMountDir = (nodeId: string) => path.join(config.dataRoot, 'nodes', nodeId);
+
+/**
+ * Datenverzeichnis eines Servers – im Backend-Container. Liegt der Server auf
+ * einer Node, zeigt der Pfad in deren eingehängte Freigabe; alle Datei-
+ * operationen (Dateimanager, Backups, Modpacks, SFTP) laufen so unverändert.
+ */
+export const serverDir = (id: string) => {
+  const node = serverNodeLocation(id);
+  return node ? path.join(nodeMountDir(node.id), 'servers', id) : path.join(serversDir(), id);
+};
 /** Datenverzeichnis eines Servers – aus Host-Sicht (Bind-Mount-Quelle). */
-export const serverHostDir = (id: string) =>
-  `${config.hostDataRoot.replace(/[/\\]+$/, '')}/servers/${id}`;
+export const serverHostDir = (id: string) => {
+  const node = serverNodeLocation(id);
+  const root = node ? node.dataRoot : config.hostDataRoot;
+  return `${root.replace(/[/\\]+$/, '')}/servers/${id}`;
+};
 export const serverBackupDir = (id: string) => path.join(backupsDir(), id);
 
 /**
