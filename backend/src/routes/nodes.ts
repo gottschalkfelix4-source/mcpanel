@@ -23,6 +23,8 @@ const createSchema = z.object({
   publicHost: hostSchema,
   /** `direct` = im selben Netz ohne VPN */
   connection: z.enum(['wireguard', 'direct']).default('wireguard'),
+  /** `windows` = Docker Desktop, Installationsbefehl für PowerShell */
+  platform: z.enum(['linux', 'windows']).default('linux'),
   listenPort: portSchema.default(51820),
   dataRoot: z.string().trim().max(200).optional(),
 });

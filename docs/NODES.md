@@ -25,6 +25,44 @@ Voraussetzungen auf der Node: Linux mit Docker-Unterstützung (Debian, Ubuntu,
 Fedora, Alpine …). Für WireGuard bevorzugt ein Kernel mit WireGuard-Modul (ab
 5.6 Standard), sonst nimmt der Agent `wireguard-go`.
 
+## Windows-Nodes (Docker Desktop)
+
+Im Assistenten **Windows** wählen. Statt eines Shell-Befehls gibt es dann einen
+**PowerShell-Einzeiler** (`iex …`).
+
+1. Docker Desktop installieren und starten, mit Linux-Containern (Standard) und
+   Docker Engine 26 oder neuer: `winget install -e --id Docker.DockerDesktop`.
+2. **PowerShell als Administrator** öffnen (Rechtsklick auf Start → „Terminal
+   (Administrator)“) und den Befehl einfügen. Ohne Administratorrechte läuft
+   alles außer den Firewall-Regeln, das Skript sagt dann Bescheid.
+3. In den Einstellungen von Docker Desktop „Start Docker Desktop when you sign
+   in“ einschalten: ohne laufendes Docker Desktop ist die Node getrennt.
+
+Unterschiede zu Linux:
+
+- Docker Desktop kennt kein Host-Netz. Der Agent läuft im Minecraft-Netz der
+  Node, Docker Desktop veröffentlicht seine Ports am Windows-PC.
+- **Ohne VPN** liegen die Agent-Ports auf 24375 (Docker), 24480 (Zustand),
+  24481 (RCON) und 24445 (Samba). Port 445 ist unter Windows die eigene
+  Dateifreigabe. Die Firewall-Regel „MCPanel Node Agent“ erlaubt sie nur aus
+  dem lokalen Subnetz.
+- **Mit VPN** wird nur UDP 51820 veröffentlicht. Im Router muss dieser Port
+  (und die Spielports) auf den PC zeigen.
+- Die Serverdaten liegen im Docker-Volume `mcpanel-node-data`, nicht auf einem
+  Windows-Laufwerk: Minecraft über Bind-Mounts von NTFS wäre spürbar langsam.
+  Das Panel sieht die Daten wie bei Linux über die Samba-Freigabe des Agenten.
+- Firewall-Regeln heißen „MCPanel Node …“ und werden bei jeder Installation
+  neu angelegt.
+
+Entfernen (PowerShell):
+
+```powershell
+docker rm -f mcpanel-node; Get-NetFirewallRule -DisplayName 'MCPanel Node*' | Remove-NetFirewallRule
+```
+
+Die Daten bleiben im Volume. `docker volume rm mcpanel-node-data` löscht sie
+endgültig.
+
 ## Server anlegen und umziehen
 
 - **Anlegen:** Sobald es Nodes gibt, fragt die Serveranlage nach der Node.
@@ -46,8 +84,9 @@ Panel (Hauptserver)                                   Node
   ├─ Docker-API   ──── Token ──────────────►  mcpanel-node: Docker-Socket-Proxy (:2375)
   ├─ Zustand      ──── Token ──────────────►  mcpanel-node: /status (:7480)
   ├─ Dateien      ──── SMB3 ───────────────►  mcpanel-node: Samba (:445) → /opt/mcpanel-node
-  └─ RCON         ─────────────────────────►  mc-<id>: 25575 → <Node-Adresse>:<Spielport+10000>
+  └─ RCON         ──── Token ──────────────►  mcpanel-node: RCON-Weiterleitung (:7481) → mc-<id>:25575
            └─ alles über WireGuard (10.66.0.0/24) oder direkt im LAN
+              (Windows ohne VPN: 24375/24480/24481/24445 am PC)
 ```
 
 - Das Panel hängt das Datenverzeichnis jeder Node unter `<data>/nodes/<id>` ein.
@@ -57,9 +96,12 @@ Panel (Hauptserver)                                   Node
   deshalb **keinen offenen Port**, auch hinter einem Heimrouter nicht. Auf der
   Node muss UDP 51820 (einstellbar) offen sein, dazu die Spielports.
 - **Ohne VPN:** Der Agent lauscht auf der LAN-IP und nimmt nur private Adressen
-  an. Docker-API und Zustandsabfrage verlangen das Token, Samba ein Kennwort
-  und SMB3-Verschlüsselung. Docker-Steuerung und RCON gehen unverschlüsselt
-  durchs LAN, deshalb nur in vertrauenswürdigen Netzen verwenden.
+  an. Docker-API, Zustandsabfrage und RCON-Weiterleitung verlangen das Token,
+  Samba ein Kennwort und SMB3-Verschlüsselung. Docker-Steuerung und RCON gehen
+  unverschlüsselt durchs LAN, deshalb nur in vertrauenswürdigen Netzen verwenden.
+- **RCON** der Minecraft-Server wird auf Nodes nicht veröffentlicht. Das Panel
+  verbindet sich mit der RCON-Weiterleitung des Agenten. Die nimmt nur
+  Container an, die das Panel angelegt hat.
 - Ist eine Node getrennt, zeigen ihre Server „Node getrennt“. Operationen an
   ihnen lehnt das Panel ab, statt halbe Zustände zu erzeugen. Autostart-Server
   starten, sobald die Node wieder verbunden ist.

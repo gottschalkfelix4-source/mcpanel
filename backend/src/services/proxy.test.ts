@@ -73,7 +73,7 @@ it('does not persist requested configuration after a Docker failure', async () =
 it('leitet Subdomains von Servern auf Nodes an deren öffentliche Adresse und Spielport', async () => {
   const { routesDocument } = await import('./proxy.js');
   const { setNodeLocation, removeNodeLocation } = await import('../lib/serverLocation.js');
-  setNodeLocation({ id: 'vps', name: 'VPS', tunnelIp: '10.66.0.2', agentToken: 't', publicHost: 'vps.example.test', dataRoot: '/opt/mcpanel-node' });
+  setNodeLocation({ id: 'vps', name: 'VPS', tunnelIp: '10.66.0.2', agentToken: 't', publicHost: 'vps.example.test', dataRoot: '/opt/mcpanel-node', ports: { docker: 2375, status: 7480, rcon: 7481, smb: 445 }, dataVolume: null });
   try {
     expect(routesDocument([
       { hostname: 'lokal.example.test', server: { containerName: 'mc-one', port: 25566, nodeId: null } },

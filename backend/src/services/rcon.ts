@@ -1,19 +1,20 @@
 import net from 'node:net';
 import type { Server } from '@prisma/client';
 import { nodeIdOf, nodeLocation } from '../lib/serverLocation.js';
-import { rconHostPort } from '../node/protocol.js';
+import { rconPreamble } from '../node/protocol.js';
 
 /**
  * Wohin die RCON-Verbindung geht: lokal über das Docker-Netz an den
- * Containernamen, auf einer Node an deren Tunneladresse (dort ist der Port
- * nur auf der Tunnelschnittstelle veröffentlicht).
+ * Containernamen. Auf einer Node an die RCON-Weiterleitung des Agenten; die
+ * erste Zeile nennt Token und Container, danach spricht man normales RCON.
+ * So muss kein Minecraft-Container seinen RCON-Port veröffentlichen.
  */
-export function rconTarget(server: Pick<Server, 'id' | 'containerName' | 'port'>): { host: string; port: number } {
+export function rconTarget(server: Pick<Server, 'id' | 'containerName'>): { host: string; port: number; preamble?: string } {
   const nodeId = nodeIdOf(server.id);
   const node = nodeId ? nodeLocation(nodeId) : null;
   if (nodeId && !node) throw new Error(`Node ${nodeId} ist dem Panel nicht bekannt`);
   return node
-    ? { host: node.tunnelIp, port: rconHostPort(server.port) }
+    ? { host: node.tunnelIp, port: node.ports.rcon, preamble: rconPreamble(node.agentToken, server.containerName) }
     : { host: server.containerName, port: 25575 };
 }
 
@@ -39,6 +40,8 @@ export class RconClient {
     private password: string,
     private timeoutMs = 8000,
     private onClose?: () => void,
+    /** Erste Zeile für die RCON-Weiterleitung eines Node-Agenten */
+    private preamble?: string,
   ) {}
 
   connect(): Promise<void> {
@@ -61,6 +64,7 @@ export class RconClient {
         socket.setTimeout(0);
         socket.removeListener('error', onError);
         socket.on('error', (e) => this.cleanup(e));
+        if (this.preamble) socket.write(this.preamble);
         this.send(TYPE_AUTH, this.password)
           .then(() => { this.rejectConnect = undefined; resolve(); })
           .catch(reject);
@@ -188,7 +192,7 @@ export function rconNotDelivered(error: unknown): boolean {
 
 function getConnection(server: Server): Connection {
   const key = server.containerName;
-  const { host, port } = rconTarget(server);
+  const { host, port, preamble } = rconTarget(server);
   const target = `${host}:${port}`;
   const existing = connections.get(key);
   if (existing?.password === server.rconPassword && existing.target === target) return existing;
@@ -202,7 +206,7 @@ function getConnection(server: Server): Connection {
     clearTimeout(entry.idleTimer);
     if (connections.get(key) === entry) connections.delete(key);
   };
-  const client = new RconClient(host, port, server.rconPassword, 8000, discard);
+  const client = new RconClient(host, port, server.rconPassword, 8000, discard, preamble);
   const entry: Connection = {
     client, password: server.rconPassword, target,
     ready: client.connect().catch(error => {

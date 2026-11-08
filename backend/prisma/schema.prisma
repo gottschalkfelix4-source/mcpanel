@@ -137,6 +137,8 @@ model Node {
   publicHost  String
   /// "wireguard" = über den Tunnel, "direct" = im selben Netz ohne VPN
   connection  String   @default("wireguard")
+  /// "linux" = Agent im Host-Netz, "windows" = Docker Desktop (Bridge-Netz, Daten im Volume)
+  platform    String   @default("linux")
   /// UDP-Port, auf dem WireGuard auf der Node lauscht
   listenPort  Int      @default(51820)
   /// Adresse, unter der das Panel die Node erreicht: im Tunnel z. B. 10.66.0.2,

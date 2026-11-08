@@ -7,8 +7,9 @@
  * fehlt, gilt als lokal – das ist der Stand vor Einführung der Nodes und
  * damit auch der Fall in allen Unit-Tests.
  *
- * Bewusst ohne Importe: `config.ts` hängt hiervon ab.
+ * Bewusst ohne Laufzeit-Importe: `config.ts` hängt hiervon ab.
  */
+import type { AgentPorts } from '../node/protocol.js';
 
 export interface NodeLocation {
   id: string;
@@ -21,6 +22,13 @@ export interface NodeLocation {
   publicHost: string;
   /** Datenverzeichnis auf der Node (Host-Pfad für Bind-Mounts) */
   dataRoot: string;
+  /** Ports des Agenten, wie das Panel sie erreicht */
+  ports: AgentPorts;
+  /**
+   * Docker-Volume mit den Serverdaten (Windows). Gesetzt, hängen die
+   * Minecraft-Container `servers/<id>` daraus ein statt eines Host-Ordners.
+   */
+  dataVolume: string | null;
 }
 
 const serverNodes = new Map<string, string>();

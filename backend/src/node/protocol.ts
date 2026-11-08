@@ -6,10 +6,6 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
-/** Docker-API der Node, nur für das Panel erreichbar. */
-export const AGENT_DOCKER_PORT = 2375;
-/** Zustandsabfrage (Last, Speicher, Platte) des Agenten. */
-export const AGENT_STATUS_PORT = 7480;
 /** Samba-Freigabe mit dem Datenverzeichnis der Node. */
 export const SMB_SHARE = 'mcpanel';
 export const SMB_USER = 'mcpanel';
@@ -22,17 +18,46 @@ export const NODE_MARKER = '.mcpanel-node';
  * Minecraft-Container hinter NAT – im LAN die Node übernehmen.
  */
 export const AGENT_TOKEN_HEADER = 'x-mcpanel-token';
+/** Erste Zeile einer RCON-Verbindung über den Agenten: `MCPANEL-RCON <token> <container>` */
+export const RCON_PREAMBLE = 'MCPANEL-RCON';
+/** Name des Docker-Volumes mit den Serverdaten auf Windows-Nodes. */
+export const WINDOWS_DATA_VOLUME = 'mcpanel-node-data';
+/** Datenverzeichnis im Agent-Container auf Windows (liegt im Volume). */
+export const WINDOWS_DATA_ROOT = '/opt/mcpanel-node';
 
 export type NodeConnection = 'wireguard' | 'direct';
-
 /**
- * RCON eines Servers auf einer Node: der Container veröffentlicht Port 25575
- * nur auf der Adresse, unter der das Panel die Node erreicht (Tunnel bzw.
- * LAN), unter Spielport + Versatz. Die Spielports sind panelweit eindeutig,
- * damit auch diese – und ein Umzug kollidiert nie.
+ * `linux`: Agent im Host-Netz eines Linux-Rechners, Daten als Ordner auf dem Host.
+ * `windows`: Docker Desktop. Kein Host-Netz, Port 445 gehört Windows selbst,
+ * Bind-Mounts von NTFS sind langsam – der Agent läuft deshalb im Bridge-Netz
+ * mit veröffentlichten Ports, die Daten liegen in einem Docker-Volume.
  */
-export function rconHostPort(gamePort: number): number {
-  return gamePort + 10_000 <= 65_535 ? gamePort + 10_000 : gamePort - 10_000;
+export type NodePlatform = 'linux' | 'windows';
+
+export interface AgentPorts {
+  /** Docker-API (Socket-Proxy mit Token) */
+  docker: number;
+  /** Zustandsabfrage */
+  status: number;
+  /** RCON-Weiterleitung zu den Minecraft-Containern */
+  rcon: number;
+  /** Samba */
+  smb: number;
+}
+
+/** Ports, unter denen der Agent im Container lauscht. */
+export const AGENT_INTERNAL_PORTS: AgentPorts = { docker: 2375, status: 7480, rcon: 7481, smb: 445 };
+/**
+ * Auf Windows ohne VPN veröffentlicht Docker Desktop die Dienste am Windows-
+ * Rechner selbst. Dort ist 445 die Windows-Dateifreigabe und 2375 oft der
+ * Docker-Daemon – also ein eigener, unauffälliger Bereich.
+ */
+export const WINDOWS_PUBLISHED_PORTS: AgentPorts = { docker: 24375, status: 24480, rcon: 24481, smb: 24445 };
+
+/** Ports, unter denen das Panel den Agenten erreicht. */
+export function agentPorts(platform: NodePlatform, connection: NodeConnection): AgentPorts {
+  // Im Tunnel spricht das Panel den Agenten direkt in dessen Netz an.
+  return platform === 'windows' && connection === 'direct' ? WINDOWS_PUBLISHED_PORTS : AGENT_INTERNAL_PORTS;
 }
 
 export const nodeProfileSchema = z.object({
@@ -40,11 +65,17 @@ export const nodeProfileSchema = z.object({
   nodeId: z.string().min(1),
   name: z.string().min(1),
   mode: z.enum(['wireguard', 'direct']).default('wireguard'),
-  /** Adresse, auf der der Agent lauscht: Tunneladresse bzw. LAN-IP */
+  platform: z.enum(['linux', 'windows']).default('linux'),
+  /**
+   * Adresse, unter der das Panel die Node erreicht: Tunneladresse bzw. LAN-IP.
+   * Auf Windows ohne VPN gehört sie dem Windows-Rechner, nicht dem Agenten.
+   */
   nodeIp: z.string().ip({ version: 'v4' }),
   token: z.string().min(32),
   smbPassword: z.string().min(16),
   dataRoot: z.string().startsWith('/'),
+  /** Docker-Netz der Minecraft-Container auf der Node (für die RCON-Weiterleitung) */
+  dockerNetwork: z.string().min(1).default('mcpanel_mcpanel'),
   // Nur im Tunnelbetrieb:
   privateKey: z.string().min(40).optional(),
   listenPort: z.number().int().min(1).max(65535).optional(),
@@ -64,6 +95,21 @@ export function tokenMatches(expected: string, given: string | undefined | null)
   const a = crypto.createHash('sha256').update(expected).digest();
   const b = crypto.createHash('sha256').update(given).digest();
   return crypto.timingSafeEqual(a, b);
+}
+
+/** Nur Containernamen, wie das Panel sie vergibt – nichts, was die Docker-API umbiegen könnte. */
+export const CONTAINER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+
+export function rconPreamble(token: string, containerName: string): string {
+  if (!CONTAINER_NAME_PATTERN.test(containerName)) throw new Error('Ungültiger Containername');
+  return `${RCON_PREAMBLE} ${token} ${containerName}\n`;
+}
+
+/** Gegenstück im Agenten; `null` bei allem, was nicht genau so aussieht. */
+export function parseRconPreamble(line: string): { token: string; container: string } | null {
+  const parts = line.trim().split(' ');
+  if (parts.length !== 3 || parts[0] !== RCON_PREAMBLE || !CONTAINER_NAME_PATTERN.test(parts[2])) return null;
+  return { token: parts[1], container: parts[2] };
 }
 
 export interface AgentStatus {

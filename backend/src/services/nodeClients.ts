@@ -7,7 +7,7 @@
 import Docker from 'dockerode';
 import { HttpError } from '../lib/errors.js';
 import { nodeLocation } from '../lib/serverLocation.js';
-import { AGENT_DOCKER_PORT, AGENT_TOKEN_HEADER } from '../node/protocol.js';
+import { AGENT_TOKEN_HEADER } from '../node/protocol.js';
 
 const clients = new Map<string, { key: string; docker: Docker }>();
 const readiness = new Map<string, { ready: boolean; reason: string }>();
@@ -38,13 +38,13 @@ export function forgetNodeClient(nodeId: string): void {
 export function rawNodeDocker(nodeId: string): Docker {
   const node = nodeLocation(nodeId);
   if (!node) throw new Error(`Node ${nodeId} ist dem Panel nicht bekannt`);
-  const key = `${node.tunnelIp}|${node.agentToken}`;
+  const key = `${node.tunnelIp}|${node.ports.docker}|${node.agentToken}`;
   const cached = clients.get(nodeId);
   if (cached && cached.key === key) return cached.docker;
   // Das Token reist in jeder Anfrage mit; der Agent prüft es pro Verbindung.
   const docker = new Docker({
     host: node.tunnelIp,
-    port: AGENT_DOCKER_PORT,
+    port: node.ports.docker,
     protocol: 'http',
     headers: { [AGENT_TOKEN_HEADER]: node.agentToken },
   } as Docker.DockerOptions);

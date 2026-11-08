@@ -14,7 +14,6 @@ import { serverLoader } from './content.js';
 import { hasFatalServerLog } from './serverLog.js';
 import { nodeIdOf, serverNodeLocation } from '../lib/serverLocation.js';
 import { isNodeReady, nodeDocker } from './nodeClients.js';
-import { rconHostPort } from '../node/protocol.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
@@ -303,20 +302,34 @@ export const serverMemoryLimitBytes = (server: Server) => containerMemoryBytes(e
  * Portfreigaben des Containers.
  *
  * Auf einer Node wird der Spielport immer veröffentlicht – auch der
- * Subdomain-Proxy des Hauptservers erreicht den Server nur darüber. RCON geht
- * zusätzlich auf die Tunneladresse der Node, damit das Panel Befehle schicken
- * kann; von außen ist er dort nicht erreichbar.
+ * Subdomain-Proxy des Hauptservers erreicht den Server nur darüber. RCON
+ * bleibt im Minecraft-Netz; das Panel erreicht ihn über den Agenten.
  */
 function portBindings(server: Server): Docker.PortMap {
   const node = serverNodeLocation(server.id);
   const publishGame = node !== null || server.directConnect !== false;
-  return {
-    ...(publishGame ? {
-      '25565/tcp': [{ HostPort: String(server.port) }],
-      '25565/udp': [{ HostPort: String(server.port) }],
-    } : {}),
-    ...(node ? { '25575/tcp': [{ HostIp: node.tunnelIp, HostPort: String(rconHostPort(server.port)) }] } : {}),
-  };
+  return publishGame ? {
+    '25565/tcp': [{ HostPort: String(server.port) }],
+    '25565/udp': [{ HostPort: String(server.port) }],
+  } : {};
+}
+
+/**
+ * Datenverzeichnis im Container. Auf Windows-Nodes liegt es in einem Docker-
+ * Volume (Unterordner `servers/<id>`, braucht Docker Engine 26+): Bind-Mounts
+ * von NTFS wären für Minecraft zu langsam.
+ */
+function dataMount(server: Server): Pick<Docker.HostConfig, 'Binds' | 'Mounts'> {
+  const node = serverNodeLocation(server.id);
+  if (node?.dataVolume) {
+    return {
+      Mounts: [{
+        Type: 'volume', Source: node.dataVolume, Target: '/data',
+        VolumeOptions: { Subpath: `servers/${server.id}` },
+      } as unknown as Docker.MountSettings],
+    };
+  }
+  return { Binds: [`${serverHostDir(server.id)}:/data`] };
 }
 
 export async function createContainer(server: Server): Promise<Container> {
@@ -345,7 +358,7 @@ export async function createContainer(server: Server): Promise<Container> {
       '25575/tcp': {},
     },
     HostConfig: {
-      Binds: [`${serverHostDir(server.id)}:/data`],
+      ...dataMount(server),
       PortBindings: portBindings(server),
       RestartPolicy: { Name: 'no' },
       Memory: memBytes,
@@ -384,11 +397,8 @@ async function configMatches(container: Container, server: Server): Promise<bool
     if (info.HostConfig.PortBindings?.['25565/tcp']?.[0]?.HostPort !== wanted['25565/tcp']?.[0]?.HostPort) {
       return false;
     }
-    const rcon = info.HostConfig.PortBindings?.['25575/tcp']?.[0];
-    const wantedRcon = wanted['25575/tcp']?.[0];
-    if ((rcon?.HostPort || undefined) !== wantedRcon?.HostPort || (wantedRcon && rcon?.HostIp !== wantedRcon.HostIp)) {
-      return false;
-    }
+    // Ältere Container auf Nodes veröffentlichten RCON noch selbst.
+    if (info.HostConfig.PortBindings?.['25575/tcp']?.length) return false;
 
     const split = (entry: string): [string, string] => {
       const i = entry.indexOf('=');

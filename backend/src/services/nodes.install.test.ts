@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   config: {
     dataRoot: '',
     hostDataRoot: '/host/data',
+    dockerNetwork: 'mcpanel_mcpanel',
     portRange: { min: 25565, max: 25700 },
     build: { version: '1.8.0', revision: '', date: '' },
     nodes: { tunnelSubnet: '10.66.0.0/24', interfaceName: 'wg-mcpanel', image: '', imageRepo: 'ghcr.io/beispiel/mcpanel' },
@@ -24,11 +25,24 @@ const { installCommand, installScript, nodeImage, nodeProfile, uninstallCommand,
 afterAll(() => fs.rm(m.config.dataRoot, { recursive: true, force: true }));
 
 const node = (overrides: Partial<Node> = {}): Node => ({
-  id: 'node1', name: 'VPS Test', publicHost: 'vps.example.test', connection: 'wireguard', listenPort: 51820,
+  id: 'node1', name: 'VPS Test', publicHost: 'vps.example.test', connection: 'wireguard', platform: 'linux', listenPort: 51820,
   tunnelIp: '10.66.0.2', publicKey: 'pub', privateKey: 'k'.repeat(44), smbPassword: 's'.repeat(32),
   agentToken: 't'.repeat(43), dataRoot: '/opt/mcpanel-node', agentVersion: '', lastSeenAt: null, createdAt: new Date(),
   ...overrides,
 });
+
+/** Syntaxprüfung mit PowerShell, sofern vorhanden (GitHub-Runner haben pwsh). */
+function assertPowerShellSyntax(script: string) {
+  try {
+    const out = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command',
+      '$e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(), [ref]$null, [ref]$e); $e.Count'],
+      { input: script }).toString().trim();
+    expect(out).toBe('0');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+}
 
 /** Syntaxprüfung mit der echten Shell, sofern es eine gibt (Linux-CI). */
 function assertShellSyntax(script: string) {
@@ -63,7 +77,7 @@ describe('Installationsskript', () => {
     expect(script).not.toContain('privateKey');
     expect(script).toContain("NODE_IP='192.168.1.50'");
     expect(script).toContain('"mode":"direct"');
-    expect(script).toContain('for port in 2375 7480 445');
+    expect(script).toContain('for port in 2375 7480 7481 445');
     assertShellSyntax(script);
   });
 
@@ -93,6 +107,43 @@ describe('Installationsskript', () => {
     const profile = await nodeProfile(node({ connection: 'direct', tunnelIp: '192.168.1.50' }));
     expect(profile).toEqual(expect.objectContaining({ mode: 'direct', nodeIp: '192.168.1.50' }));
     expect(profile.privateKey).toBeUndefined();
+  });
+});
+
+describe('Windows mit Docker Desktop', () => {
+  const windows = (overrides: Partial<Node> = {}) => node({ platform: 'windows', dataRoot: '/opt/mcpanel-node', ...overrides });
+
+  it('liefert einen PowerShell-Einzeiler, der das Skript unverändert enthält', async () => {
+    const command = await installCommand(windows());
+    expect(command).toMatch(/^iex \(\[Text\.Encoding\]::UTF8\.GetString\(\[Convert\]::FromBase64String\('[A-Za-z0-9+/=]+'\)\)\)$/);
+    const encoded = /FromBase64String\('([^']+)'\)/.exec(command)![1];
+    expect(Buffer.from(encoded, 'base64').toString('utf8')).toBe(await installScript(windows()));
+  });
+
+  it('startet den Agenten im Minecraft-Netz mit Daten im Volume statt im Host-Netz', async () => {
+    const script = await installScript(windows());
+    expect(script).not.toContain('--network host');
+    expect(script).toContain("'--network', $Network");
+    expect(script).toContain("$Volume = 'mcpanel-node-data'");
+    expect(script).toContain("'--cap-add', 'NET_ADMIN'");
+    expect(script).toContain('"$($WgPort):$($WgPort)/udp"');
+    const profile = JSON.parse(Buffer.from(/\$profileData = '([A-Za-z0-9+/=]+)'/.exec(script)![1], 'base64').toString('utf8'));
+    expect(profile).toEqual(expect.objectContaining({ platform: 'windows', mode: 'wireguard', dataRoot: '/opt/mcpanel-node' }));
+    expect(script).toContain("$ErrorActionPreference = 'Continue'");
+    assertPowerShellSyntax(script);
+  });
+
+  it('veröffentlicht ohne VPN die Agent-Ports abseits von 445 und 2375', async () => {
+    const script = await installScript(windows({ connection: 'direct', publicHost: '192.168.1.60', tunnelIp: '192.168.1.60' }));
+    expect(script).toContain("'-p', '24375:2375', '-p', '24480:7480', '-p', '24481:7481', '-p', '24445:445'");
+    expect(script).not.toContain('NET_ADMIN');
+    expect(script).toContain('-LocalPort 24375,24480,24481,24445 -RemoteAddress LocalSubnet');
+    assertPowerShellSyntax(script);
+  });
+
+  it('räumt mit einem PowerShell-Befehl auf', () => {
+    expect(uninstallCommand(windows())).toContain('Remove-NetFirewallRule');
+    expect(uninstallCommand(windows())).not.toContain('ip link');
   });
 });
 
