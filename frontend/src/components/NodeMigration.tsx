@@ -44,7 +44,7 @@ export default function NodeMigration({ server, onDone }: { server: ServerDetail
       subtitle={<>Läuft auf <strong className="text-stone-200">{server.node?.name ?? 'Hauptserver'}</strong>{here?.status === 'offline' ? ' (getrennt)' : ''}</>}
     >
       <div className="space-y-4">
-        <Field label="Umziehen nach" hint="Die Dateien werden kopiert und geprüft; erst wenn der Server am Ziel steht, verschwinden sie an der alten Stelle.">
+        <Field label="Umziehen nach" hint="Kopiert wird im laufenden Betrieb und am Ende geprüft; erst wenn der Server am Ziel steht, verschwinden die Dateien an der alten Stelle. Ein abgebrochener Umzug setzt beim nächsten Versuch auf dem Zwischenstand auf.">
           <select className="mc-select" value={target} onChange={(e) => setTarget(e.target.value)} disabled={running}>
             <option value="">Ziel wählen …</option>
             {options.map((node) => {
@@ -62,7 +62,11 @@ export default function NodeMigration({ server, onDone }: { server: ServerDetail
         </Field>
 
         {chosen && running_ && (
-          <InfoNote>Der Server läuft gerade. Er wird für den Umzug gestoppt und am Ziel wieder gestartet.</InfoNote>
+          <InfoNote>
+            <strong>Live-Umzug:</strong> Der Server bleibt online, während die Dateien kopiert werden. Danach wird
+            gespeichert und nur das seither Geänderte nachgezogen. Offline ist er erst ganz am Ende – für den letzten
+            Abgleich und den Start am Ziel. Backups, Dateiänderungen und Neustarts warten so lange.
+          </InfoNote>
         )}
         {chosen && (
           <InfoNote>
@@ -103,7 +107,8 @@ export default function NodeMigration({ server, onDone }: { server: ServerDetail
         message={
           <p>
             <strong className="text-stone-100">{server.name}</strong> zieht von „{server.node?.name ?? 'Hauptserver'}“ nach
-            „{chosen?.name}“. Je nach Größe der Welt und Leitung dauert das einige Minuten; der Server ist so lange offline.
+            „{chosen?.name}“. Das Kopieren dauert je nach Weltgröße und Leitung eine Weile, der Server läuft dabei
+            weiter. Kurz offline ist er nur beim Umschalten; Spieler bekommen vorher eine Ansage im Chat.
           </p>
         }
         onConfirm={async () => {
