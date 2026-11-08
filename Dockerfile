@@ -38,10 +38,15 @@ FROM node:22-alpine
 # nginx:      liefert die Oberfläche aus und reicht /api weiter
 # cifs-utils: für die Samba-Zweitablage der Backups
 # su-exec:    Postgres darf nicht als root laufen
+# wireguard-*, iproute2, iptables: Tunnel zu den Nodes (Panel) bzw. zum Panel
+#             (Node-Agent, MCPANEL_ROLE=node – dasselbe Abbild)
+# samba-*:    Freigabe des Datenverzeichnisses auf einer Node
 RUN apk add --no-cache \
       postgresql16 postgresql16-contrib \
       nginx \
-      tar curl tzdata openssl openssl-dev libc6-compat cifs-utils su-exec
+      tar curl tzdata openssl openssl-dev libc6-compat cifs-utils su-exec \
+      wireguard-tools wireguard-go iproute2 iptables \
+      samba-server samba-common-tools
 
 WORKDIR /app
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
-import { Boxes, ChevronDown, LogOut, Network, Server, Settings, Shield, User, Users } from 'lucide-react';
+import { Boxes, ChevronDown, HardDrive, LogOut, Network, Server, Settings, Shield, User, Users } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { BlockIcon, GrassStrip } from './pixel';
 
@@ -142,6 +142,9 @@ export default function Layout() {
             </NavItem>
             {user?.role === 'ADMIN' && (
               <>
+                <NavItem to="/admin/nodes" icon={<HardDrive size={15} />}>
+                  Nodes
+                </NavItem>
                 <NavItem to="/admin/proxy" icon={<Network size={15} />}>
                   Proxy
                 </NavItem>

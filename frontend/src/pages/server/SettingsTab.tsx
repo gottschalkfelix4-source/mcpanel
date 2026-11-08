@@ -10,6 +10,7 @@ import {
 import { useServer } from './ServerLayout';
 import CloneServer from '../../components/CloneServer';
 import ServerRouting from '../../components/ServerRouting';
+import NodeMigration from '../../components/NodeMigration';
 
 const SERVER_TYPES: ServerType[] = [
   'VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT', 'MODPACK',
@@ -184,6 +185,7 @@ export default function SettingsTab() {
 
       {/* Kontingent */}
       {server.isAdmin && <ServerRouting key={server.id} />}
+      {server.isAdmin && <NodeMigration server={server} onDone={() => void refresh()} />}
       <Panel
         title="Kontingent"
         icon={<Gauge size={16} />}

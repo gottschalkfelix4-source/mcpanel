@@ -131,6 +131,7 @@ export function ServerCard({ server }: { server: ServerSummary }) {
               {server.modpack?.name
                 ? `${server.modpack.name} · ${server.modpack.versionName ?? ''}`
                 : `${server.type} ${server.mcVersion}`}
+              {server.node && <span className="text-diamond"> · {server.node.name}</span>}
             </p>
 
             <button

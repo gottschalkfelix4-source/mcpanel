@@ -1,6 +1,7 @@
 export type Role = 'ADMIN' | 'USER';
 
-export type PowerState = 'running' | 'starting' | 'stopped' | 'missing' | 'error';
+/** `unreachable`: der Server liegt auf einer Node, die gerade nicht verbunden ist. */
+export type PowerState = 'running' | 'starting' | 'stopped' | 'missing' | 'error' | 'unreachable';
 
 export type ServerType =
   | 'VANILLA' | 'PAPER' | 'PURPUR' | 'SPIGOT'
@@ -62,6 +63,8 @@ export interface ServerSummary {
   directConnect: boolean;
   proxy: { enabled: boolean; port: number; hostnames: string[] };
   autoStart: boolean;
+  /** Node, auf der der Server läuft – `null` = Hauptserver */
+  node: { id: string; name: string } | null;
   state: PowerState;
   /** Docker-Healthcheck: healthy | starting | unhealthy | null */
   health?: string | null;
@@ -386,4 +389,52 @@ export interface CrashDiagnosis {
   reason: string;
   suspect: CrashSuspect | null;
   excerpt: string[];
+}
+
+// ---------------------------------------------------------------- Nodes ---
+
+export interface NodeMetrics {
+  cpus: number;
+  load: [number, number, number];
+  memTotalMb: number;
+  memAvailableMb: number;
+  diskTotalMb: number;
+  diskFreeMb: number;
+  dockerVersion: string;
+  hostname: string;
+}
+
+export interface NodeOverview {
+  /** `null` = Hauptserver */
+  id: string | null;
+  name: string;
+  local: boolean;
+  /** Verbindungsart, `null` beim Hauptserver */
+  connection: 'wireguard' | 'direct' | null;
+  publicHost: string;
+  listenPort: number | null;
+  tunnelIp: string | null;
+  dataRoot: string;
+  agentVersion: string;
+  lastSeenAt: string | null;
+  createdAt: string | null;
+  status: 'online' | 'offline' | 'pending';
+  error: string | null;
+  handshakeAt: string | null;
+  metrics: NodeMetrics | null;
+  servers: number;
+  allocatedMemoryMb: number;
+}
+
+export interface NodesResponse {
+  tunnel: { up: boolean; error: string | null; mode: 'kernel' | 'userspace' | null; panelIp: string };
+  image: string;
+  nodes: NodeOverview[];
+}
+
+export interface NodeInstall {
+  id?: string;
+  command: string;
+  script: string;
+  uninstall: string;
 }

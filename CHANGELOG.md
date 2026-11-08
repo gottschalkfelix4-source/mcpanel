@@ -11,6 +11,7 @@ Taggen wird daraus eine Versionsüberschrift.
 ## [Unveröffentlicht]
 
 ### Neu
+- **Nodes: Minecraft-Server auf weiteren Rechnern**: Ein gemieteter VPS oder ein zweiter PC im Heimnetz lässt sich unter **Nodes** per Assistent anbinden. Ein einziger Befehl auf der Node installiert bei Bedarf Docker und den Node-Agenten und verbindet ihn mit dem Panel. Rechner im Internet laufen über einen WireGuard-Tunnel, für den der Hauptserver keinen offenen Port braucht. Rechner im selben Netz lassen sich per Schalter ohne VPN anbinden. Die Nodes-Seite zeigt je Rechner CPU-Last, belegten und zugewiesenen RAM sowie freien Platz. Neue Server landen auf Wunsch automatisch auf der Node mit dem meisten freien Speicher, bestehende ziehen per Klick um (Einstellungen → Node). Konsole, Dateimanager, Backups und Modpacks funktionieren auf Nodes wie gewohnt. Details in `docs/NODES.md`.
 - **KI-Assistent mit Anthropic (Claude)**: Neben OpenAI-kompatiblen Diensten lässt sich Claude jetzt direkt über die Anthropic-API anbinden – nur API-Key und Modell eintragen (Vorgabe `claude-opus-5-5`). Beim Speichern werden Key und Modell geprüft, ohne Kosten zu verursachen; Nachfragen im selben Dialog nutzen Prompt-Caching. Die Anbindung lässt sich jetzt auch per Knopf entfernen.
 
 ### Geändert

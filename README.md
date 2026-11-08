@@ -21,6 +21,12 @@ das Panel steuert sie über den Docker-Socket.
 
 ## Funktionen
 
+**Nodes (mehrere Rechner)**
+- Weitere Linux-Rechner (VPS oder PC im Heimnetz) per Assistent und einem einzigen
+  Installationsbefehl anbinden – über WireGuard oder im selben Netz ohne VPN
+- Lastübersicht je Rechner, automatische Platzwahl beim Anlegen, Umzug per Klick
+- Details: [docs/NODES.md](docs/NODES.md)
+
 **Ersteinrichtung**
 - Beim ersten Aufruf führt ein Assistent durch Konto, Server-Adresse und Modpack-Quellen
 - Vorher prüft er, ob der Docker-Socket erreichbar ist – sonst fällt das erst beim ersten
@@ -901,7 +907,10 @@ Server werden beim nächsten Start mit der neuen Einstellung neu aufgesetzt.
 
 ## Bekannte Grenzen
 
-- Einzelner Host: es gibt keine Verteilung auf mehrere Docker-Knoten.
+- Nodes (weitere Docker-Hosts, siehe [docs/NODES.md](docs/NODES.md)) werden vom Panel
+  gesteuert, sind aber kein Cluster: ein Server läuft immer auf genau einer Node, der
+  Umzug ist ein bewusster Schritt mit kurzer Auszeit, und Dateizugriffe des Panels auf
+  entfernte Server gehen über die Leitung zur Node.
 - Manche CurseForge-Autoren verbieten API-Downloads. Das Panel versucht die CDN-URL
   als Ausweichweg; klappt das nicht, meldet es die betroffene Datei im Protokoll und
   du legst sie über den Dateimanager selbst ab.

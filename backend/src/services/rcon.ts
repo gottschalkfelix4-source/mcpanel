@@ -1,5 +1,21 @@
 import net from 'node:net';
 import type { Server } from '@prisma/client';
+import { nodeIdOf, nodeLocation } from '../lib/serverLocation.js';
+import { rconHostPort } from '../node/protocol.js';
+
+/**
+ * Wohin die RCON-Verbindung geht: lokal über das Docker-Netz an den
+ * Containernamen, auf einer Node an deren Tunneladresse (dort ist der Port
+ * nur auf der Tunnelschnittstelle veröffentlicht).
+ */
+export function rconTarget(server: Pick<Server, 'id' | 'containerName' | 'port'>): { host: string; port: number } {
+  const nodeId = nodeIdOf(server.id);
+  const node = nodeId ? nodeLocation(nodeId) : null;
+  if (nodeId && !node) throw new Error(`Node ${nodeId} ist dem Panel nicht bekannt`);
+  return node
+    ? { host: node.tunnelIp, port: rconHostPort(server.port) }
+    : { host: server.containerName, port: 25575 };
+}
 
 const TYPE_AUTH = 3;
 const TYPE_AUTH_RESPONSE = 2;
@@ -140,6 +156,8 @@ const PLAYER_CACHE_MS = 3000;
 interface Connection {
   client: RconClient;
   password: string;
+  /** Ziel „host:port“ – ändert es sich (Umzug auf eine Node), wird neu verbunden. */
+  target: string;
   ready: Promise<void>;
   tail: Promise<unknown>;
   pending: number;
@@ -170,8 +188,10 @@ export function rconNotDelivered(error: unknown): boolean {
 
 function getConnection(server: Server): Connection {
   const key = server.containerName;
+  const { host, port } = rconTarget(server);
+  const target = `${host}:${port}`;
   const existing = connections.get(key);
-  if (existing?.password === server.rconPassword) return existing;
+  if (existing?.password === server.rconPassword && existing.target === target) return existing;
   if (existing) {
     clearTimeout(existing.idleTimer);
     existing.client.close();
@@ -182,9 +202,9 @@ function getConnection(server: Server): Connection {
     clearTimeout(entry.idleTimer);
     if (connections.get(key) === entry) connections.delete(key);
   };
-  const client = new RconClient(key, 25575, server.rconPassword, 8000, discard);
+  const client = new RconClient(host, port, server.rconPassword, 8000, discard);
   const entry: Connection = {
-    client, password: server.rconPassword,
+    client, password: server.rconPassword, target,
     ready: client.connect().catch(error => {
       discard();
       client.close();
@@ -228,6 +248,15 @@ export function rconCommand(server: Server, command: string): Promise<string> {
   entry.playerRequest = undefined;
   entry.playerRevision++;
   return sendCommand(entry, command);
+}
+
+/** Verbindung eines Servers schließen – etwa nach einem Umzug auf eine andere Node. */
+export function closeRconConnection(server: Pick<Server, 'containerName'>): void {
+  const entry = connections.get(server.containerName);
+  if (!entry) return;
+  clearTimeout(entry.idleTimer);
+  entry.client.close();
+  connections.delete(server.containerName);
 }
 
 export function closeRconConnections(): void {

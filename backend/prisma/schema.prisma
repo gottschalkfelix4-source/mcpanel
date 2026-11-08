@@ -91,6 +91,9 @@ model Server {
   mcVersion     String           @default("LATEST")
   extraEnv      Json             @default("{}")
   autoStart     Boolean          @default(false)
+  /// Node, auf der der Container läuft. Leer = der Hauptserver selbst.
+  nodeId        String?
+  node          Node?            @relation(fields: [nodeId], references: [id], onDelete: Restrict)
 
   // --- Kontingent (0 = unbegrenzt), nur von Administratoren aenderbar -----
   /// Obergrenze fuer Serverdaten + Backups zusammen, in MB
@@ -121,6 +124,39 @@ model Server {
   playerSamples  PlayerCountSample[]
 
   @@index([ownerId])
+  @@index([nodeId])
+}
+
+/// Weiterer Docker-Host (z. B. ein gemieteter VPS), angebunden über einen
+/// WireGuard-Tunnel. Das Panel wählt sich von hier aus ein – die Node braucht
+/// nur einen offenen UDP-Port, das Panel selbst keinen.
+model Node {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  /// Öffentliche Adresse der Node (IP oder DNS-Name) – Tunnel-Endpunkt und Spieleradresse
+  publicHost  String
+  /// "wireguard" = über den Tunnel, "direct" = im selben Netz ohne VPN
+  connection  String   @default("wireguard")
+  /// UDP-Port, auf dem WireGuard auf der Node lauscht
+  listenPort  Int      @default(51820)
+  /// Adresse, unter der das Panel die Node erreicht: im Tunnel z. B. 10.66.0.2,
+  /// ohne VPN die LAN-Adresse der Node
+  tunnelIp    String   @unique
+  /// Geheimnis, das der Agent bei Docker-API und Zustandsabfrage verlangt
+  agentToken  String   @default("")
+  /// Schlüsselpaar der Node. Der private Teil steckt im Installationsbefehl.
+  publicKey   String
+  privateKey  String
+  /// Kennwort der Samba-Freigabe, über die das Panel die Serverdaten liest
+  smbPassword String
+  /// Datenverzeichnis auf der Node (gleicher Pfad im Agent und auf dem Host)
+  dataRoot    String   @default("/opt/mcpanel-node")
+  /// Zuletzt gemeldete Agent-Fassung und Kennzahlen
+  agentVersion String  @default("")
+  lastSeenAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  servers Server[]
 }
 
 model ServerMember {

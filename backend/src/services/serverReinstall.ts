@@ -27,7 +27,7 @@ export async function reinstallServer(id: string, request: ReinstallRequest, tas
       type: request.type, mcVersion: request.mcVersion, extraEnv: reinstallEnvironment(server),
       modpackProvider: null, modpackProjectId: null, modpackVersionId: null, modpackName: null, modpackVersionName: null, modpackIconUrl: null };
     await task.update(5, 'Passendes Java-Abbild wird vorbereitet …');
-    await docker.ensureImage(docker.imageForServer(next));
+    await docker.ensureServerImage(next);
     const state = await docker.getState(server);
     const wasRunning = state.state === 'running' || state.state === 'starting';
     const { stage } = restorePaths(id);

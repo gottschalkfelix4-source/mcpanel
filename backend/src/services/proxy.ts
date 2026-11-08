@@ -9,6 +9,7 @@ import { badRequest, conflict } from '../lib/errors.js';
 import { docker, ensureImage, ensureNetwork } from './docker.js';
 import { getSetting, setSetting } from './settings.js';
 import { withQueuedOperation } from './operations.js';
+import { nodeLocation } from '../lib/serverLocation.js';
 
 export const ROUTER_IMAGE = 'itzg/mc-router:1.46.5';
 export const ROUTER_NAME = 'mcpanel-router';
@@ -36,12 +37,23 @@ export async function getProxyConfig(): Promise<ProxyConfig> {
   return raw ? JSON.parse(raw) : { enabled: false, port: 25565 };
 }
 
-export function routesDocument(rows: { hostname: string; server: { containerName: string } }[]) {
-  return { mappings: Object.fromEntries(rows.map(row => [row.hostname, `${row.server.containerName}:25565`])) };
+/**
+ * Routen für mc-router. Server auf einer Node erreicht der Router über deren
+ * öffentliche Adresse und den Spielport – er steht auf dem Hauptserver und
+ * kommt nicht in den Tunnel des Backend-Containers.
+ */
+export function routesDocument(rows: { hostname: string; server: { containerName: string; port?: number; nodeId?: string | null } }[]) {
+  return {
+    mappings: Object.fromEntries(rows.map(row => {
+      const node = row.server.nodeId ? nodeLocation(row.server.nodeId) : null;
+      const host = node ? (node.publicHost.includes(':') ? `[${node.publicHost}]` : node.publicHost) : null;
+      return [row.hostname, node && host ? `${host}:${row.server.port}` : `${row.server.containerName}:25565`];
+    })),
+  };
 }
 
 async function syncProxyRoutesUnlocked(): Promise<void> {
-  const rows = await prisma.serverHostname.findMany({ include: { server: { select: { containerName: true } } } });
+  const rows = await prisma.serverHostname.findMany({ include: { server: { select: { containerName: true, port: true, nodeId: true } } } });
   const dir = path.join(config.dataRoot, 'proxy');
   await fs.mkdir(dir, { recursive: true });
   const tmp = path.join(dir, `routes-${crypto.randomUUID()}.tmp`);

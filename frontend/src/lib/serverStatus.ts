@@ -8,5 +8,6 @@ export function serverStatus(state: PowerState, health?: string | null) {
     return { label: 'Läuft · ungeprüft', tone: 'neutral' as const };
   }
   if (state === 'error') return { label: 'Fehler', tone: 'red' as const };
+  if (state === 'unreachable') return { label: 'Node getrennt', tone: 'gold' as const };
   return { label: state === 'missing' ? 'Kein Container' : 'Offline', tone: 'neutral' as const };
 }
