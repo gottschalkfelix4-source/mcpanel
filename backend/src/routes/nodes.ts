@@ -13,7 +13,9 @@ import {
   uninstallCommand,
   updateNode,
 } from '../services/nodes.js';
+import { nodeUpdateState, startAgentUpdate } from '../services/nodeUpdate.js';
 import { tunnelState } from '../services/tunnel.js';
+import { config } from '../config.js';
 
 const hostSchema = z.string().trim().min(1).max(253);
 const portSchema = z.number().int().min(1).max(65535);
@@ -45,8 +47,22 @@ export default async function nodeRoutes(app: FastifyInstance) {
     return {
       tunnel: { up: tunnel.up, error: tunnel.error, mode: tunnel.mode, panelIp: tunnel.panelIp },
       image: nodeImage(),
-      nodes: await nodeOverview(),
+      panelVersion: config.build.version,
+      nodes: (await nodeOverview()).map((node) => ({ ...node, update: node.id ? nodeUpdateState(node.id) : null })),
     };
+  });
+
+  /**
+   * Agent der Node auf die Fassung des Panels bringen. Läuft im Hintergrund;
+   * den Fortschritt zeigt die Übersicht (`update`).
+   */
+  app.post('/:id/update-agent', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const node = await getNode(id);
+    const update = await startAgentUpdate(id, { image: nodeImage(), recheck: checkNodes });
+    await audit(req.user!.id, null, 'node.update-agent', `${node.name} (${update.image})`);
+    reply.code(202);
+    return { update };
   });
 
   app.post('/', async (req, reply) => {

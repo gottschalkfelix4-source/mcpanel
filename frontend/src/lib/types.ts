@@ -426,11 +426,25 @@ export interface NodeOverview {
   metrics: NodeMetrics | null;
   servers: number;
   allocatedMemoryMb: number;
+  /** Laufendes oder letztes Agent-Update seit dem Panel-Start */
+  update?: NodeUpdate | null;
+}
+
+export interface NodeUpdate {
+  state: 'running' | 'done' | 'failed';
+  message: string;
+  image: string;
+  fromVersion: string;
+  toVersion: string | null;
+  startedAt: string;
+  finishedAt: string | null;
 }
 
 export interface NodesResponse {
   tunnel: { up: boolean; error: string | null; mode: 'kernel' | 'userspace' | null; panelIp: string };
   image: string;
+  /** Fassung des Panels – weicht der Agent davon ab, gibt es ein Update */
+  panelVersion?: string;
   nodes: NodeOverview[];
 }
 

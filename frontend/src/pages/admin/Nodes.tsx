@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Check, CheckCircle2, ChevronDown, ChevronUp, Copy, Cpu, HardDrive, Home, KeyRound, Loader2, MemoryStick,
+  ArrowUpCircle, Check, CheckCircle2, ChevronDown, ChevronUp, Copy, Cpu, HardDrive, Home, KeyRound, Loader2, MemoryStick,
   Monitor, Network, Plus, RefreshCw, Server, ShieldCheck, Terminal, Trash2, Wifi,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatMemory, formatRelative } from '../../lib/format';
-import type { NodeInstall, NodeOverview, NodesResponse } from '../../lib/types';
+import type { NodeInstall, NodeOverview, NodesResponse, NodeUpdate } from '../../lib/types';
 import {
   Badge, Button, ConfirmDialog, EmptyState, ErrorNote, Field, InfoNote, LoadErrorBlock, LoadingBlock, Modal, Panel,
   ProgressBar, Toggle, useToast,
@@ -102,8 +102,33 @@ function Meter({ icon, label, value, detail }: { icon: React.ReactNode; label: s
 
 // ------------------------------------------------------------- Node-Karte ---
 
-function NodeCard({ node, onInstall, onDelete }: { node: NodeOverview; onInstall: () => void; onDelete: () => void }) {
+function UpdateNote({ update }: { update: NodeUpdate }) {
+  if (update.state === 'running') {
+    return (
+      <InfoNote>
+        <span className="flex items-center gap-2"><Loader2 size={14} className="shrink-0 animate-spin" />{update.message}</span>
+      </InfoNote>
+    );
+  }
+  // Ergebnis nur kurz zeigen; ein Fehler bleibt stehen, bis man es erneut versucht.
+  if (update.state === 'done') {
+    const age = update.finishedAt ? Date.now() - new Date(update.finishedAt).getTime() : 0;
+    if (age > 10 * 60_000) return null;
+    return <p className="flex items-center gap-2 text-sm text-emerald"><CheckCircle2 size={15} />{update.message}</p>;
+  }
+  return <ErrorNote><strong>Agent-Update:</strong> {update.message}</ErrorNote>;
+}
+
+function NodeCard({ node, panelVersion, onInstall, onDelete, onUpdate }: {
+  node: NodeOverview;
+  panelVersion: string;
+  onInstall: () => void;
+  onDelete: () => void;
+  onUpdate: () => void;
+}) {
   const m = node.metrics;
+  const updating = node.update?.state === 'running';
+  const outdated = !node.local && Boolean(panelVersion) && Boolean(node.agentVersion) && node.agentVersion !== panelVersion;
   const memAllocated = m ? percent(node.allocatedMemoryMb, m.memTotalMb) : 0;
   const memUsed = m ? percent(m.memTotalMb - m.memAvailableMb, m.memTotalMb) : 0;
   const disk = m ? percent(m.diskTotalMb - m.diskFreeMb, m.diskTotalMb) : 0;
@@ -121,9 +146,11 @@ function NodeCard({ node, onInstall, onDelete }: { node: NodeOverview; onInstall
         <Badge tone="neutral"><Server size={11} />{node.servers} {node.servers === 1 ? 'Server' : 'Server'}</Badge>
         {m?.dockerVersion && <Badge tone="neutral">Docker {m.dockerVersion}</Badge>}
         {!node.local && node.agentVersion && <Badge tone="neutral">Agent {node.agentVersion}</Badge>}
+        {outdated && !updating && <Badge tone="gold"><ArrowUpCircle size={11} />Update auf {panelVersion}</Badge>}
       </div>
 
-      {node.error && <div className="mt-3"><ErrorNote>{node.error}</ErrorNote></div>}
+      {node.update && <div className="mt-3"><UpdateNote update={node.update} /></div>}
+      {node.error && !updating && <div className="mt-3"><ErrorNote>{node.error}</ErrorNote></div>}
 
       {m ? (
         <div className="mt-4 space-y-3">
@@ -145,7 +172,12 @@ function NodeCard({ node, onInstall, onDelete }: { node: NodeOverview; onInstall
           <span className="text-xs text-stone-450">
             {node.lastSeenAt ? `Zuletzt gesehen ${formatRelative(node.lastSeenAt)}` : 'Noch nie verbunden'}
           </span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button variant={outdated ? 'primary' : 'ghost'} icon={<ArrowUpCircle size={14} />} onClick={onUpdate}
+              loading={updating} disabled={updating || node.status !== 'online'}
+              title={node.status !== 'online' ? 'Nur bei verbundener Node möglich – sonst den Installationsbefehl erneut ausführen' : undefined}>
+              Agent aktualisieren
+            </Button>
             <Button variant="ghost" icon={<Terminal size={14} />} onClick={onInstall}>Installationsbefehl</Button>
             <Button variant="ghost" icon={<Trash2 size={14} />} onClick={onDelete} disabled={node.servers > 0}
               title={node.servers > 0 ? 'Erst alle Server umziehen oder löschen' : undefined}>Entfernen</Button>
@@ -386,11 +418,13 @@ export default function NodesPage() {
   const [installFor, setInstallFor] = useState<NodeOverview | null>(null);
   const [deleteFor, setDeleteFor] = useState<NodeOverview | null>(null);
   const [uninstall, setUninstall] = useState<string | null>(null);
+  const [updateFor, setUpdateFor] = useState<NodeOverview | null>(null);
 
   const overview = useQuery({
     queryKey: ['nodes'],
     queryFn: () => api.get<NodesResponse>('/nodes'),
-    refetchInterval: 10_000,
+    // Während eines Agent-Updates den Fortschritt dichter abfragen.
+    refetchInterval: (query) => (query.state.data?.nodes.some((node) => node.update?.state === 'running') ? 2000 : 10_000),
   });
   const install = useQuery({
     queryKey: ['nodes', 'install', installFor?.id],
@@ -429,8 +463,10 @@ export default function NodesPage() {
           <NodeCard
             key={node.id ?? 'local'}
             node={node}
+            panelVersion={overview.data.panelVersion ?? ''}
             onInstall={() => setInstallFor(node)}
             onDelete={() => setDeleteFor(node)}
+            onUpdate={() => setUpdateFor(node)}
           />
         ))}
       </div>
@@ -480,6 +516,28 @@ export default function NodesPage() {
           } catch (err) {
             toast.error(err instanceof Error ? err.message : 'Entfernen fehlgeschlagen');
           }
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(updateFor)}
+        onClose={() => setUpdateFor(null)}
+        title="Agent aktualisieren?"
+        confirmLabel="Aktualisieren"
+        message={<>
+          Die Node <strong>{updateFor?.name}</strong> lädt das Abbild <span className="font-mono">{overview.data.image}</span> und
+          startet ihren Agenten damit neu. Minecraft-Server laufen weiter; Konsole, Dateien und Spielerlisten sind für etwa
+          eine halbe Minute nicht erreichbar. Startet der neue Agent nicht, läuft automatisch wieder der bisherige.
+        </>}
+        onConfirm={async () => {
+          if (!updateFor?.id) return;
+          try {
+            await api.post(`/nodes/${updateFor.id}/update-agent`);
+            toast.success('Agent-Update gestartet');
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Update konnte nicht gestartet werden');
+          }
+          void queryClient.invalidateQueries({ queryKey: ['nodes'] });
         }}
       />
 

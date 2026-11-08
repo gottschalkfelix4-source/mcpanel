@@ -13,6 +13,10 @@ set -e
 if [ "${MCPANEL_ROLE:-panel}" = "node" ]; then
   exec node /app/dist/node/agent.js
 fi
+# Kurzlebiger Helfer, mit dem das Panel den Agenten einer Node austauscht.
+if [ "${MCPANEL_ROLE:-panel}" = "node-update" ]; then
+  exec node /app/dist/node/updater.js
+fi
 
 DATA_ROOT="${DATA_ROOT:-/data}"
 PGDATA="${PGDATA:-$DATA_ROOT/postgres}"
