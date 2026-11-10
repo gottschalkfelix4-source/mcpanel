@@ -6,7 +6,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({ root: '', state: 'stopped', start: vi.fn(), ready: vi.fn(), backup: vi.fn(), recreate: vi.fn(), update: vi.fn(), stop: vi.fn() }));
 vi.mock('../config.js', () => ({ serverDir: (id: string) => path.join(m.root, 'servers', id), serverBackupDir: () => path.join(m.root, 'backups') }));
-vi.mock('../db.js', () => ({ prisma: { server: { update: m.update, findUniqueOrThrow: async () => ({ id: 'neu', rconPassword: 'neues-panel-passwort' }) } } }));
+vi.mock('../db.js', () => ({ prisma: { server: { update: m.update, findUniqueOrThrow: async () => ({ id: 'neu', rconPassword: 'neues-panel-passwort', memoryMb: 4096 }) } } }));
 vi.mock('./docker.js', () => ({ getState: async () => ({ state: m.state }), start: m.start, stop: m.stop, ensureImage: vi.fn(), ensureServerImage: vi.fn(), imageForServer: () => 'java21', recreateContainer: m.recreate }));
 vi.mock('./serverStartup.js', () => ({ waitForServerReady: m.ready }));
 vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));

@@ -17,7 +17,7 @@ import { reinstallServer } from './serverReinstall.js';
 import { reinstallSchema } from './reinstallationData.js';
 import { withServerOperation } from './operations.js';
 const task = () => ({ id: 'task', update: vi.fn(async () => {}), log: vi.fn(async () => {}), done: vi.fn(async () => {}), fail: vi.fn(async () => {}) });
-const request = () => reinstallSchema.parse({ name: 'Neu', description: 'Neue Installation', type: 'VANILLA', mcVersion: '1.21.1', memoryMb: 2048 });
+const request = () => reinstallSchema.parse({ name: 'Neu', description: 'Neue Installation', type: 'VANILLA', mcVersion: '1.21.1', memoryMb: 4096 });
 const actor = { id: 'besitzer', isAdmin: false };
 beforeEach(async () => {
   vi.resetAllMocks(); m.state = 'running'; m.root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcpanel-neuinstallation-'));
@@ -76,8 +76,8 @@ it('verändert bei fehlgeschlagener Sicherung keine Dateien und startet den vorh
   expect(m.row.name).toBe('Alt'); expect(m.start).toHaveBeenCalledTimes(1);
 });
 
-it('lehnt unzulässigen RAM vor Sicherung und Stopp ab', async () => {
-  await expect(reinstallServer('a', { ...request(), memoryMb: 8192 }, task(), actor)).rejects.toMatchObject({ statusCode: 400 });
+it('lehnt RAM-Änderungen durch Nicht-Admins vor Sicherung und Stopp ab', async () => {
+  await expect(reinstallServer('a', { ...request(), memoryMb: 2048 }, task(), actor)).rejects.toMatchObject({ statusCode: 403 });
   expect(m.stop).not.toHaveBeenCalled(); expect(m.backup).not.toHaveBeenCalled();
 });
 

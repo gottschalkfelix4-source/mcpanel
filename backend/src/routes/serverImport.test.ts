@@ -10,7 +10,7 @@ vi.mock('../config.js', () => ({ cacheDir: () => m.root, serverDir: () => m.root
 vi.mock('../auth/jwt.js', () => ({ verifyToken: (token: string) => ({ sub: token, sessionVersion: 0 }) }));
 vi.mock('../db.js', () => ({ prisma: {
   user: { findUnique: async ({ where }: any) => ({ id: where.id, role: where.id === 'admin' ? 'ADMIN' : 'USER', active: true, sessionVersion: 0 }) },
-  server: { findUnique: async ({ where }: any) => where.id === 'bestehend' ? { id: 'bestehend', ownerId: 'besitzer', quotaMemoryMb: 4096 } : null },
+  server: { findUnique: async ({ where }: any) => where.id === 'bestehend' ? { id: 'bestehend', ownerId: 'besitzer', memoryMb: 4096, quotaMemoryMb: 4096 } : null },
   serverMember: { findUnique: m.member },
   setting: { findUnique: async () => null },
   auditLog: { create: async () => {} },
@@ -79,8 +79,8 @@ it('prüft Rechte nach dem Upload erneut', async () => {
   expect((await call('verwalter', body(), query, '/bestehend/import')).statusCode).toBe(403);
   expect(m.install).not.toHaveBeenCalled();
 });
-it('verweigert höhere RAM-Kontingente und eingeschleuste Rechte', async () => {
-  expect((await call('verwalter', body(), query + '&memoryMb=8192', '/bestehend/import')).statusCode).toBe(400);
+it('verweigert RAM-Änderungen durch Nicht-Admins und eingeschleuste Rechte', async () => {
+  expect((await call('verwalter', body(), query + '&memoryMb=2048', '/bestehend/import')).statusCode).toBe(403);
   expect((await call('verwalter', body(), query + '&ownerId=verwalter', '/bestehend/import')).statusCode).toBe(400);
   expect(m.install).not.toHaveBeenCalled();
 });

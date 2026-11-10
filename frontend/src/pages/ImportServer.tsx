@@ -25,6 +25,8 @@ export default function ImportServerPage({ existingServer }: { existingServer?: 
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ id: string; taskId: string } | null>(null);
   const modded = ['FORGE', 'NEOFORGE', 'FABRIC', 'QUILT'].includes(type);
+  // Den Arbeitsspeicher eines bestehenden Servers ändert nur ein Administrator.
+  const memoryLocked = Boolean(existingServer && !existingServer.isAdmin);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setError(null);
@@ -61,7 +63,7 @@ export default function ImportServerPage({ existingServer }: { existingServer?: 
             <Field label="Bisherige Minecraft-Version" hint="Genau dieselbe Version wie beim Quellserver verwenden."><input required placeholder="z. B. 1.20.1" className="mc-input" value={mcVersion} onChange={e => setMcVersion(e.target.value)} /></Field>
           </div>
           {modded && <Field label="Bisherige Loader-Version" hint="Steht üblicherweise im Startskript oder im Startprotokoll."><input required className="mc-input" placeholder={type === 'FORGE' ? 'z. B. 47.4.0' : 'Genaue Loader-Version'} value={loaderVersion} onChange={e => setLoaderVersion(e.target.value)} /></Field>}
-          <Field label="Maximaler Java-Heap"><select className="mc-select" value={memoryMb} onChange={e => setMemoryMb(Number(e.target.value))}>{[2048, 4096, 6144, 8192, 12288, 16384].map(m => <option key={m} value={m}>{m / 1024} GB</option>)}</select></Field>
+          <Field label="Maximaler Java-Heap" hint={memoryLocked ? 'Den Arbeitsspeicher legt ein Administrator fest.' : undefined}><select className="mc-select" value={memoryMb} disabled={memoryLocked} onChange={e => setMemoryMb(Number(e.target.value))}>{[...new Set([2048, 4096, 6144, 8192, 12288, 16384, memoryMb])].sort((a, b) => a - b).map(m => <option key={m} value={m}>{m / 1024} GB</option>)}</select></Field>
           <Toggle checked={startAfter} onChange={setStartAfter} label="Nach dem Import starten und Start prüfen" />
           <p className="text-sm text-stone-400">Port und RCON-Zugang werden für das Panel angepasst. Startskripte und JVM-Argumente aus dem ZIP werden nicht automatisch ausgeführt.</p>
           {existingServer && <label className="flex items-start gap-2 text-sm"><input type="checkbox" required />Ich möchte die Dateien dieses Servers durch den ZIP-Inhalt ersetzen. Der bisherige Stand bleibt im Sicherheitsbackup erhalten.</label>}

@@ -116,9 +116,12 @@ das Panel steuert sie über den Docker-Socket.
 - Testknopf je Kanal; die gespeicherte URL wird nie zurückgegeben, in der Liste steht sie gekürzt
 
 **Kontingent je Server**
-- Grenzen hängen am Server, nicht am Konto: Speicherplatz (Daten + Sicherungen), Zahl der
-  aufbewahrten Sicherungen und der höchste Java-Heap, den Mitglieder ohne Adminrechte setzen dürfen
+- Grenzen hängen am Server, nicht am Konto: Speicherplatz (Daten + Sicherungen) und Zahl der
+  aufbewahrten Sicherungen
 - Gesetzt werden sie nur von Administratoren – im Tab *Einstellungen* oder beim Anlegen
+- Auch den Java-Heap (RAM) eines Servers ändert nur ein Administrator – weder über
+  *Einstellungen* noch über Neuinstallation, ZIP-Import oder Assistent können Besitzer oder
+  Mitglieder ihn verstellen
 - Ist der Platz aufgebraucht, lehnt das Panel neue Sicherungen und Uploads sofort ab und nennt
   belegte wie erlaubte Größe; ab 90 % geht das Ereignis *Speicherplatz knapp* raus
 - Überzählige Sicherungen werden nach jedem Backup automatisch entfernt (älteste zuerst)
@@ -174,10 +177,11 @@ Werte erfunden und keine Mods automatisch installiert.
 
 Besitzer und Administratoren können im Server-Tab **Neuinstallation** denselben
 Dialog wie beim Anlegen nutzen: Servertyp, Minecraft-Version oder ein Modpack von
-Modrinth/CurseForge einschließlich Paketversion sowie den Java-Heap auswählen.
+Modrinth/CurseForge einschließlich Paketversion auswählen; den Java-Heap stellt dabei nur
+ein Administrator um. Zur Neuinstallation führt außerdem ein Knopf im Tab **Einstellungen**.
 Mitglieder benötigen das unter **Zugriff** vergebene Recht **Server neu installieren**.
-Dieses Recht erlaubt keine zusätzlichen Server und keine Änderung von Kontingenten,
-Besitzer, Ports oder administrativen Laufzeitvorgaben.
+Dieses Recht erlaubt keine zusätzlichen Server und keine Änderung von Arbeitsspeicher,
+Kontingenten, Besitzer, Ports oder administrativen Laufzeitvorgaben.
 
 Vor jedem Austausch wird zwingend eine Sicherung erstellt. Die Welt bleibt
 standardmäßig erhalten; bei **neuer Welt** liegt der bisherige Stand im Backup.

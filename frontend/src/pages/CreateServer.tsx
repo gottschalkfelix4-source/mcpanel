@@ -35,6 +35,8 @@ export default function CreateServerPage({ existingServer }: { existingServer?: 
   const [type, setType] = useState<ServerType>(existingServer?.type === 'MODPACK' ? 'PAPER' : existingServer?.type ?? 'PAPER');
   const [mcVersion, setMcVersion] = useState(existingServer?.mcVersion ?? 'LATEST');
   const [memoryMb, setMemoryMb] = useState(existingServer?.memoryMb ?? 4096);
+  // Den Arbeitsspeicher eines bestehenden Servers ändert nur ein Administrator.
+  const memoryLocked = Boolean(existingServer && !existingServer.isAdmin);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -289,18 +291,20 @@ export default function CreateServerPage({ existingServer }: { existingServer?: 
               </Field>
             )}
 
-            <Field label="Maximaler Java-Heap" hint="Java startet mit höchstens 2 GB und wächst bei Bedarf bis zu diesem Maximum. Der Bedarf hängt vom Modpack ab. Der Container erhält zusätzliche JVM-Reserve.">
+            <Field label="Maximaler Java-Heap" hint={memoryLocked
+              ? 'Den Arbeitsspeicher legt ein Administrator fest – er bleibt bei der Neuinstallation erhalten.'
+              : 'Java startet mit höchstens 2 GB und wächst bei Bedarf bis zu diesem Maximum. Der Bedarf hängt vom Modpack ab. Der Container erhält zusätzliche JVM-Reserve.'}>
               <div className="grid grid-cols-3 gap-1.5">
                 {[...new Set([...(existingServer ? [existingServer.memoryMb] : []), ...RAM_PRESETS])].sort((a, b) => a - b).map((mb) => (
                   <button
                     key={mb}
-                    disabled={Boolean(existingServer && !existingServer.isAdmin && existingServer.quota.memoryLimitMb && mb > existingServer.quota.memoryLimitMb)}
+                    disabled={memoryLocked && mb !== existingServer!.memoryMb}
                     onClick={() => setMemoryMb(mb)}
                     className={clsx(
                       'border px-2 py-1.5 text-xs font-bold transition',
                       memoryMb === mb
                         ? 'border-grass-dark bg-grass/25 text-white'
-                        : 'border-stone-700 bg-stone-800/60 text-stone-400 hover:text-stone-100',
+                        : 'border-stone-700 bg-stone-800/60 text-stone-400 hover:text-stone-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-stone-400',
                     )}
                   >
                     {mb / 1024} GB

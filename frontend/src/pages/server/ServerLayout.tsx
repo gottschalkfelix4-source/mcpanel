@@ -264,8 +264,9 @@ export default function ServerLayout() {
             )}
           </div>
 
-          {/* Reiter */}
-          <nav className="flex overflow-x-auto border-t border-stone-890 bg-stone-well/60 no-scrollbar">
+          {/* Reiter – ab Tablet-Breite umbrechen statt unsichtbar zu scrollen,
+              sonst verschwinden die hinteren Reiter (Neuinstallation) rechts. */}
+          <nav className="flex overflow-x-auto border-t border-stone-890 bg-stone-well/60 no-scrollbar sm:flex-wrap sm:overflow-x-visible">
             {TABS.filter(
               (tab) =>
                 (!tab.permission || can(tab.permission)) &&

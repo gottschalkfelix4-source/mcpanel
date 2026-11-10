@@ -48,7 +48,7 @@ vi.mock('./serverManager.js', () => ({ updateServerSettings: m.updateSettings })
 vi.mock('./quota.js', () => ({
   assertDiskAvailable: async () => {},
   assertMemoryAllowed: (server: Server, mb: number, isAdmin: boolean) => {
-    if (!isAdmin && server.quotaMemoryMb > 0 && mb > server.quotaMemoryMb) throw new Error('zu viel Speicher');
+    if (!isAdmin && mb !== server.memoryMb) throw new Error('Den Arbeitsspeicher kann nur ein Administrator ändern');
   },
   remainingDiskBytes: async () => 1e12,
 }));
@@ -226,9 +226,10 @@ describe('prepareActions', () => {
     expect(v.blockiert).toContain('Client-Mod');
   });
 
-  it('hält sich an das Speicherkontingent', async () => {
-    const [v] = await prepareActions(access(), user.id, [{ typ: 'arbeitsspeicher_setzen', mb: 8192, grund: '' }]);
-    expect(v.blockiert).toContain('zu viel Speicher');
+  it('überlässt Änderungen am Arbeitsspeicher Administratoren', async () => {
+    // Auch innerhalb des Kontingents darf ein Nicht-Admin den RAM nicht ändern.
+    const [v] = await prepareActions(access(), user.id, [{ typ: 'arbeitsspeicher_setzen', mb: 6144, grund: '' }]);
+    expect(v.blockiert).toContain('nur ein Administrator');
   });
 });
 

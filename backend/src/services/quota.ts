@@ -12,7 +12,7 @@ import fsp from 'node:fs/promises';
 import type { Server } from '@prisma/client';
 import { config } from '../config.js';
 import { prisma } from '../db.js';
-import { badRequest } from '../lib/errors.js';
+import { badRequest, forbidden } from '../lib/errors.js';
 import { computeDiskUsage, getDiskUsage } from './diskUsage.js';
 
 export interface QuotaState {
@@ -178,14 +178,13 @@ export async function volumeSpace(): Promise<VolumeSpace | null> {
 }
 
 /**
- * Prüft eine gewünschte Arbeitsspeichergröße. Administratoren dürfen über die
- * Grenze hinaus – sie setzen sie ja selbst.
+ * Prüft eine gewünschte Arbeitsspeichergröße. Den Arbeitsspeicher eines
+ * Servers legt allein ein Administrator fest – Besitzer und Mitglieder dürfen
+ * ihn weder über Einstellungen noch über Neuinstallation, ZIP-Import oder
+ * Assistent ändern. Verglichen wird gegen den gespeicherten Stand: die
+ * Oberfläche schickt den Wert immer mit, ein unveränderter Wert ist erlaubt.
  */
 export function assertMemoryAllowed(server: Server, memoryMb: number, isAdmin: boolean): void {
-  if (isAdmin || server.quotaMemoryMb <= 0) return;
-  if (memoryMb > server.quotaMemoryMb) {
-    throw badRequest(
-      `Für diesen Server sind höchstens ${server.quotaMemoryMb} MB Arbeitsspeicher freigegeben.`,
-    );
-  }
+  if (isAdmin || memoryMb === server.memoryMb) return;
+  throw forbidden('Den Arbeitsspeicher kann nur ein Administrator ändern');
 }

@@ -6,7 +6,7 @@ vi.mock('../auth/jwt.js', () => ({ verifyToken: (token: string) => ({ sub: token
 vi.mock('../config.js', () => ({ serverDir: (id: string) => '/test/' + id }));
 vi.mock('../db.js', () => ({ prisma: {
   user: { findUnique: async ({ where }: any) => ({ id: where.id, role: where.id === 'admin' ? 'ADMIN' : 'USER', active: true, sessionVersion: 0 }) },
-  server: { findUnique: async () => ({ id: 'a', ownerId: 'besitzer', quotaMemoryMb: 4096 }) },
+  server: { findUnique: async () => ({ id: 'a', ownerId: 'besitzer', memoryMb: 2048, quotaMemoryMb: 4096 }) },
   serverMember: { findUnique: async ({ where }: any) => where.serverId_userId.userId === 'mitglied' ? { permissions: m.permissions } : null },
   setting: { findUnique: async () => null },
   auditLog: { create: vi.fn(async () => {}) },
@@ -46,10 +46,18 @@ it('verweigert nicht eingeladenen und nicht angemeldeten Nutzern den Zugriff', a
   expect(m.install).not.toHaveBeenCalled();
 });
 it('verhindert das Umgehen von Kontingenten und administrativen Feldern', async () => {
-  expect((await call('besitzer', { ...payload, memoryMb: 8192 })).statusCode).toBe(400);
+  // Den Arbeitsspeicher ändert nur ein Administrator – auch unterhalb des Kontingents.
+  expect((await call('besitzer', { ...payload, memoryMb: 8192 })).statusCode).toBe(403);
+  expect((await call('besitzer', { ...payload, memoryMb: 4096 })).statusCode).toBe(403);
+  m.permissions = ['server.reinstall'];
+  expect((await call('mitglied', { ...payload, memoryMb: 1024 })).statusCode).toBe(403);
   expect((await call('besitzer', { ...payload, quotaMemoryMb: 0 })).statusCode).toBe(400);
   expect((await call('besitzer', { ...payload, extraEnv: { MC_IMAGE: 'fremd' } })).statusCode).toBe(400);
   expect(m.install).not.toHaveBeenCalled();
+});
+it('erlaubt Administratoren, den Arbeitsspeicher bei der Neuinstallation zu ändern', async () => {
+  expect((await call('admin', { ...payload, memoryMb: 8192 })).statusCode).toBe(200);
+  expect(m.install).toHaveBeenCalledWith('a', expect.objectContaining({ memoryMb: 8192 }), expect.anything(), expect.objectContaining({ isAdmin: true }));
 });
 it('verlangt eine Modpack-Auswahl und weist eine unpassende Auswahl beim normalen Server ab', async () => {
   expect((await call('besitzer', { ...payload, type: 'MODPACK' })).statusCode).toBe(400);

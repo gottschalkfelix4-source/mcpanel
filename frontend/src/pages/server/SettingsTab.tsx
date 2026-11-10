@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Gauge, Plus, Save, Settings2, Terminal, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Gauge, Plus, RotateCw, Save, Settings2, Terminal, Trash2, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import type { ServerType } from '../../lib/types';
 import {
@@ -19,7 +19,7 @@ const SERVER_TYPES: ServerType[] = [
 const RAM_PRESETS = [1024, 2048, 4096, 6144, 8192, 10240, 12288, 16384, 24576];
 
 export default function SettingsTab() {
-  const { server, refresh } = useServer();
+  const { server, refresh, can } = useServer();
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -40,9 +40,6 @@ export default function SettingsTab() {
   );
   const [quotaBackups, setQuotaBackups] = useState(
     server.quota.backupLimit ? String(server.quota.backupLimit) : '',
-  );
-  const [quotaMemoryMb, setQuotaMemoryMb] = useState(
-    server.quota.memoryLimitMb ? String(server.quota.memoryLimitMb) : '',
   );
 
   const environment = useQuery({
@@ -70,14 +67,14 @@ export default function SettingsTab() {
         description,
         type,
         mcVersion,
-        memoryMb,
+        // Den Arbeitsspeicher ändert nur ein Administrator.
+        ...(server.isAdmin ? { memoryMb } : {}),
         autoStart,
         ...(environment.isSuccess ? { extraEnv: Object.fromEntries(env.filter(([k]) => k.trim())) } : {}),
         ...(server.isAdmin
           ? {
               quotaDiskMb: quotaDiskGb.trim() ? Math.round(Number(quotaDiskGb) * 1024) : 0,
               quotaBackups: quotaBackups.trim() ? Number(quotaBackups) : 0,
-              quotaMemoryMb: quotaMemoryMb.trim() ? Number(quotaMemoryMb) : 0,
             }
           : {}),
       }),
@@ -150,10 +147,16 @@ export default function SettingsTab() {
             </datalist>
           </Field>
 
-          <Field label="Maximaler Java-Heap" hint={`Maximum ${memoryMb} MB. Standardmäßig startet Java mit höchstens 2 GB und wächst bei Bedarf. INIT_MEMORY kann den Startwert überschreiben. Das Container-Limit enthält zusätzliche JVM-Reserve.`}>
+          <Field
+            label="Maximaler Java-Heap"
+            hint={server.isAdmin
+              ? `Maximum ${memoryMb} MB. Standardmäßig startet Java mit höchstens 2 GB und wächst bei Bedarf. INIT_MEMORY kann den Startwert überschreiben. Das Container-Limit enthält zusätzliche JVM-Reserve.`
+              : `Maximum ${memoryMb} MB. Den Arbeitsspeicher legt ein Administrator fest.`}
+          >
             <select
-              className="mc-select"
+              className="mc-select disabled:cursor-not-allowed disabled:opacity-60"
               value={memoryMb}
+              disabled={!server.isAdmin}
               onChange={(e) => setMemoryMb(Number(e.target.value))}
             >
               {[...new Set([...RAM_PRESETS, memoryMb])]
@@ -183,6 +186,23 @@ export default function SettingsTab() {
         </div>
       </Panel>
 
+      {can('server.reinstall') && (
+        <Panel
+          title="Neuinstallation"
+          icon={<RotateCw size={16} />}
+          subtitle="Servertyp, Version oder Modpack frisch aufsetzen – vorher wird automatisch gesichert."
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-stone-400">
+              Wahlweise mit vorhandener Welt oder komplett neu, alternativ aus einem ZIP-Archiv.
+            </p>
+            <Button icon={<RotateCw size={15} />} onClick={() => navigate(`/servers/${server.id}/reinstall`)}>
+              Server neu installieren
+            </Button>
+          </div>
+        </Panel>
+      )}
+
       {/* Kontingent */}
       {server.isAdmin && <ServerRouting key={server.id} />}
       {server.isAdmin && <NodeMigration server={server} onDone={() => void refresh()} />}
@@ -193,7 +213,7 @@ export default function SettingsTab() {
       >
         {server.isAdmin ? (
           <>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Speicherplatz (GB)" hint="Serverdaten und Sicherungen zusammen. Leer = unbegrenzt.">
                 <input
                   type="number"
@@ -211,17 +231,6 @@ export default function SettingsTab() {
                   className="mc-input w-full"
                   value={quotaBackups}
                   onChange={(e) => setQuotaBackups(e.target.value)}
-                  placeholder="unbegrenzt"
-                />
-              </Field>
-              <Field label="Max. Java-Heap (MB)" hint="Obergrenze für Mitglieder ohne Adminrechte.">
-                <input
-                  type="number"
-                  min={0}
-                  step={512}
-                  className="mc-input w-full"
-                  value={quotaMemoryMb}
-                  onChange={(e) => setQuotaMemoryMb(e.target.value)}
                   placeholder="unbegrenzt"
                 />
               </Field>
@@ -243,7 +252,7 @@ export default function SettingsTab() {
               : 'unbegrenzter Speicher'}
             ,{' '}
             {server.quota.backupLimit ? `${server.quota.backupLimit} Sicherungen` : 'beliebig viele Sicherungen'}
-            {server.quota.memoryLimitMb ? `, höchstens ${server.quota.memoryLimitMb} MB Java-Heap` : ''}.
+            , {server.memoryMb} MB Java-Heap.
           </InfoNote>
         )}
       </Panel>
