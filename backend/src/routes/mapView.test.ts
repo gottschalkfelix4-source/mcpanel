@@ -1,9 +1,10 @@
 import http from 'node:http';
+import zlib from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ port: 0, active: true, version: 0, permissions: ['console.read'], requests: [] as string[] }));
+const m = vi.hoisted(() => ({ port: 0, active: true, version: 0, permissions: ['console.read'], requests: [] as string[], encodings: [] as (string | undefined)[] }));
 vi.mock('../config.js', () => ({ config: { jwtSecret: 'test-geheimnis' }, serverDir: () => '/x' }));
 vi.mock('../db.js', () => ({ prisma: {
   user: { findUnique: async () => ({ id: 'u1', active: m.active, sessionVersion: m.version }) },
@@ -24,6 +25,12 @@ let upstream: http.Server;
 beforeAll(async () => {
   upstream = http.createServer((req, res) => {
     m.requests.push(req.url!);
+    m.encodings.push(req.headers['accept-encoding'] as string | undefined);
+    if (req.url === '/gz/') {
+      res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Encoding': 'gzip' });
+      res.end(zlib.gzipSync('<!DOCTYPE html><html><HEAD lang="x"><title>BM</title></HEAD></html>'));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'boese=1', 'X-Frame-Options': 'DENY' });
     res.end('<html>BlueMap</html>');
   });
@@ -31,12 +38,12 @@ beforeAll(async () => {
   m.port = (upstream.address() as AddressInfo).port;
 });
 afterAll(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
-beforeEach(() => { _resetMapViewCache(); m.active = true; m.version = 0; m.permissions = ['console.read']; m.requests = []; });
+beforeEach(() => { _resetMapViewCache(); m.active = true; m.version = 0; m.permissions = ['console.read']; m.requests = []; m.encodings = []; });
 
 async function get(url: string) {
   const app = Fastify();
   await app.register(mapViewRoutes, { prefix: '/api/map-view' });
-  try { return await app.inject({ method: 'GET', url }); } finally { await app.close(); }
+  try { return await app.inject({ method: 'GET', url, headers: { 'accept-encoding': 'gzip, br' } }); } finally { await app.close(); }
 }
 
 it('reicht BlueMap durch – in einer Sandbox, ohne Cookies des Upstreams', async () => {
@@ -75,4 +82,30 @@ it('blockt Pfade außerhalb des Webroots', async () => {
   expect([400, 404]).toContain((await get(`/api/map-view/${token}/%2e%2e/%2e%2e/etc/passwd`)).statusCode);
   expect((await get(`/api/map-view/${token}/maps/..%2F..%2Fgeheim`)).statusCode).toBe(400);
   expect(m.requests).toEqual([]);
+});
+
+it('setzt in BlueMaps Seite einen Ersatz für localStorage ein, weil die Sandbox den Zugriff verbietet', async () => {
+  const token = createMapToken('srv', 'u1', 0);
+  const res = await get(`/api/map-view/${token}/`);
+  expect(res.statusCode).toBe(200);
+  expect(res.body).toMatch(/^<script>\(function\(\)\{.*localStorage.*<\/script><html>BlueMap<\/html>$/);
+  expect(res.headers['content-security-policy']).not.toContain('allow-same-origin');
+  expect(res.headers['cache-control']).toBe('no-store');
+  // Unkomprimiert angefordert, damit sich die Seite umschreiben lässt
+  expect(m.encodings).toEqual([undefined]);
+});
+
+it('setzt das Skript direkt hinter <head> ein und entpackt eine komprimierte Seite', async () => {
+  const token = createMapToken('srv', 'u1', 0);
+  const res = await get(`/api/map-view/${token}/gz/`);
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-encoding']).toBeUndefined();
+  expect(res.body).toMatch(/^<!DOCTYPE html><html><HEAD lang="x"><script>.*<\/script><title>BM<\/title>/);
+});
+
+it('lässt Dateien außer HTML-Seiten unverändert und komprimiert durch', async () => {
+  const token = createMapToken('srv', 'u1', 0);
+  const res = await get(`/api/map-view/${token}/assets/index.js`);
+  expect(res.body).toBe('<html>BlueMap</html>');
+  expect(m.encodings).toEqual(['gzip, br']);
 });

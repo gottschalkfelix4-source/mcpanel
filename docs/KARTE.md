@@ -22,6 +22,14 @@ Sandbox (CSP `sandbox` ohne `allow-same-origin`) und hat keinen Zugriff auf
 Anmeldung oder Speicher des Panels. Der Link ist ein eigenes Kurzzeit-Token
 (12 h, an Server, Benutzer und `sessionVersion` gebunden), kein Sitzungs-JWT.
 
+In dieser Sandbox wirft der Browser schon beim Zugriff auf `localStorage` einen
+`SecurityError`. BlueMap fängt das nicht ab und meldet dann irreführend „Failed
+to load BlueMap webapp! Make sure you have WebGL2 enabled“. Das Panel setzt
+deshalb in jede HTML-Seite der Karte als erstes ein kleines Skript, das einen
+werfenden Speicher durch einen im Arbeitsspeicher ersetzt (`STORAGE_SHIM` in
+`services/bluemapProxy.ts`). Kartenauswahl, Kamera und eingeblendete
+Markierungen gelten damit bis zum Neuladen des Reiters.
+
 ## Vorgenerierung mit Chunky
 
 Das Panel steuert [Chunky](https://modrinth.com/plugin/chunky) ausschließlich über

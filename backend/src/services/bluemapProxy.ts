@@ -13,6 +13,7 @@
  * ohne Zugriff auf Speicher und Cookies des Panels.
  */
 import http from 'node:http';
+import zlib from 'node:zlib';
 import type { Server } from '@prisma/client';
 import { prisma } from '../db.js';
 import { serverDir } from '../config.js';
@@ -44,6 +45,56 @@ export const SANDBOX_HEADERS: Record<string, string> = {
   'X-Accel-Buffering': 'no',
 };
 
+/**
+ * BlueMap liest und schreibt `localStorage` ohne Fehlerbehandlung (Kamera,
+ * sichtbare Markierungen, Einstellungen). In der Sandbox ohne
+ * `allow-same-origin` wirft schon der Zugriff einen SecurityError, und die
+ * Weboberfläche bricht mit „Failed to load BlueMap webapp! … WebGL2“ ab.
+ * Dieses Skript wird vor BlueMaps Code in jede HTML-Seite gelegt und ersetzt
+ * nur einen Speicher, der tatsächlich wirft, durch einen im Arbeitsspeicher –
+ * Einstellungen gelten dann bis zum Neuladen. Geht bewusst nicht an die
+ * Herkunft des Panels und braucht keine Lockerung der Sandbox.
+ */
+export const STORAGE_SHIM = `(function(){function m(){var d=new Map();return{get length(){return d.size},key:function(i){var k=Array.from(d.keys())[i];return k===undefined?null:k},getItem:function(k){k=String(k);return d.has(k)?d.get(k):null},setItem:function(k,v){d.set(String(k),String(v))},removeItem:function(k){d.delete(String(k))},clear:function(){d.clear()}}}["localStorage","sessionStorage"].forEach(function(n){try{window[n]}catch(e){Object.defineProperty(window,n,{value:m(),configurable:true})}})})();`;
+
+/** Höchstgröße einer HTML-Seite, in die das Skript eingesetzt wird. */
+const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
+
+/** Seiten, die als Dokument im Rahmen laufen (BlueMaps `index.html`). */
+export function isDocumentPath(path: string): boolean {
+  const pathname = path.split('?')[0];
+  return pathname.endsWith('/') || /\.html?$/i.test(pathname);
+}
+
+/** Setzt `STORAGE_SHIM` als erstes Skript in die Seite. */
+export function injectStorageShim(html: string): string {
+  const tag = `<script>${STORAGE_SHIM}</script>`;
+  const head = /<head(\s[^>]*)?>/i.exec(html);
+  if (head) return html.slice(0, head.index + head[0].length) + tag + html.slice(head.index + head[0].length);
+  return tag + html;
+}
+
+/** Liest eine HTML-Antwort ein (entpackt, falls der Upstream doch komprimiert). */
+export async function readDocument(upstream: UpstreamResponse): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of upstream.stream) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_DOCUMENT_BYTES) {
+      upstream.stream.destroy();
+      throw new Error('Die Kartenseite ist zu groß');
+    }
+    chunks.push(chunk as Buffer);
+  }
+  const raw = Buffer.concat(chunks);
+  const encoding = (upstream.headers['content-encoding'] ?? '').trim().toLowerCase();
+  const body = encoding === 'gzip' ? zlib.gunzipSync(raw)
+    : encoding === 'deflate' ? zlib.inflateSync(raw)
+    : encoding === 'br' ? zlib.brotliDecompressSync(raw)
+    : raw;
+  return body.toString('utf8');
+}
+
 /** Pfad hinter dem Token, samt Abfrage. Keine Ausbrüche aus dem Webroot. */
 export function upstreamPath(rawUrl: string, token: string): string | null {
   const marker = `/${token}`;
@@ -73,9 +124,13 @@ export function requestUpstream(
   method: 'GET' | 'HEAD',
   path: string,
   headers: http.IncomingHttpHeaders,
+  options: { document?: boolean } = {},
 ): Promise<UpstreamResponse> {
   const forwarded: Record<string, string> = {};
+  // HTML-Seiten werden umgeschrieben: unkomprimiert und vollständig anfordern.
+  const skip = options.document ? ['accept-encoding', 'if-none-match', 'if-modified-since', 'range'] : [];
   for (const name of PASS_REQUEST) {
+    if (skip.includes(name)) continue;
     const value = headers[name];
     if (typeof value === 'string') forwarded[name] = value;
   }

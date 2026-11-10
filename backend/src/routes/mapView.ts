@@ -3,7 +3,7 @@ import { getServerAccess } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import { prisma } from '../db.js';
 import { verifyMapToken } from '../lib/mapToken.js';
-import { bluemapTarget, requestUpstream, SANDBOX_HEADERS, upstreamPath } from '../services/bluemapProxy.js';
+import { bluemapTarget, injectStorageShim, isDocumentPath, readDocument, requestUpstream, SANDBOX_HEADERS, upstreamPath } from '../services/bluemapProxy.js';
 
 /**
  * Eingebettete BlueMap-Karte (`/api/map-view/<token>/…`). Läuft ohne
@@ -54,8 +54,18 @@ export default async function mapViewRoutes(app: FastifyInstance) {
     const server = await prisma.server.findUnique({ where: { id: serverId } });
     const target = server ? await bluemapTarget(server) : null;
     if (!target) return reply.code(404).type('text/plain; charset=utf-8').send('Auf diesem Server ist BlueMap nicht installiert.');
+    const method = req.method === 'HEAD' ? 'HEAD' : 'GET';
+    const document = isDocumentPath(path);
     try {
-      const upstream = await requestUpstream(target, req.method === 'HEAD' ? 'HEAD' : 'GET', path, req.headers);
+      const upstream = await requestUpstream(target, method, path, req.headers, { document });
+      if (document && method === 'GET' && upstream.status === 200 && /text\/html/i.test(upstream.headers['content-type'] ?? '')) {
+        // Ohne den Ersatz für localStorage startet BlueMap in der Sandbox nicht.
+        const html = injectStorageShim(await readDocument(upstream));
+        return reply.code(200)
+          .header('content-type', upstream.headers['content-type'])
+          .header('cache-control', 'no-store')
+          .send(html);
+      }
       reply.code(upstream.status).headers(upstream.headers);
       // Bricht der Browser ab (Kachel nicht mehr gebraucht, SSE geschlossen), Verbindung freigeben.
       req.raw.on('close', () => upstream.stream.destroy());
