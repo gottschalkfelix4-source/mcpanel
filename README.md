@@ -115,6 +115,12 @@ das Panel steuert sie über den Docker-Socket.
 - Die Ereignisse „Statusprüfung länger fehlgeschlagen“ und „Statusprüfung wieder erfolgreich“ lassen sich je Kanal abonnieren. Der Wächter gibt Modpacks 15 Minuten Anlaufzeit und warnt anschließend erst nach zwei Minuten anhaltender Störung; er startet Server nicht automatisch neu.
 - Testknopf je Kanal; die gespeicherte URL wird nie zurückgegeben, in der Liste steht sie gekürzt
 
+**Karte und Vorgenerierung**
+- Reiter „Karte“: generierte Chunks (aus den Weltdateien, ohne Mod), Spieler live, mit BlueMap auch das Gelände –
+  nur über das Panel, ohne offenen Port
+- Welt vorgenerieren mit Chunky: Bereich auf der Karte wählen, Fortschritt live, Pause bei Spielern oder Last,
+  Fortsetzen nach Neustart; Chunky und BlueMap installiert das Panel selbst – Details in [`docs/KARTE.md`](docs/KARTE.md)
+
 **Zusatzports und UniFi**
 - Simple Voice Chat, Geyser, BlueMap, Dynmap, squaremap und Votifier werden vor jedem Start erkannt und
   bekommen einen freien, im Container veröffentlichten Port – auch bei mehreren Servern mit derselben Mod

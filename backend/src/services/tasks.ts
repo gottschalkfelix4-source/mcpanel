@@ -118,6 +118,7 @@ const AUFGABEN_NAMEN: Record<string, string> = {
   'world.export': 'Ein Welt-Export',
   'assistant.action': 'Eine KI-Reparatur',
   'server.migrate': 'Ein Umzug auf eine andere Node',
+  'map.addons': 'Die Einrichtung der Karte',
 };
 
 const aufgabenName = (type: string) => AUFGABEN_NAMEN[type] ?? `Die Aufgabe "${type}"`;

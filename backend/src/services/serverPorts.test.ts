@@ -50,6 +50,7 @@ vi.mock('../db.js', () => {
 
 const { addManualPort, nextFreePort, reassignBusyPort, removeManualPort, syncServerPorts } = await import('./serverPorts.js');
 const { extraPortsOf } = await import('../lib/serverPorts.js');
+const { setServerNode } = await import('../lib/serverLocation.js');
 
 const server = (id: string) => ({ id, name: id, port: 25565 }) as Server;
 
@@ -91,12 +92,31 @@ describe('syncServerPorts', () => {
   });
 
   it('legt bei Web-Karten nur einen anderen Hostport auf den unveränderten Containerport', async () => {
-    await put('a', 'mods/bluemap-fabric.jar');
-    await put('b', 'mods/bluemap-fabric.jar');
-    await put('b', 'config/bluemap/webserver.conf', 'port: 8100\n');
+    await put('a', 'mods/dynmap-fabric.jar');
+    await put('b', 'mods/dynmap-fabric.jar');
+    await put('b', 'dynmap/configuration.txt', 'webserver-port: 8123\n');
     await syncServerPorts(server('a'));
-    expect((await syncServerPorts(server('b'))).ports).toMatchObject([{ hostPort: 8101, containerPort: 8100 }]);
-    expect(await fs.readFile(path.join(m.root, 'b/config/bluemap/webserver.conf'), 'utf8')).toBe('port: 8100\n');
+    expect((await syncServerPorts(server('b'))).ports).toMatchObject([{ hostPort: 8124, containerPort: 8123 }]);
+    expect(await fs.readFile(path.join(m.root, 'b/dynmap/configuration.txt'), 'utf8')).toBe('webserver-port: 8123\n');
+  });
+
+  it('veröffentlicht BlueMap auf dem Hauptserver nicht und auf Nodes nur ohne Router-Freigabe', async () => {
+    await put('a', 'mods/bluemap-fabric.jar');
+    expect((await syncServerPorts(server('a'))).ports).toEqual([]);
+
+    // Ein früher veröffentlichter BlueMap-Port wird wieder geschlossen.
+    m.rows.push({ id: 'alt', serverId: 'a', source: 'bluemap', label: 'BlueMap', protocol: 'tcp', hostPort: 8100, containerPort: 8100, forward: true });
+    const closed = await syncServerPorts(server('a'));
+    expect(closed.ports).toEqual([]);
+    expect(closed.notes.join(' ')).toContain('nur noch über das Panel');
+
+    setServerNode('b', 'keller');
+    try {
+      await put('b', 'mods/bluemap-fabric.jar');
+      expect((await syncServerPorts(server('b'))).ports).toMatchObject([{ source: 'bluemap', hostPort: 8100, forward: false }]);
+    } finally {
+      setServerNode('b', null);
+    }
   });
 
   it('meidet Spielports, Proxyport und reservierte Ports', async () => {

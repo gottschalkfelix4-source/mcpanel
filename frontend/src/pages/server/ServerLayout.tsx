@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   ArrowLeft, Check, Copy, FileCode2, FolderTree, Globe2, HardDriveDownload, LayoutDashboard,
-  AlarmClock, Package, Play, Puzzle, RotateCw, Settings2, Square, Terminal, Users, Zap,
+  AlarmClock, Map as MapIcon, Package, Play, Puzzle, RotateCw, Settings2, Square, Terminal, Users, Zap,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { getSocket } from '../../lib/socket';
@@ -38,6 +38,7 @@ const TABS = [
   { to: 'config', label: 'Konfiguration', icon: FileCode2, permission: 'files.read' },
   { to: 'backups', label: 'Backups', icon: HardDriveDownload, permission: 'files.read' },
   { to: 'worlds', label: 'Welten', icon: Globe2, permission: 'files.read' },
+  { to: 'map', label: 'Karte', icon: MapIcon, permission: 'console.read' },
   { to: 'players', label: 'Spieler', icon: Users, permission: null },
   { to: 'automation', label: 'Automation', icon: AlarmClock, permission: null },
   { to: 'access', label: 'Zugriff', icon: Zap, permission: null },

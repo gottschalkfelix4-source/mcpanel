@@ -11,7 +11,7 @@ weiterleiten – niemand muss nach der Installation einer Mod noch an den Router
 |---|---|---|---|
 | Simple Voice Chat | UDP | 24454 | `config/voicechat/voicechat-server.properties` bzw. `plugins/voicechat/…` (`port=`) |
 | Geyser (Bedrock-Spieler) | UDP | 19132 | `plugins/Geyser-*/config.yml` bzw. `config/Geyser-*/config.yml` (`bedrock: port:`) |
-| BlueMap | TCP | 8100 | `config/bluemap/webserver.conf` bzw. `plugins/BlueMap/webserver.conf` |
+| BlueMap | TCP | 8100 | `config/bluemap/webserver.conf` bzw. `plugins/BlueMap/webserver.conf` – nur über das Panel (Reiter „Karte“): kein veröffentlichter Port, auf Nodes ohne Router-Freigabe |
 | Dynmap | TCP | 8123 | `plugins/dynmap/configuration.txt` bzw. `dynmap/configuration.txt` (`webserver-port:`) |
 | squaremap | TCP | 8080 | `plugins/squaremap/config.yml` bzw. `config/squaremap/config.yml` |
 | Votifier / NuVotifier | TCP | 8192 | `plugins/NuVotifier/config.yml` bzw. `plugins/Votifier/config.yml` |

@@ -8,6 +8,7 @@ import { ensureDataDirs, runAutostart } from './services/serverManager.js';
 import { detectHostDataRoot, ensureNetwork, onServerStart, stop, recreateContainer } from './services/docker.js';
 import { loadServerPorts, reassignBusyPort, syncServerPorts } from './services/serverPorts.js';
 import { scheduleUnifiSync, setUnifiLogger } from './services/unifi.js';
+import { startPregenMonitor } from './services/pregen.js';
 import { startWatcher } from './services/notify.js';
 import { startPanelBackupScheduler } from './services/panelBackups.js';
 import { applyTarget, getTarget } from './services/backupTarget.js';
@@ -161,6 +162,8 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
 
   startScheduler(log);
   startWatcher(log);
+  // Vorgenerierungen fortsetzen, automatisch pausieren und BlueMap freischalten.
+  startPregenMonitor(log);
   startPanelBackupScheduler(log);
 
   await startPlayerStats(log).catch((err) => log(`Spielerstatistik nicht gestartet: ${err instanceof Error ? err.message : err}`));

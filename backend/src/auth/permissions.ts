@@ -15,6 +15,7 @@ export const PERMISSIONS = {
   SETTINGS_EDIT: 'settings.edit',
   SERVER_REINSTALL: 'server.reinstall',
   AUTOMATION_MANAGE: 'automation.manage',
+  WORLD_PREGEN: 'world.pregen',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -44,4 +45,5 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   'settings.edit': 'Servereinstellungen',
   'server.reinstall': 'Server neu installieren',
   'automation.manage': 'Automatisierungen verwalten',
+  'world.pregen': 'Welt vorgenerieren',
 };

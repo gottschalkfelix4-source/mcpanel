@@ -15,6 +15,7 @@ import { serverDir } from '../config.js';
 import { prisma } from '../db.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { replaceAllExtraPorts, setExtraPorts, type PortProtocol } from '../lib/serverPorts.js';
+import { nodeIdOf } from '../lib/serverLocation.js';
 import { detectModPorts, MOD_PORTS, writeModPort } from './modPorts.js';
 import { withQueuedOperation } from './operations.js';
 import { getProxyConfig } from './proxy.js';
@@ -94,7 +95,10 @@ export function syncServerPorts(server: Server): Promise<PortSyncResult> {
 
 async function syncUnlocked(server: Server): Promise<PortSyncResult> {
   const root = serverDir(server.id);
-  const detected = await detectModPorts(root);
+  const onNode = nodeIdOf(server.id) !== null;
+  const allDetected = await detectModPorts(root);
+  // Nur-Panel-Erweiterungen (BlueMap) bekommen lokal keinen veröffentlichten Port.
+  const detected = allDetected.filter((found) => !found.spec.internal || onNode);
   const existing = await prisma.serverPort.findMany({ where: { serverId: server.id } });
   const taken = await takenPorts(server.id);
   // Manuelle Ports dieses Servers gelten ebenfalls als belegt.
@@ -129,9 +133,13 @@ async function syncUnlocked(server: Server): Promise<PortSyncResult> {
         data: {
           serverId: server.id, source: found.spec.key, label: found.spec.label,
           protocol: found.spec.protocol, hostPort, containerPort,
+          // Nur für das Panel: nie im Router freigeben.
+          ...(found.spec.internal ? { forward: false } : {}),
         },
       });
-      notes.push(`${found.spec.label} erkannt – Port ${hostPort}/${found.spec.protocol.replace('_', '+')} freigegeben.`);
+      notes.push(found.spec.internal
+        ? `${found.spec.label} erkannt – Port ${hostPort} nur für das Panel (ohne Router-Freigabe).`
+        : `${found.spec.label} erkannt – Port ${hostPort}/${found.spec.protocol.replace('_', '+')} freigegeben.`);
       changed = true;
     } else if (row.hostPort !== hostPort || row.containerPort !== containerPort || row.protocol !== found.spec.protocol) {
       await prisma.serverPort.update({
@@ -147,7 +155,11 @@ async function syncUnlocked(server: Server): Promise<PortSyncResult> {
   const gone = existing.filter((row) => row.source !== MANUAL_SOURCE && !detected.some((found) => found.spec.key === row.source));
   if (gone.length > 0) {
     await prisma.serverPort.deleteMany({ where: { id: { in: gone.map((row) => row.id) } } });
-    for (const row of gone) notes.push(`${row.label} nicht mehr installiert – Port ${row.hostPort} freigegeben.`);
+    for (const row of gone) {
+      notes.push(allDetected.some((found) => found.spec.key === row.source)
+        ? `${row.label} läuft nur noch über das Panel – Port ${row.hostPort} geschlossen.`
+        : `${row.label} nicht mehr installiert – Port ${row.hostPort} freigegeben.`);
+    }
     changed = true;
   }
 

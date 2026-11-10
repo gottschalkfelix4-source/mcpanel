@@ -26,6 +26,13 @@ export interface ModPortSpec {
   protocol: PortProtocol;
   defaultPort: number;
   samePort: boolean;
+  /**
+   * Nur über das Panel erreichbar (BlueMap: die Karte läuft im Reiter „Karte“
+   * hinter der Panel-Anmeldung). Auf dem Hauptserver wird der Port dann gar
+   * nicht veröffentlicht, auf Nodes nur ohne Router-Freigabe – dort erreicht
+   * das Panel den Container nicht über das Minecraft-Netz.
+   */
+  internal?: boolean;
   /** Dateiname des Jars in mods/ oder plugins/ */
   jar: RegExp;
   /** Mögliche Konfigurationsdateien relativ zum Serverordner */
@@ -124,6 +131,7 @@ export const MOD_PORTS: ModPortSpec[] = [
     protocol: 'tcp',
     defaultPort: 8100,
     samePort: false,
+    internal: true,
     jar: /^bluemap[-_].*\.jar$/i,
     configs: fixed('config/bluemap/webserver.conf', 'plugins/BlueMap/webserver.conf'),
     read: (text) => matchPort(text, /^\s*port\s*[:=]\s*(\d+)/m),

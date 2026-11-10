@@ -25,6 +25,7 @@ import AccessTab from './pages/server/AccessTab';
 import AutomationTab from './pages/server/AutomationTab';
 import SettingsTab from './pages/server/SettingsTab';
 import ReinstallTab from './pages/server/ReinstallTab';
+import MapTab from './pages/server/MapTab';
 import UsersPage from './pages/admin/Users';
 import PanelSettingsPage from './pages/admin/PanelSettings';
 import ProxyPage from './pages/admin/Proxy';
@@ -139,6 +140,7 @@ export default function App() {
           <Route path="access" element={<AccessTab />} />
           <Route path="settings" element={<SettingsTab />} />
           <Route path="reinstall" element={<ReinstallTab />} />
+          <Route path="map" element={<MapTab />} />
         </Route>
         <Route path="/profile" element={<ProfilePage />} />
         {user.role === 'ADMIN' && (
