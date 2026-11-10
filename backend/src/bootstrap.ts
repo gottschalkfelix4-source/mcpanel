@@ -5,7 +5,9 @@ import path from 'node:path';
 import { config, setHostDataRoot } from './config.js';
 import { prisma } from './db.js';
 import { ensureDataDirs, runAutostart } from './services/serverManager.js';
-import { detectHostDataRoot, ensureNetwork, stop, recreateContainer } from './services/docker.js';
+import { detectHostDataRoot, ensureNetwork, onServerStart, stop, recreateContainer } from './services/docker.js';
+import { loadServerPorts, reassignBusyPort, syncServerPorts } from './services/serverPorts.js';
+import { scheduleUnifiSync, setUnifiLogger } from './services/unifi.js';
 import { startWatcher } from './services/notify.js';
 import { startPanelBackupScheduler } from './services/panelBackups.js';
 import { applyTarget, getTarget } from './services/backupTarget.js';
@@ -127,6 +129,21 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
     }
   }
   await runDataMigrations(log);
+
+  // Zusatzports (Sprachchat, Geyser, Web-Karten) vor jedem Start erkennen und
+  // danach die Router-Freigaben abgleichen.
+  await loadServerPorts().catch((err) => log(`Zusatzports nicht geladen: ${err instanceof Error ? err.message : err}`));
+  setUnifiLogger(log);
+  onServerStart({
+    before: async (server) => {
+      const result = await syncServerPorts(server);
+      for (const note of result.notes) log(`${server.name}: ${note}`);
+    },
+    after: () => scheduleUnifiSync(),
+    portBusy: (server, hostPort) => reassignBusyPort(server, hostPort),
+  });
+  scheduleUnifiSync(10_000);
+
   void runAutostart();
   await reconcileProxy().catch(err => log(`Proxy: ${err.message}`));
 

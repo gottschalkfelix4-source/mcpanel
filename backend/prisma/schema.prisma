@@ -122,9 +122,35 @@ model Server {
   auditLogs      AuditLog[]
   playerSessions PlayerSession[]
   playerSamples  PlayerCountSample[]
+  extraPorts     ServerPort[]
 
   @@index([ownerId])
   @@index([nodeId])
+}
+
+/// Zusätzlicher Port eines Servers, z. B. für Simple Voice Chat, Geyser oder
+/// eine Web-Karte. Erkannte Erweiterungen pflegt das Panel selbst (`source` =
+/// Schlüssel aus `modPorts.ts`), Administratoren können eigene ergänzen
+/// (`source` = "manual"). Der Hostport ist über alle Server eindeutig.
+model ServerPort {
+  id            String   @id @default(cuid())
+  serverId      String
+  server        Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  /// Schlüssel der erkannten Erweiterung oder "manual"
+  source        String
+  label         String
+  /// "tcp" | "udp" | "tcp_udp"
+  protocol      String
+  /// Port auf dem Docker-Host – so erreichen ihn Spieler und die Weiterleitung
+  hostPort      Int      @unique
+  /// Port im Container, auf dem die Erweiterung lauscht
+  containerPort Int
+  /// Im Router (UniFi) automatisch freigeben
+  forward       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([serverId])
 }
 
 /// Weiterer Docker-Host (z. B. ein gemieteter VPS), angebunden über einen

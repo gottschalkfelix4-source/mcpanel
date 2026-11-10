@@ -14,6 +14,8 @@ import { getProxyConfig } from './proxy.js';
 import { removeBackup } from './backupTarget.js';
 import { forgetServer, nodeLocation, setServerNode } from '../lib/serverLocation.js';
 import { assertNodeReady } from './nodeClients.js';
+import { setExtraPorts } from '../lib/serverPorts.js';
+import { scheduleUnifiSync } from './unifi.js';
 
 export interface CreateServerInput {
   name: string;
@@ -37,8 +39,10 @@ export async function ensureDataDirs(): Promise<void> {
 }
 
 /** Sucht den nächsten freien Port im konfigurierten Bereich. */
-export async function allocatePort(preferred?: number, database: Pick<typeof prisma, 'server'> = prisma): Promise<number> {
+export async function allocatePort(preferred?: number, database: Pick<typeof prisma, 'server'> & Partial<Pick<typeof prisma, 'serverPort'>> = prisma): Promise<number> {
   const used = new Set((await database.server.findMany({ select: { port: true } })).map((s) => s.port));
+  // Zusatzports (Sprachchat & Co.) belegen ihren Hostport ebenfalls.
+  for (const extra of (await database.serverPort?.findMany({ select: { hostPort: true } })) ?? []) used.add(extra.hostPort);
   const proxy = await getProxyConfig();
   if (proxy.enabled) used.add(proxy.port);
   if (preferred) {
@@ -123,6 +127,9 @@ async function deleteServerUnlocked(server: Server, deleteFiles: boolean): Promi
     }
   } finally {
     forgetServer(server.id);
+    setExtraPorts(server.id, []);
+    // Router-Freigaben des gelöschten Servers wieder schließen.
+    scheduleUnifiSync();
   }
 }
 
@@ -147,6 +154,16 @@ async function updateServerSettingsUnlocked(
     if (proxy.enabled && (data.port ?? server.port) === proxy.port && (data.directConnect ?? server.directConnect)) {
       throw conflict('Dieser Port ist für den Minecraft-Proxy reserviert');
     }
+  }
+  if (data.port !== undefined && data.port !== server.port
+      && (await prisma.serverPort.count({ where: { hostPort: data.port } })) > 0) {
+    throw conflict('Dieser Port ist bereits als Zusatzport (z. B. Sprachchat) vergeben');
+  }
+  // Spielport, Direktverbindung und Name stehen in den Router-Freigaben.
+  if ((data.port !== undefined && data.port !== server.port)
+      || (data.directConnect !== undefined && data.directConnect !== server.directConnect)
+      || (data.name !== undefined && data.name !== server.name)) {
+    scheduleUnifiSync();
   }
   const needsRecreate =
     (data.port !== undefined && data.port !== server.port) ||

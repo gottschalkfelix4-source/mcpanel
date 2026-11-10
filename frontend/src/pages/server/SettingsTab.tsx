@@ -11,6 +11,7 @@ import { useServer } from './ServerLayout';
 import CloneServer from '../../components/CloneServer';
 import ServerRouting from '../../components/ServerRouting';
 import NodeMigration from '../../components/NodeMigration';
+import ServerPorts from '../../components/ServerPorts';
 
 const SERVER_TYPES: ServerType[] = [
   'VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT', 'MODPACK',
@@ -185,6 +186,8 @@ export default function SettingsTab() {
           </Button>
         </div>
       </Panel>
+
+      <ServerPorts serverId={server.id} isAdmin={server.isAdmin} canEdit={can('settings.edit')} />
 
       {can('server.reinstall') && (
         <Panel

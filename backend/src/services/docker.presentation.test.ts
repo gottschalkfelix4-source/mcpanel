@@ -78,7 +78,7 @@ function currentInfo() {
   return {
     Name: '/Meine-Welt', State: { Running: false },
     Config: { Image: 'itzg/minecraft-server:java21', Env: buildEnv(server), Labels: m.create.mock.calls[0][0].Labels },
-    HostConfig: { Memory: containerMemoryBytes(server.memoryMb), PortBindings: { '25565/tcp': [{ HostPort: '25565' }] } },
+    HostConfig: { Memory: containerMemoryBytes(server.memoryMb), PortBindings: { '25565/tcp': [{ HostPort: '25565' }], '25565/udp': [{ HostPort: '25565' }] } },
     NetworkSettings: { Networks: { 'mc-network': { Aliases: ['mc-abc123'] } } },
   };
 }
@@ -243,4 +243,76 @@ it('setzt Docker-Logframes auch über Paketgrenzen und geteilte UTF-8-Zeichen hi
   for (const byte of stream) out += decode(Buffer.from([byte]));
   expect(out).toBe('Größe okFehler!');
   expect(frameDecoder()(frame(1, Buffer.from('abc')).subarray(0, 9))).toBe('');
+});
+
+it('veröffentlicht Zusatzports und setzt den gestoppten Container bei geänderten Ports neu auf', async () => {
+  const { setExtraPorts } = await import('../lib/serverPorts.js');
+  setExtraPorts(server.id, [
+    { hostPort: 24455, containerPort: 24455, protocol: 'udp' },
+    { hostPort: 8101, containerPort: 8100, protocol: 'tcp' },
+    { hostPort: 9000, containerPort: 9000, protocol: 'tcp_udp' },
+  ]);
+  try {
+    await createContainer(server);
+    const options = m.create.mock.calls[0][0];
+    expect(options.HostConfig.PortBindings).toMatchObject({
+      '25565/tcp': [{ HostPort: '25565' }],
+      '24455/udp': [{ HostPort: '24455' }],
+      '8100/tcp': [{ HostPort: '8101' }],
+      '9000/tcp': [{ HostPort: '9000' }],
+      '9000/udp': [{ HostPort: '9000' }],
+    });
+    expect(Object.keys(options.ExposedPorts)).toEqual(expect.arrayContaining(['24455/udp', '8100/tcp', '9000/udp', '25575/tcp']));
+
+    // Container mit genau diesen Freigaben bleibt stehen …
+    const info = { ...currentInfo(), HostConfig: { ...currentInfo().HostConfig, PortBindings: options.HostConfig.PortBindings } };
+    m.create.mockClear();
+    m.inspect.mockResolvedValue(info);
+    await ensureContainer(server);
+    expect(m.create).not.toHaveBeenCalled();
+
+    // … ein neuer Port (z. B. Geyser installiert) erzwingt beim nächsten Start den Neuaufbau.
+    setExtraPorts(server.id, [{ hostPort: 19132, containerPort: 19132, protocol: 'udp' }]);
+    await ensureContainer(server);
+    expect(m.remove).toHaveBeenCalledWith({ force: true, v: false });
+    expect(m.create.mock.calls[0][0].HostConfig.PortBindings['19132/udp']).toEqual([{ HostPort: '19132' }]);
+  } finally {
+    setExtraPorts(server.id, []);
+  }
+});
+
+it('weicht beim Start einem auf dem Host belegten Zusatzport aus und startet erneut', async () => {
+  const { setExtraPorts } = await import('../lib/serverPorts.js');
+  const { onServerStart, start, busyHostPort } = await import('./docker.js');
+  setExtraPorts(server.id, [{ hostPort: 8123, containerPort: 8123, protocol: 'tcp' }]);
+  const portBusy = vi.fn(async () => {
+    setExtraPorts(server.id, [{ hostPort: 8124, containerPort: 8123, protocol: 'tcp' }]);
+    return true;
+  });
+  const after = vi.fn();
+  onServerStart({ portBusy, after });
+  try {
+    await createContainer(server);
+    m.inspect.mockResolvedValue({ ...currentInfo(), State: { Running: false } });
+    m.list.mockResolvedValue([]);
+    m.start
+      .mockRejectedValueOnce(new Error('driver failed programming external connectivity on endpoint Meine-Welt: Bind for 0.0.0.0:8123 failed: port is already allocated'))
+      .mockResolvedValueOnce(undefined);
+    await start(server);
+    expect(portBusy).toHaveBeenCalledWith(server, 8123);
+    expect(m.start).toHaveBeenCalledTimes(2);
+    expect(m.create.mock.calls.at(-1)![0].HostConfig.PortBindings['8123/tcp']).toEqual([{ HostPort: '8124' }]);
+    expect(after).toHaveBeenCalledOnce();
+
+    // Der Spielport selbst wird nicht verschoben – klare Meldung statt Endlosschleife.
+    portBusy.mockClear();
+    m.start.mockRejectedValueOnce(new Error('Bind for 0.0.0.0:25565 failed: port is already allocated'));
+    await expect(start(server)).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('Hostport 25565') });
+    expect(portBusy).not.toHaveBeenCalled();
+  } finally {
+    setExtraPorts(server.id, []);
+    onServerStart({});
+  }
+  expect(busyHostPort('listen tcp4 0.0.0.0:19132: bind: address already in use')).toBe(19132);
+  expect(busyHostPort('irgendwas anderes')).toBeNull();
 });

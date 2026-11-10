@@ -14,6 +14,7 @@ import { serverLoader } from './content.js';
 import { hasFatalServerLog } from './serverLog.js';
 import { nodeIdOf, serverNodeLocation } from '../lib/serverLocation.js';
 import { isNodeReady, nodeDocker } from './nodeClients.js';
+import { dockerPortKeys, extraPortsOf } from '../lib/serverPorts.js';
 
 export const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
@@ -69,6 +70,26 @@ function endedByPanel(id: string, finishedAt: string | undefined): boolean {
 
 export function onPlannedStop(fn: (serverId: string) => void): void {
   plannedStopHook = fn;
+}
+
+/**
+ * Läuft vor jedem Start, bevor der Container geprüft wird: erkennt Zusatzports
+ * (Sprachchat & Co.) und meldet nach dem Start, dass die Router-Freigaben
+ * abzugleichen sind. Rückrufe statt Importe – die Dienste dahinter brauchen
+ * Datenbank und Dateisystem, docker.ts soll davon frei bleiben.
+ */
+type StartHooks = {
+  before?: (server: Server) => Promise<void>;
+  after?: (server: Server) => void;
+  /**
+   * Ein Zusatzport ist auf dem Host schon belegt (z. B. Dynmap 8123 neben
+   * Home Assistant). Liefert `true`, wenn ein anderer Port vergeben wurde.
+   */
+  portBusy?: (server: Server, hostPort: number) => Promise<boolean>;
+};
+let startHooks: StartHooks = {};
+export function onServerStart(hooks: StartHooks): void {
+  startHooks = hooks;
 }
 
 function announcePlannedStop(serverId: string): void {
@@ -305,13 +326,36 @@ export const serverMemoryLimitBytes = (server: Server) => containerMemoryBytes(e
  * Subdomain-Proxy des Hauptservers erreicht den Server nur darüber. RCON
  * bleibt im Minecraft-Netz; das Panel erreicht ihn über den Agenten.
  */
-function portBindings(server: Server): Docker.PortMap {
+export function portBindings(server: Server): Docker.PortMap {
   const node = serverNodeLocation(server.id);
   const publishGame = node !== null || server.directConnect !== false;
-  return publishGame ? {
+  const bindings: Docker.PortMap = publishGame ? {
     '25565/tcp': [{ HostPort: String(server.port) }],
     '25565/udp': [{ HostPort: String(server.port) }],
   } : {};
+  // Zusatzports (Sprachchat, Geyser, Web-Karten) werden immer veröffentlicht –
+  // sie laufen nicht über den Subdomain-Proxy.
+  for (const port of extraPortsOf(server.id)) {
+    for (const key of dockerPortKeys(port)) bindings[key] = [{ HostPort: String(port.hostPort) }];
+  }
+  return bindings;
+}
+
+function exposedPorts(server: Server): Record<string, object> {
+  const exposed: Record<string, object> = { '25565/tcp': {}, '25565/udp': {}, '25575/tcp': {} };
+  for (const port of extraPortsOf(server.id)) {
+    for (const key of dockerPortKeys(port)) exposed[key] = {};
+  }
+  return exposed;
+}
+
+/** Vergleichbare Fassung der Portfreigaben – Reihenfolge und leere Einträge zählen nicht. */
+function bindingSignature(map: Docker.PortMap | undefined | null): string {
+  return Object.entries(map ?? {})
+    .filter(([key, value]) => key !== '25575/tcp' && Array.isArray(value) && value.length > 0)
+    .map(([key, value]) => `${key}=${(value as { HostPort?: string }[]).map((v) => v.HostPort ?? '').join('|')}`)
+    .sort()
+    .join(',');
 }
 
 /**
@@ -352,11 +396,7 @@ export async function createContainer(server: Server): Promise<Container> {
         [config.dockerNetwork]: { Aliases: [server.containerName] },
       },
     },
-    ExposedPorts: {
-      '25565/tcp': {},
-      '25565/udp': {},
-      '25575/tcp': {},
-    },
+    ExposedPorts: exposedPorts(server),
     HostConfig: {
       ...dataMount(server),
       PortBindings: portBindings(server),
@@ -393,10 +433,7 @@ async function configMatches(container: Container, server: Server): Promise<bool
 
     const dns = info.HostConfig.Dns ?? [];
     if (dns.join(',') !== config.mcDns.join(',')) return false;
-    const wanted = portBindings(server);
-    if (info.HostConfig.PortBindings?.['25565/tcp']?.[0]?.HostPort !== wanted['25565/tcp']?.[0]?.HostPort) {
-      return false;
-    }
+    if (bindingSignature(info.HostConfig.PortBindings) !== bindingSignature(portBindings(server))) return false;
     // Ältere Container auf Nodes veröffentlichten RCON noch selbst.
     if (info.HostConfig.PortBindings?.['25575/tcp']?.length) return false;
 
@@ -500,17 +537,45 @@ export async function getState(server: Server): Promise<{
 
 async function startUnlocked(server: Server): Promise<void> {
   plannedStops.delete(server.id);
-  const c = await ensureContainer(server);
+  // Eine fehlgeschlagene Erkennung darf den Start nicht verhindern – der
+  // Server läuft dann eben mit den bisher bekannten Ports.
+  await startHooks.before?.(server).catch((err) => {
+    console.warn(`[ports] ${server.name}: ${err instanceof Error ? err.message : err}`);
+  });
+  let c = await ensureContainer(server);
   const info = await c.inspect();
   if (!info.State.Running) {
-    try { await c.start(); }
-    catch (err) {
-      if (/port is already allocated|address already in use|failed to bind host port/i.test(err instanceof Error ? err.message : String(err))) {
-        throw conflict(`Hostport ${server.port} ist durch einen anderen Dienst belegt. Bitte den Direktport ändern.`);
+    // Belegte Zusatzports weicht das Panel selbst aus – höchstens ein paar Mal.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await c.start();
+        break;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/port is already allocated|address already in use|failed to bind host port/i.test(message)) throw err;
+        const busy = busyHostPort(message);
+        const extra = extraPortsOf(server.id).map((p) => p.hostPort);
+        if (busy !== null && extra.includes(busy) && attempt < 5 && startHooks.portBusy
+            && await startHooks.portBusy(server, busy).catch(() => false)) {
+          c = await recreateContainerUnlocked(server);
+          continue;
+        }
+        if (busy !== null && busy !== server.port && extra.includes(busy)) {
+          throw conflict(`Zusatzport ${busy} ist auf dem Host durch einen anderen Dienst belegt.`);
+        }
+        throw conflict(extra.length && busy === null
+          ? `Einer der Hostports (${[server.port, ...extra].join(', ')}) ist durch einen anderen Dienst belegt.`
+          : `Hostport ${server.port} ist durch einen anderen Dienst belegt. Bitte den Direktport ändern.`);
       }
-      throw err;
     }
   }
+  startHooks.after?.(server);
+}
+
+/** Hostport aus Dockers Fehlermeldung („Bind for 0.0.0.0:8123 failed …“). */
+export function busyHostPort(message: string): number | null {
+  const match = /:(\d{1,5})(?:\s+failed|:\s*bind)/i.exec(message);
+  return match ? Number(match[1]) : null;
 }
 
 async function stopUnlocked(server: Server, timeout = 60): Promise<void> {

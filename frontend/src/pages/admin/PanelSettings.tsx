@@ -5,6 +5,7 @@ import { api } from '../../lib/api';
 import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
 import PanelBackups from '../../components/PanelBackups';
+import UnifiSettings from '../../components/UnifiSettings';
 import Changelog from '../../components/Changelog';
 import { DiskSpace, SecuritySettings, type DiskInfo, type SecurityInfo } from '../../components/PanelSecurity';
 import { Link } from 'react-router-dom';
@@ -169,6 +170,7 @@ export default function PanelSettingsPage() {
 
       <BackupTarget />
       <PanelBackups />
+      <UnifiSettings />
       <Panel title="Minecraft-Proxy"><Link to="/admin/proxy" className="text-grass-light hover:underline">Subdomains, Server-Zuordnungen und Portfreigaben auf der Proxy-Seite verwalten →</Link></Panel>
 
       {/* Benachrichtigungen fuer alle Server */}

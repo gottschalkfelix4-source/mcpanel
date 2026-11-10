@@ -40,6 +40,7 @@ import memberRoutes from './members.js';
 import automationRoutes from './automations.js';
 import notificationRoutes from './notifications.js';
 import assistantRoutes from './assistant.js';
+import portRoutes from './ports.js';
 
 const SERVER_TYPES = [
   'VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT', 'MODPACK',
@@ -422,6 +423,7 @@ export default async function serverRoutes(app: FastifyInstance) {
   await app.register(automationRoutes, { prefix: '/:id/automations' });
   await app.register(notificationRoutes, { prefix: '/:id/notifications' });
   await app.register(assistantRoutes, { prefix: '/:id/assistant' });
+  await app.register(portRoutes, { prefix: '/:id/ports' });
 }
 
 export { getServerAccess };

@@ -15,6 +15,8 @@ import { globalNotificationRoutes } from './notifications.js';
 import { configureProxy, proxyStatus } from '../services/proxy.js';
 import { proxyOverview } from '../services/proxyOverview.js';
 import panelBackupRoutes from './panelBackups.js';
+import unifiRoutes from './unifi.js';
+import { scheduleUnifiSync } from '../services/unifi.js';
 import { volumeSpace } from '../services/quota.js';
 import { getTotpPolicy, policyApplies, TOTP_POLICIES, TOTP_POLICY_KEY } from '../auth/totpPolicy.js';
 import {
@@ -35,6 +37,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
     const next = z.object({ enabled: z.boolean(), port: z.number().int().min(1024).max(65535) }).parse(req.body);
     await configureProxy(next);
     await audit(req.user!.id, null, 'proxy.configure', JSON.stringify(next));
+    scheduleUnifiSync();
     return proxyStatus();
   });
   app.put('/public-host', { preHandler: requireAdmin }, async (req) => {
@@ -65,6 +68,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
 
   await app.register(globalNotificationRoutes, { prefix: '/notifications' });
   await app.register(panelBackupRoutes, { prefix: '/panel-backups' });
+  await app.register(unifiRoutes, { prefix: '/unifi' });
 
   /** Panel-Infos, die jeder angemeldete Nutzer sehen darf. */
   app.get('/public', async () => ({

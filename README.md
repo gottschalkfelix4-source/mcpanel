@@ -115,6 +115,12 @@ das Panel steuert sie über den Docker-Socket.
 - Die Ereignisse „Statusprüfung länger fehlgeschlagen“ und „Statusprüfung wieder erfolgreich“ lassen sich je Kanal abonnieren. Der Wächter gibt Modpacks 15 Minuten Anlaufzeit und warnt anschließend erst nach zwei Minuten anhaltender Störung; er startet Server nicht automatisch neu.
 - Testknopf je Kanal; die gespeicherte URL wird nie zurückgegeben, in der Liste steht sie gekürzt
 
+**Zusatzports und UniFi**
+- Simple Voice Chat, Geyser, BlueMap, Dynmap, squaremap und Votifier werden vor jedem Start erkannt und
+  bekommen einen freien, im Container veröffentlichten Port – auch bei mehreren Servern mit derselben Mod
+- Optional legt das Panel die Portweiterleitungen auf einer UniFi-Konsole (UDM Pro & Co.) selbst an und
+  räumt sie wieder ab – per API-Schlüssel oder lokalem Benutzer, Details in [`docs/UNIFI.md`](docs/UNIFI.md)
+
 **Kontingent je Server**
 - Grenzen hängen am Server, nicht am Konto: Speicherplatz (Daten + Sicherungen) und Zahl der
   aufbewahrten Sicherungen
