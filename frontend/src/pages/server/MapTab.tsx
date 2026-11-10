@@ -197,7 +197,7 @@ function BlueMapFrame({ serverId, running, accepted }: { serverId: string; runni
         title="BlueMap-Karte"
         src={token.data.url}
         sandbox="allow-scripts allow-popups allow-downloads"
-        className="block h-[620px] w-full border-0 bg-stone-well"
+        className="block h-[min(620px,70vh)] w-full border-0 bg-stone-well"
       />
       <a href={token.data.url} target="_blank" rel="noreferrer" aria-label="Karte im neuen Tab öffnen"
         className="absolute right-3 top-3 grid h-9 w-9 place-items-center border border-stone-950 bg-stone-700 text-stone-50 hover:bg-stone-600">

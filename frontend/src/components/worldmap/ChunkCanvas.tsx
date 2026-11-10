@@ -67,16 +67,27 @@ export const ChunkCanvas = forwardRef<ChunkCanvasHandle, Props>(function ChunkCa
   const [view, setView] = useState({ x: 0, z: 0, scale: 0.08 });
   const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
   const fitted = useRef<string | null>(null);
+  const pendingFocus = useRef<{ x: number; z: number } | null>(null);
   const drag = useRef<{ px: number; py: number; x: number; z: number; moved: boolean } | null>(null);
 
   useImperativeHandle(ref, () => ({
-    focus: (x, z) => setView((v) => ({ ...v, x, z, scale: Math.max(v.scale, 0.5) })),
+    focus: (x, z) => {
+      // Merken: kommen die Chunk-Daten erst danach, würde das Einpassen die
+      // Ansicht sonst wieder auf die ganze Welt zurücksetzen.
+      pendingFocus.current = { x, z };
+      setView((v) => ({ ...v, x, z, scale: Math.max(v.scale, 0.5) }));
+    },
   }), []);
 
   useEffect(() => {
     const element = wrapRef.current;
     if (!element) return;
-    const observer = new ResizeObserver(([entry]) => setSize({ w: Math.max(200, entry.contentRect.width), h: height }));
+    // Auf dem Handy nicht höher als 70 % des Bildschirms – sonst füllt die Karte
+    // ihn ganz aus und die Seite lässt sich daran vorbei kaum noch scrollen.
+    const observer = new ResizeObserver(([entry]) => setSize({
+      w: Math.max(200, entry.contentRect.width),
+      h: Math.max(280, Math.min(height, Math.round(window.innerHeight * 0.7))),
+    }));
     observer.observe(element);
     return () => observer.disconnect();
   }, [height]);
@@ -85,6 +96,12 @@ export const ChunkCanvas = forwardRef<ChunkCanvasHandle, Props>(function ChunkCa
   useEffect(() => {
     if (!data || fitted.current === data.dimension) return;
     fitted.current = data.dimension;
+    if (pendingFocus.current) {
+      const target = pendingFocus.current;
+      pendingFocus.current = null;
+      setView((v) => ({ x: target.x, z: target.z, scale: Math.max(v.scale, 0.5) }));
+      return;
+    }
     if (area) {
       setView({ x: area.centerX, z: area.centerZ, scale: clamp(Math.min(size.w, size.h) / (area.radius * 2.6)) });
       return;
@@ -108,8 +125,11 @@ export const ChunkCanvas = forwardRef<ChunkCanvasHandle, Props>(function ChunkCa
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(size.w * dpr);
-    canvas.height = Math.round(size.h * dpr);
+    // Nur bei geänderter Größe neu anlegen – sonst entstünde bei jedem Bild
+    // beim Ziehen ein neuer Zeichenpuffer.
+    const pixelW = Math.round(size.w * dpr), pixelH = Math.round(size.h * dpr);
+    if (canvas.width !== pixelW) canvas.width = pixelW;
+    if (canvas.height !== pixelH) canvas.height = pixelH;
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
@@ -227,7 +247,7 @@ export const ChunkCanvas = forwardRef<ChunkCanvasHandle, Props>(function ChunkCa
   });
 
   return (
-    <div ref={wrapRef} className="relative w-full overflow-hidden" style={{ height }}>
+    <div ref={wrapRef} className="relative w-full overflow-hidden" style={{ height: size.h }}>
       <canvas
         ref={canvasRef}
         style={{ width: size.w, height: size.h, cursor: onPick ? 'crosshair' : drag.current ? 'grabbing' : 'grab', touchAction: 'none' }}

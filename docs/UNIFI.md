@@ -63,6 +63,19 @@ gestoppte Container wird dann mit den neuen Freigaben neu aufgesetzt.
 Optional leitet das Panel auch die Spielports weiter (bzw. den Port des
 Subdomain-Proxys).
 
+### Freigabe erkannter Ports
+
+Ein erkannter Port ist sofort im Container offen, im Router aber erst, wenn ein
+Administrator am Server unter *Einstellungen → Zusätzliche Ports* den Schalter
+„Router“ einschaltet. Grund: Die Portnummer steht in Konfigurationsdateien des
+Servers, und die kann jedes Mitglied mit Dateirechten ändern. Wer allen
+Mitgliedern vertraut, schaltet in den UniFi-Einstellungen „Erkannte Mod-Ports ohne
+Rückfrage freigeben“ ein. Ändert sich der Port einer Erweiterung, muss die
+Freigabe neu eingeschaltet werden. Ports unter 1024 werden nie übernommen.
+
+Schlägt ein Abgleich fehl, versucht es das Panel nach 1, 3 und 10 Minuten erneut;
+zusätzlich wird alle 15 Minuten abgeglichen.
+
 ### Was das Panel auf der Konsole tut
 
 - Es fasst nur Regeln an, deren Name mit `MCPanel ` beginnt. Sie heißen

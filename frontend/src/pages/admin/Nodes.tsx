@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { copyText } from '../../lib/clipboard';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -21,24 +22,6 @@ function percent(used: number, total: number): number {
 
 function tone(value: number): 'green' | 'gold' | 'red' {
   return value >= 90 ? 'red' : value >= 70 ? 'gold' : 'green';
-}
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // Ohne HTTPS gibt es keine Zwischenablage-API – dann über eine Textauswahl.
-    const area = document.createElement('textarea');
-    area.value = text;
-    area.style.position = 'fixed';
-    area.style.opacity = '0';
-    document.body.appendChild(area);
-    area.select();
-    const ok = document.execCommand('copy');
-    area.remove();
-    return ok;
-  }
 }
 
 function CopyBlock({ text, label }: { text: string; label: string }) {

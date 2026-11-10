@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { copyText } from '../../lib/clipboard';
 import { Copy, ExternalLink } from 'lucide-react';
 import { api } from '../../lib/api';
 import { Button, ErrorNote, LoadingBlock, Modal, useToast } from '../../components/ui';
@@ -26,7 +27,7 @@ export default function SftpDialog({ serverId, path, open, onClose }: {
   // Das Passwort gehört weder in eine URL noch in den Browser-Speicher.
   const url = connection ? `sftp://${encodeURIComponent(connection.username)}@${address}:${connection.port}${encodedPath}` : '';
   async function copy(value: string) {
-    try { await navigator.clipboard.writeText(value); toast.success('Kopiert.'); }
+    try { if (!(await copyText(value))) throw new Error('nicht kopiert'); toast.success('Kopiert.'); }
     catch { toast.error('Kopieren ist nicht verfügbar. Bitte den Wert markieren und kopieren.'); }
   }
   function row(label: string, value: string) {

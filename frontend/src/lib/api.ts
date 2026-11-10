@@ -65,7 +65,9 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 
     // Nur eine bestehende Sitzung verwerfen. Ohne mitgesendetes Token gab es
     // keine, die ablaufen konnte - dann ist es ein Anmeldeversuch.
-    if (token) {
+    // … und nur, wenn es noch dieselbe ist: eine verspätete Antwort auf das
+    // alte Token (Passwortwechsel, „überall abmelden“) darf das neue nicht löschen.
+    if (token && tokenStore.get() === token) {
       tokenStore.clear();
       if (!location.pathname.startsWith('/login')) location.href = '/login';
     }

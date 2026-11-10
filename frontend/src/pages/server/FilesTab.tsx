@@ -30,7 +30,7 @@ export default function FilesTab() {
 
   const [path, setPath] = useState('/');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState<{ path: string; content: string } | null>(null);
+  const [editing, setEditing] = useState<{ path: string; content: string; original: string } | null>(null);
   const [newFolder, setNewFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [renaming, setRenaming] = useState<FileEntry | null>(null);
@@ -122,7 +122,7 @@ export default function FilesTab() {
       const res = await api.get<{ content: string }>(
         `/servers/${server.id}/files/content?path=${encodeURIComponent(entry.path)}`,
       );
-      setEditing({ path: entry.path, content: res.content });
+      setEditing({ path: entry.path, content: res.content, original: res.content });
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -318,7 +318,10 @@ export default function FilesTab() {
                         )}
                         {can('files.write') && /\.zip$/i.test(entry.name) && (
                           <button
-                            onClick={() => unzip.mutate(entry.path)}
+                            disabled={unzip.isPending}
+                            onClick={() => {
+                              if (window.confirm(`„${entry.name}“ in diesen Ordner entpacken? Gleichnamige Dateien werden überschrieben.`)) unzip.mutate(entry.path);
+                            }}
                             className="p-1 text-stone-450 transition-colors hover:text-gold"
                             title="Hier entpacken"
                           >
@@ -352,11 +355,15 @@ export default function FilesTab() {
       <Modal
         open={Boolean(editing)}
         onClose={() => setEditing(null)}
+        guard={editing && editing.content !== editing.original ? 'Ungespeicherte Änderungen verwerfen?' : false}
         size="xl"
         title={<span className="font-mono text-sm">{editing?.path}</span>}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setEditing(null)}>
+            <Button variant="ghost" onClick={() => {
+              if (editing && editing.content !== editing.original && !window.confirm('Ungespeicherte Änderungen verwerfen?')) return;
+              setEditing(null);
+            }}>
               Abbrechen
             </Button>
             <Button

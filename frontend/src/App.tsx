@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, NETWORK_ERROR_MESSAGE } from './lib/api';
@@ -7,10 +8,10 @@ import Layout from './components/Layout';
 import TotpPanel from './components/TotpPanel';
 
 import LoginPage from './pages/Login';
-import SetupPage from './pages/Setup';
+const SetupPage = lazy(() => import('./pages/Setup'));
 import ServersPage from './pages/Servers';
-import CreateServerPage from './pages/CreateServer';
-import ImportServerPage from './pages/ImportServer';
+const CreateServerPage = lazy(() => import('./pages/CreateServer'));
+const ImportServerPage = lazy(() => import('./pages/ImportServer'));
 import ServerLayout from './pages/server/ServerLayout';
 import OverviewTab from './pages/server/OverviewTab';
 import ConsoleTab from './pages/server/ConsoleTab';
@@ -22,14 +23,14 @@ import BackupsTab from './pages/server/BackupsTab';
 import WorldsTab from './pages/server/WorldsTab';
 import PlayersTab from './pages/server/PlayersTab';
 import AccessTab from './pages/server/AccessTab';
-import AutomationTab from './pages/server/AutomationTab';
+const AutomationTab = lazy(() => import('./pages/server/AutomationTab'));
 import SettingsTab from './pages/server/SettingsTab';
-import ReinstallTab from './pages/server/ReinstallTab';
-import MapTab from './pages/server/MapTab';
-import UsersPage from './pages/admin/Users';
-import PanelSettingsPage from './pages/admin/PanelSettings';
-import ProxyPage from './pages/admin/Proxy';
-import NodesPage from './pages/admin/Nodes';
+const ReinstallTab = lazy(() => import('./pages/server/ReinstallTab'));
+const MapTab = lazy(() => import('./pages/server/MapTab'));
+const UsersPage = lazy(() => import('./pages/admin/Users'));
+const PanelSettingsPage = lazy(() => import('./pages/admin/PanelSettings'));
+const ProxyPage = lazy(() => import('./pages/admin/Proxy'));
+const NodesPage = lazy(() => import('./pages/admin/Nodes'));
 import ProfilePage from './pages/Profile';
 
 /**
@@ -54,7 +55,16 @@ function TotpRequired() {
   );
 }
 
+/** Selten gebrauchte Seiten (Verwaltung, Karte, Einrichtung) werden erst beim Aufruf geladen. */
 export default function App() {
+  return (
+    <Suspense fallback={<LoadingBlock label="Seite wird geladen …" />}>
+      <AppRoutes />
+    </Suspense>
+  );
+}
+
+function AppRoutes() {
   const { user, loading, offline, refresh } = useAuth();
 
   // Nur fragen, solange niemand angemeldet ist – im laufenden Betrieb waere

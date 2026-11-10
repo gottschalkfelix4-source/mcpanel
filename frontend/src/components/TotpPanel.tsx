@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { copyText } from '../lib/clipboard';
 import { useMutation } from '@tanstack/react-query';
 import { Copy, Download, KeyRound, ShieldCheck, ShieldOff } from 'lucide-react';
 import qrcode from 'qrcode-generator';
@@ -55,10 +56,9 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
   }
 
   function copy() {
-    navigator.clipboard.writeText(text).then(
-      () => toast.success('Codes kopiert.'),
-      () => toast.error('Kopieren nicht möglich – bitte als Datei speichern.'),
-    );
+    void copyText(text).then((ok) => (ok
+      ? toast.success('Codes kopiert.')
+      : toast.error('Kopieren nicht möglich – bitte als Datei speichern.')));
   }
 
   return (

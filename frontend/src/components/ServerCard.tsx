@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { copyText } from '../lib/clipboard';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Boxes, Check, Copy, Cpu, Loader2, MemoryStick, Package, Play, Puzzle, RotateCw, Square, Users } from 'lucide-react';
@@ -69,11 +70,10 @@ export function ServerCard({ server }: { server: ServerSummary }) {
 
   const copyAddress = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(server.address);
+    if (await copyText(server.address)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
-    } catch {
+    } else {
       toast.error('Kopieren nicht möglich');
     }
   };

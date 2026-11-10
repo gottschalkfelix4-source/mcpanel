@@ -17,7 +17,28 @@ Taggen wird daraus eine Versionsüberschrift.
 - **Nodes: Minecraft-Server auf weiteren Rechnern**: Ein gemieteter VPS oder ein zweiter PC im Heimnetz lässt sich unter **Nodes** per Assistent anbinden. Ein einziger Befehl auf der Node installiert bei Bedarf Docker und den Node-Agenten und verbindet ihn mit dem Panel. Rechner im Internet laufen über einen WireGuard-Tunnel, für den der Hauptserver keinen offenen Port braucht. Rechner im selben Netz lassen sich per Schalter ohne VPN anbinden. Auch Windows-PCs mit Docker Desktop können Node sein – dafür gibt es den Installationsbefehl für die PowerShell. Die Nodes-Seite zeigt je Rechner CPU-Last, belegten und zugewiesenen RAM sowie freien Platz. Neue Server landen auf Wunsch automatisch auf der Node mit dem meisten freien Speicher, bestehende ziehen per Klick um (Einstellungen → Node) – als Live-Umzug: kopiert wird im laufenden Betrieb, offline ist der Server nur für den letzten Abgleich der geänderten Dateien. Konsole, Dateimanager, Backups und Modpacks funktionieren auf Nodes wie gewohnt. Details in `docs/NODES.md`.
 - **KI-Assistent mit Anthropic (Claude)**: Neben OpenAI-kompatiblen Diensten lässt sich Claude jetzt direkt über die Anthropic-API anbinden – nur API-Key und Modell eintragen (Vorgabe `claude-opus-5-5`). Beim Speichern werden Key und Modell geprüft, ohne Kosten zu verursachen; Nachfragen im selben Dialog nutzen Prompt-Caching. Die Anbindung lässt sich jetzt auch per Knopf entfernen.
 
+### Sicherheit
+- **Router-Freigaben nur nach Bestätigung**: Erkannte Mod-Ports gibt das Panel im Container frei, im Router (UniFi) aber erst, wenn ein Administrator den Port am Server einschaltet. Wer das nicht möchte, erlaubt es pauschal in den UniFi-Einstellungen. Die Portnummer stammt aus Dateien des Servers – vorher konnte jedes Mitglied mit Dateirechten damit beliebige Ports öffnen. Bereits bestehende Freigaben bleiben.
+- **Mods umschalten und löschen** prüfen den Ordner jetzt so streng wie der Dateimanager (keine symbolischen Links).
+- **Umgebungsvariablen**: JVM-Schalter über Umwege (`JAVA_TOOL_OPTIONS`, Namen mit „=“, `TYPE=CUSTOM`) sind Administratoren vorbehalten.
+- **Zweiter Faktor**: Nach fünf falschen Codes ist das Konto kurz gesperrt, mit jedem weiteren Fehlversuch länger.
+- Gespeicherte Schlüssel (UniFi, KI-Assistent) werden nur an die Adresse geschickt, für die sie hinterlegt wurden.
+
+### Behoben
+- **Zeitpläne werden nachgeholt**: Startet das Panel genau zur geplanten Minute neu, läuft das Backup danach trotzdem (bis zu zwei Stunden).
+- **Backups großer Welten** scheitern nicht mehr am Zeitlimit beim Speichern der Welt (3 Minuten statt 8 Sekunden).
+- **Panel-Neustart während eines Backups**: Das automatische Speichern des Minecraft-Servers wird danach wieder eingeschaltet, halbe Archive werden entfernt.
+- **Unterbrochene Wiederherstellung** rollt nach mehr als zwei Stunden nicht mehr zurück – der alte Stand wird nur beiseitegelegt.
+- **Fehlgeschlagene Wiederherstellung** startet einen vorher laufenden Server wieder.
+- **Bedrock-Spieler** (Geyser) legen Spielerliste, Statistik und Karte nicht mehr lahm.
+- **Vorgenerierung**: Negative Koordinaten lassen sich eintippen; „Pausieren“ geht nicht mehr verloren; „Zeigen“ springt zuverlässig zum Spieler.
+- **Kopieren-Knöpfe** funktionieren auch über `http://` im Heimnetz.
+- Ein kurzer Verbindungsaussetzer ersetzt die Serverseite nicht mehr durch eine Fehlermeldung; der Datei-Editor fragt vor dem Verwerfen ungespeicherter Änderungen.
+- Operator-Rechte, Banne, Entpacken und das Abschalten der UniFi-Anbindung fragen vorher nach.
+- Meldungen wie „createBackup läuft …“ sind jetzt deutsch.
+
 ### Geändert
+- **Schnellere Oberfläche**: Verwaltungsseiten und Karte werden erst beim Aufruf geladen; die Konsole bleibt auch bei viel Ausgabe flüssig.
 - **Arbeitsspeicher nur durch Administratoren**: Besitzer und Mitglieder können den Java-Heap nicht mehr ändern – weder in den Einstellungen noch bei Neuinstallation, ZIP-Import oder über den Assistenten. Das Kontingentfeld „Max. Java-Heap“ entfällt.
 - **Neuinstallation leichter zu finden**: Die Reiterleiste bricht um, statt hintere Reiter unsichtbar abzuschneiden; zusätzlich führt ein Knopf in den Einstellungen dorthin.
 - **Bestätigungsdialoge** zeigen den einzutippenden Namen in Originalschreibweise – vorher erschien er in Großbuchstaben und ließ sich so nicht bestätigen.

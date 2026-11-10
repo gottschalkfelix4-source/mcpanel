@@ -60,8 +60,14 @@ export default function PlayersTab() {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   function run(action: Action, player: string) {
-    if (!player.trim()) return;
-    act.mutate({ action, player: player.trim() });
+    const name = player.trim();
+    if (!name) return;
+    // Operator-Rechte und Banne nicht per Fehlklick auf ein kleines Symbol.
+    const question = action === 'op'
+      ? `${name} zum Operator machen? Operatoren dürfen alle Befehle auf dem Server ausführen.`
+      : action === 'ban' ? `${name} bannen? Der Spieler wird sofort getrennt und kann nicht mehr beitreten.` : null;
+    if (question && !window.confirm(question)) return;
+    act.mutate({ action, player: name });
   }
 
   return (

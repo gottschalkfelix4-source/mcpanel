@@ -4,6 +4,7 @@ import { FileCode2, Plus, RotateCw, Save, SlidersHorizontal } from 'lucide-react
 import { api } from '../../lib/api';
 import type { PropertyField } from '../../lib/types';
 import {
+  LoadErrorBlock,
   Button, EmptyState, InfoNote, LoadingBlock, Panel, Toggle, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
@@ -71,6 +72,7 @@ export default function ConfigTab() {
   const readOnly = !can('config.edit');
 
   if (config.isLoading) return <LoadingBlock />;
+  if (!config.data) return <LoadErrorBlock error={config.error} onRetry={() => void config.refetch()} />;
 
   if (!config.data?.exists) {
     return (

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { copyText } from '../../lib/clipboard';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Check, Copy, Globe, Network, RefreshCw, Save, Search, Server, Settings2, ShieldCheck } from 'lucide-react';
@@ -123,7 +124,7 @@ function RouteDetails({ server, proxy, dnsTarget }: { server: ProxyServer; proxy
     onSuccess: async () => { await queries.invalidateQueries({ queryKey: ['proxy-overview'] }); setDirty(false); void queries.invalidateQueries({ queryKey: ['servers'] }); void queries.invalidateQueries({ queryKey: ['server', server.id] }); toast.success('Subdomains gespeichert.'); },
     onError: (error: Error) => toast.error(error.message),
   });
-  const copy = async (text: string) => { try { await navigator.clipboard.writeText(text); toast.success('Adresse kopiert.'); } catch { toast.error('Kopieren nicht möglich. Bitte die Adresse manuell auswählen.'); } };
+  const copy = async (text: string) => { try { if (!(await copyText(text))) throw new Error('nicht kopiert'); toast.success('Adresse kopiert.'); } catch { toast.error('Kopieren nicht möglich. Bitte die Adresse manuell auswählen.'); } };
   return <Panel title={server.name} icon={<Server size={16} />} subtitle="Ausgewählte Verbindung" className="min-w-0">
     <div className="space-y-4">
       <Badge tone={server.runtime.state === 'running' ? 'green' : 'gold'}>{runtimeLabel[server.runtime.state]}</Badge>

@@ -254,7 +254,11 @@ export default function UnifiSettings() {
 
         <div className="flex flex-wrap justify-end gap-2">
           <Button loading={runTest.isPending} disabled={!form.url} onClick={() => runTest.mutate()}>Verbindung testen</Button>
-          <Button variant="primary" loading={save.isPending} onClick={() => save.mutate({})}>Speichern</Button>
+          <Button variant="primary" loading={save.isPending} onClick={() => {
+            // Abschalten entfernt die Weiterleitungen des Panels vom Router.
+            if (saved.enabled && !form.enabled && !window.confirm('UniFi-Anbindung abschalten? Alle vom Panel angelegten Portweiterleitungen werden vom Router entfernt.')) return;
+            save.mutate({});
+          }}>Speichern</Button>
         </div>
 
         {saved.enabled && status?.ok && (
@@ -278,7 +282,7 @@ export default function UnifiSettings() {
                   </thead>
                   <tbody className="text-stone-300">
                     {status.rules.map((rule) => (
-                      <tr key={rule.port} className="border-t border-stone-800">
+                      <tr key={`${rule.port}-${rule.protocol}`} className="border-t border-stone-800">
                         <td className="py-1 pr-3">{rule.name}</td>
                         <td className="py-1 pr-3 font-mono">{rule.port} {PROTO[rule.protocol] ?? rule.protocol}</td>
                         <td className="py-1 font-mono">{rule.ip}</td>

@@ -183,6 +183,7 @@ export function Modal({
   children,
   footer,
   size = 'md',
+  guard,
 }: {
   open: boolean;
   onClose: () => void;
@@ -190,17 +191,28 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  /**
+   * Gesetzt = ungespeicherte Eingaben. Escape und ein Klick neben das Fenster
+   * schließen dann erst nach Rückfrage mit diesem Text.
+   */
+  guard?: string | false;
 }) {
+  const dismiss = () => {
+    if (guard && !window.confirm(guard)) return;
+    onClose();
+  };
+  const dismissRef = useRef(dismiss);
+  dismissRef.current = dismiss;
   useEffect(() => {
     if (!open) return;
-    const handler = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const handler = (e: KeyboardEvent) => e.key === 'Escape' && dismissRef.current();
     window.addEventListener('keydown', handler);
     document.body.style.overflow = 'hidden';
     return () => {
       window.removeEventListener('keydown', handler);
       document.body.style.overflow = '';
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -208,14 +220,14 @@ export function Modal({
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
-      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className={clsx('mc-frame relative z-10 w-full animate-pop-in', sizes[size])}>
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={dismiss} />
+      <div role="dialog" aria-modal="true" className={clsx('mc-frame relative z-10 w-full animate-pop-in', sizes[size])}>
         <div className="mc-frame-inner">
           <div className="grass-strip-thin h-1.5 w-full" />
           <header className="mc-frame-head !justify-between">
             <h2 className="heading text-[15px]">{title}</h2>
             <button
-              onClick={onClose}
+              onClick={dismiss}
               className="text-stone-400 transition hover:text-white"
               aria-label="Schließen"
             >
@@ -357,7 +369,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={value}>
       {children}
       {/* Mobil: links+rechts verankert statt fester Breite, sonst ragt er aus dem Viewport */}
-      <div className="pointer-events-none fixed bottom-4 left-4 right-4 z-[60] flex flex-col gap-2 sm:left-auto sm:w-full sm:max-w-sm">
+      <div aria-live="polite" className="pointer-events-none fixed bottom-4 left-4 right-4 z-[60] flex flex-col gap-2 sm:left-auto sm:w-full sm:max-w-sm">
         {toasts.map((t) => (
           <div key={t.id} className="mc-frame pointer-events-auto animate-pop-in !p-[3px]">
             <div className="mc-frame-inner flex items-start gap-3 p-3 text-sm">
@@ -495,6 +507,8 @@ export function Toggle({
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className="flex items-center gap-2.5 text-left disabled:opacity-50"

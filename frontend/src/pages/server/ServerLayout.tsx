@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { copyText } from '../../lib/clipboard';
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -10,7 +11,7 @@ import { api } from '../../lib/api';
 import { getSocket } from '../../lib/socket';
 import { CONTENT_KIND_BY_TYPE } from '../../lib/types';
 import type { ContainerStats, PowerState, ServerDetail } from '../../lib/types';
-import { Button, ConfirmDialog, ErrorNote, LoadingBlock, StateBadge, useToast } from '../../components/ui';
+import { Button, ConfirmDialog, LoadErrorBlock, LoadingBlock, StateBadge, useToast } from '../../components/ui';
 import { BlockIcon } from '../../components/pixel';
 import { CrashDialog } from '../../components/CrashDialog';
 import { TYPE_LOOK } from '../../components/ServerCard';
@@ -138,8 +139,9 @@ export default function ServerLayout() {
   });
 
   if (isLoading) return <LoadingBlock label="Server wird geladen …" />;
-  if (error) return <ErrorNote>{(error as Error).message}</ErrorNote>;
-  if (!server) return null;
+  // Nur ohne Daten die Fehlerseite: ein kurzer Aussetzer beim Nachladen (z. B.
+  // Neustart des Panels) soll Konsole und ungespeicherte Eingaben nicht wegwerfen.
+  if (!server) return <LoadErrorBlock error={error} onRetry={() => void refetch()} />;
 
   const state = liveState ?? server.state;
   const running = state === 'running' || state === 'starting';
@@ -160,7 +162,10 @@ export default function ServerLayout() {
   };
 
   const copyAddress = async () => {
-    await navigator.clipboard.writeText(server.address).catch(() => {});
+    if (!(await copyText(server.address))) {
+      toast.error('Kopieren nicht möglich – bitte die Adresse von Hand markieren.');
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   };

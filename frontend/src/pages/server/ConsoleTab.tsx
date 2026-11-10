@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { ArrowDownToLine, Eraser, Send, Sparkles, Terminal } from 'lucide-react';
 import { getSocket } from '../../lib/socket';
@@ -28,6 +28,19 @@ function cleanLine(raw: string): string {
 
   return PROMPT_ONLY.test(line) ? '' : line;
 }
+
+/** Eigene Komponente: Tippen im Befehlsfeld zeichnet die bis zu 3000 Zeilen nicht neu. */
+const ConsoleLines = memo(function ConsoleLines({ lines }: { lines: string[] }) {
+  return (
+    <>
+      {lines.map((line, i) => (
+        <div key={i} className={clsx('whitespace-pre-wrap break-words', lineClass(line))}>
+          {line}
+        </div>
+      ))}
+    </>
+  );
+});
 
 function lineClass(line: string): string {
   if (/^>/.test(line)) return 'text-diamond';
@@ -108,7 +121,9 @@ export default function ConsoleTab() {
   }, [lines, filter]);
 
   useEffect(() => {
-    if (autoScroll) bottomRef.current?.scrollIntoView({ block: 'end' });
+    // Nur das Protokollfenster bewegen – scrollIntoView zöge die ganze Seite mit.
+    const el = viewRef.current;
+    if (autoScroll && el) el.scrollTop = el.scrollHeight;
   }, [visible, autoScroll]);
 
   function onScroll() {
@@ -229,11 +244,7 @@ export default function ConsoleTab() {
               : 'Der Server ist offline. Starte ihn, um die Konsole zu sehen.'}
           </p>
         ) : (
-          visible.map((line, i) => (
-            <div key={i} className={clsx('whitespace-pre-wrap break-words', lineClass(line))}>
-              {line}
-            </div>
-          ))
+          <ConsoleLines lines={visible} />
         )}
         <div ref={bottomRef} />
       </div>
@@ -242,7 +253,7 @@ export default function ConsoleTab() {
         <button
           onClick={() => {
             setAutoScroll(true);
-            bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+            viewRef.current?.scrollTo({ top: viewRef.current.scrollHeight, behavior: 'smooth' });
           }}
           className="w-full border-y border-stone-890 bg-stone-800/80 py-1.5 text-xs font-bold uppercase tracking-[0.1em] text-grass-light transition-colors hover:bg-stone-700/70"
         >
