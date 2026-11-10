@@ -20,6 +20,7 @@ import { detectModPorts, MOD_PORTS, writeModPort } from './modPorts.js';
 import { withQueuedOperation } from './operations.js';
 import { getProxyConfig } from './proxy.js';
 import { getSetting, setSetting } from './settings.js';
+import { getUnifiConfig } from './unifi.js';
 
 const QUEUE = 'panel-ports';
 export const MANUAL_SOURCE = 'manual';
@@ -106,17 +107,21 @@ async function syncUnlocked(server: Server): Promise<PortSyncResult> {
 
   const notes: string[] = [];
   let changed = false;
+  // Die Portnummer stammt aus Dateien, die jedes Mitglied mit Dateirechten
+  // ändern kann. Im Router freigegeben wird ein erkannter Port deshalb erst,
+  // wenn ein Administrator ihn einschaltet – außer er hat das pauschal erlaubt.
+  const autoForward = (await getUnifiConfig().catch(() => null))?.autoForwardDetected === true;
 
   for (const found of detected) {
     const row = existing.find((entry) => entry.source === found.spec.key);
     let hostPort: number;
-    if (found.spec.samePort && !taken.has(found.containerPort)) {
+    if (found.spec.samePort && found.containerPort >= 1024 && !taken.has(found.containerPort)) {
       // Von Hand in der Konfiguration geänderter Port gewinnt, solange er frei ist.
       hostPort = found.containerPort;
     } else if (row && !taken.has(row.hostPort)) {
       hostPort = row.hostPort;
     } else {
-      hostPort = nextFreePort(found.containerPort, taken);
+      hostPort = nextFreePort(Math.max(1024, found.containerPort), taken);
     }
     let containerPort = found.containerPort;
 
@@ -133,18 +138,22 @@ async function syncUnlocked(server: Server): Promise<PortSyncResult> {
         data: {
           serverId: server.id, source: found.spec.key, label: found.spec.label,
           protocol: found.spec.protocol, hostPort, containerPort,
-          // Nur für das Panel: nie im Router freigeben.
-          ...(found.spec.internal ? { forward: false } : {}),
+          // Nur für das Panel (BlueMap): nie im Router freigeben.
+          forward: autoForward && !found.spec.internal,
         },
       });
       notes.push(found.spec.internal
         ? `${found.spec.label} erkannt – Port ${hostPort} nur für das Panel (ohne Router-Freigabe).`
-        : `${found.spec.label} erkannt – Port ${hostPort}/${found.spec.protocol.replace('_', '+')} freigegeben.`);
+        : `${found.spec.label} erkannt – Port ${hostPort}/${found.spec.protocol.replace('_', '+')} im Container freigegeben${autoForward ? '' : '; die Router-Freigabe schaltet ein Administrator ein'}.`);
       changed = true;
     } else if (row.hostPort !== hostPort || row.containerPort !== containerPort || row.protocol !== found.spec.protocol) {
       await prisma.serverPort.update({
         where: { id: row.id },
-        data: { hostPort, containerPort, protocol: found.spec.protocol, label: found.spec.label },
+        data: {
+          hostPort, containerPort, protocol: found.spec.protocol, label: found.spec.label,
+          // Ein anderer Port ist eine neue Freigabe – nicht stillschweigend übernehmen.
+          ...(row.hostPort !== hostPort && !autoForward ? { forward: false } : {}),
+        },
       });
       notes.push(`${found.spec.label}: Port auf ${hostPort} angepasst.`);
       changed = true;

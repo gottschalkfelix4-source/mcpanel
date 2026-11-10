@@ -58,11 +58,18 @@ export interface UnifiConfig {
   wanInterface: WanInterface;
   /** Auch Spielports (bzw. den Subdomain-Proxy) freigeben */
   forwardGamePorts: boolean;
+  /**
+   * Erkannte Mod-Ports ohne Bestätigung freigeben. Aus = ein Administrator
+   * schaltet jede Freigabe einzeln ein. Die Portnummer steht in Dateien des
+   * Servers – wer dort schreiben darf, bestimmt sonst, was der Router öffnet.
+   */
+  autoForwardDetected: boolean;
 }
 
 export const EMPTY_CONFIG: UnifiConfig = {
   enabled: false, url: '', site: 'default', auth: 'apikey', apiKey: '', username: '', password: '',
   verifyTls: false, fingerprint: '', forwardIp: '', wanInterface: 'wan', forwardGamePorts: false,
+  autoForwardDetected: false,
 };
 
 const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
@@ -88,6 +95,7 @@ export const unifiInputSchema = z.object({
   forwardIp: z.string().trim().refine((value) => value === '' || IPV4.test(value), 'Bitte eine IPv4-Adresse im Heimnetz angeben'),
   wanInterface: z.enum(['wan', 'wan2', 'both']).default('wan'),
   forwardGamePorts: z.boolean().default(false),
+  autoForwardDetected: z.boolean().default(false),
 });
 
 let cached: UnifiConfig | null = null;
@@ -112,11 +120,15 @@ export async function saveUnifiConfig(next: UnifiConfig): Promise<void> {
 /** Eingabe mit dem gespeicherten Stand zusammenführen – leere Geheimnisse bleiben erhalten. */
 export async function mergeUnifiInput(input: z.infer<typeof unifiInputSchema>): Promise<UnifiConfig> {
   const current = await getUnifiConfig();
+  const hostOf = (value: string) => { try { return new URL(value).host; } catch { return ''; } };
+  const sameHost = hostOf(input.url) === hostOf(current.url);
   return {
     ...input,
     url: input.url.replace(/\/+$/, ''),
-    apiKey: input.apiKey?.length ? input.apiKey.trim() : current.apiKey,
-    password: input.password?.length ? input.password : current.password,
+    // Ein gespeichertes Geheimnis geht nur an die Adresse, für die es
+    // hinterlegt wurde – sonst ließe es sich an einen fremden Host schicken.
+    apiKey: input.apiKey?.length ? input.apiKey.trim() : sameHost ? current.apiKey : '',
+    password: input.password?.length ? input.password : sameHost ? current.password : '',
   };
 }
 

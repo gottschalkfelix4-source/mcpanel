@@ -10,7 +10,7 @@ vi.mock('../db.js', () => ({ prisma: { server: {
 vi.mock('../config.js', () => ({ serverDir: (id: string) => path.join(m.root, id) }));
 vi.mock('./serverManager.js', () => ({ createServer: m.create, deleteServer: m.remove }));
 vi.mock('./docker.js', () => ({ getState: async () => ({ state: m.state }), recreateContainer: m.recreate }));
-vi.mock('./rcon.js', () => ({ rconCommand: m.rcon }));
+vi.mock('./rcon.js', () => ({ rconCommand: m.rcon, SAVE_FLUSH_TIMEOUT_MS: 180_000 }));
 import { cloneServer } from './serverClone.js';
 const task = () => ({ id: 'task', update: vi.fn(async () => {}), log: vi.fn(async () => {}), done: vi.fn(async () => {}), fail: vi.fn(async () => {}) });
 beforeEach(async () => {

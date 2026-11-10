@@ -32,7 +32,22 @@ async function writeJournal(id: string, value: unknown): Promise<void> {
 }
 
 export async function saveRestoreMetadata(id: string, data: Record<string, unknown>): Promise<void> {
-  await writeJournal(id, { data, committed: false });
+  await writeJournal(id, { data, committed: false, at: Date.now() });
+}
+
+/**
+ * Ab diesem Alter wird ein unterbrochener Vorgang nicht mehr zurückgerollt.
+ * Die Wiederherstellung beim Panel-Start kann ausfallen (Docker oder die Node
+ * noch nicht erreichbar). Läuft der Server danach tagelang auf dem neuen
+ * Stand, würde ein spätes Zurückrollen genau diese Tage löschen.
+ */
+export const STALE_RESTORE_MS = 2 * 3600_000;
+
+/** Wann der unterbrochene Vorgang begann – aus dem Journal, sonst vom Ausweichordner. */
+async function interruptedSince(record: { at?: number } | null, old: string): Promise<number | null> {
+  if (typeof record?.at === 'number') return record.at;
+  const stat = await fs.lstat(old).catch(() => null);
+  return stat ? stat.ctimeMs : null;
 }
 
 export async function finishRestore(id: string): Promise<void> {
@@ -46,11 +61,20 @@ export async function finishRestore(id: string): Promise<void> {
 export async function recoverInterruptedRestore(id: string): Promise<void> {
   const { dir, old, stage, journal } = restorePaths(id);
   const record = await readJournal(journal);
-  if (!record?.committed && await exists(old)) {
+  const since = await interruptedSince(record, old);
+  const stale = !record?.committed && since !== null && Date.now() - since > STALE_RESTORE_MS && await exists(dir);
+  if (stale) {
+    // Zu alt: den aktuellen Stand behalten, den alten nur beiseitelegen.
+    if (await exists(old)) {
+      const kept = `${dir}.restore-verwaist-${new Date(since!).toISOString().slice(0, 10)}-${Date.now()}`;
+      await fs.rename(old, kept);
+      console.warn(`[restore] ${id}: unterbrochener Vorgang vom ${new Date(since!).toISOString()} wird nicht mehr zurückgerollt – alter Stand liegt unter ${kept}`);
+    }
+  } else if (!record?.committed && await exists(old)) {
     await fs.rm(dir, { recursive: true, force: true });
     await fs.rename(old, dir);
   }
-  if (!record?.committed && record?.data) {
+  if (!stale && !record?.committed && record?.data) {
     const { prisma } = await import('../db.js');
     await prisma.server.update({ where: { id }, data: record.data });
   }

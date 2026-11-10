@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Crosshair, Grid3x3, Pause, Play, X } from 'lucide-react';
 import clsx from 'clsx';
@@ -147,10 +147,10 @@ export function PregenPanel({ serverId, info, form, setForm, picking, setPicking
           <p className="mc-label">Mittelpunkt</p>
           <div className="grid grid-cols-2 gap-2">
             <label className="text-xs text-stone-400">X
-              <input className="mc-input mt-1 font-mono" inputMode="numeric" value={form.centerX} onChange={(e) => set('centerX', toInt(e.target.value))} />
+              <CoordInput value={form.centerX} onChange={(v) => set('centerX', v)} />
             </label>
             <label className="text-xs text-stone-400">Z
-              <input className="mc-input mt-1 font-mono" inputMode="numeric" value={form.centerZ} onChange={(e) => set('centerZ', toInt(e.target.value))} />
+              <CoordInput value={form.centerZ} onChange={(v) => set('centerZ', v)} />
             </label>
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -246,7 +246,32 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function toInt(value: string): number {
+/**
+ * Koordinatenfeld. Hält den getippten Text selbst, damit ein einzelnes „-“
+ * stehen bleibt – sonst ließe sich keine negative Koordinate eingeben.
+ */
+function CoordInput({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const [text, setText] = useState(String(value));
+  // Von außen geändert (Klick auf die Karte, „Weltmitte“)?
+  useEffect(() => {
+    setText((current) => (toInt(current) === value ? current : String(value)));
+  }, [value]);
+  return (
+    <input
+      className="mc-input mt-1 font-mono"
+      inputMode="text"
+      value={text}
+      onChange={(e) => {
+        const next = e.target.value.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '');
+        setText(next);
+        onChange(toInt(next));
+      }}
+      onBlur={() => setText(String(value))}
+    />
+  );
+}
+
+export function toInt(value: string): number {
   const n = parseInt(value.replace(/[^\d-]/g, ''), 10);
   return Number.isFinite(n) ? Math.max(-29_999_000, Math.min(29_999_000, n)) : 0;
 }

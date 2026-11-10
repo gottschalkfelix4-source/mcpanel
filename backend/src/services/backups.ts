@@ -16,7 +16,7 @@ import { serverBackupDir, serverDir } from '../config.js';
 import { prisma } from '../db.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import * as dockerSvc from './docker.js';
-import { rconCommand } from './rcon.js';
+import { rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
 import { invalidateDiskUsage } from './diskUsage.js';
 import { notify } from './notify.js';
 import { fetchBackup, getTarget, isEnabled, putBackup, removeBackup, registerTarget } from './backupTarget.js';
@@ -65,6 +65,38 @@ const RESTORE_OLD = '.restore-old';
 /** Ordner, die nie in ein Backup wandern. */
 const EXCLUDE = new Set(['cache', 'logs', 'crash-reports', '.cache', 'libraries', RESTORE_OLD]);
 
+const PARTIAL_SUFFIX = '.part';
+
+/**
+ * Automatisches Speichern wieder einschalten. Scheitert das, liefe der
+ * Server ohne Autosave weiter – ein späterer Absturz kostete dann Stunden.
+ * Deshalb mehrere Versuche und eine deutliche Meldung im Protokoll.
+ */
+async function restoreAutosave(server: Server): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await rconCommand(server, 'save-on');
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    }
+  }
+  console.error(`[backup] ${server.name}: „save-on“ kam nicht an – automatisches Speichern ist womöglich aus. Bitte „save-on“ in der Konsole senden oder den Server neu starten.`);
+}
+
+/** Halbe Archive eines abgebrochenen Panel-Laufs entfernen. */
+export async function cleanupPartialBackups(serverId: string): Promise<number> {
+  const dir = serverBackupDir(serverId);
+  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  let removed = 0;
+  for (const name of names) {
+    if (!name.endsWith(PARTIAL_SUFFIX)) continue;
+    await fs.rm(path.join(dir, name), { force: true });
+    removed++;
+  }
+  return removed;
+}
+
 async function createBackupUnlocked(server: Server, options: CreateBackupOptions = {}) {
   const { task } = options;
   const dir = serverDir(server.id);
@@ -88,7 +120,7 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
     await task?.update(10, 'Welt wird gespeichert …');
     try {
       await rconCommand(server, 'save-off');
-      await rconCommand(server, 'save-all flush');
+      await rconCommand(server, 'save-all flush', { timeoutMs: SAVE_FLUSH_TIMEOUT_MS });
     } catch (err) {
       await rconCommand(server, 'save-on').catch(() => {});
       throw badRequest('Welt konnte nicht konsistent gespeichert werden; Backup wurde abgebrochen');
@@ -101,22 +133,25 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
     entries = (await fs.readdir(dir)).filter((e) => !EXCLUDE.has(e));
     const sources = await collectSources(dir, entries, (relative) => !isUploadTemp(relative));
     const budget = await remainingDiskBytes(server);
+    // Erst unter einem vorläufigen Namen: bricht das Panel mittendrin ab,
+    // räumt der nächste Start die halbe Datei weg (`cleanupPartialBackups`).
+    const partial = target + PARTIAL_SUFFIX;
     try {
-      await writeZip(target, sources, {
+      await writeZip(partial, sources, {
         maxBytes: budget,
         onProgress: (done, total) => {
           const percent = total > 0 ? Math.round((done / total) * 100) : 100;
           void task?.update(20 + Math.round(percent * 0.6), `Archiv wird erstellt … ${percent} %`);
         },
       });
+      await fs.rename(partial, target);
     } catch (err) {
+      await fs.rm(partial, { force: true });
       await fs.rm(target, { force: true });
       throw err;
     }
   } finally {
-    if (running) {
-      await rconCommand(server, 'save-on').catch(() => {});
-    }
+    if (running) await restoreAutosave(server);
   }
 
   const stat = await fs.stat(target);

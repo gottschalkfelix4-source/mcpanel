@@ -41,12 +41,13 @@ export default async function contentRoutes(app: FastifyInstance) {
     if (!kind) return { kind: null, dirName: null, loader: null, mcVersion: access.server.mcVersion, items: [] };
 
     const dir = contentDir(access.server)!;
-    const entries = await fs.readdir(dir).catch(() => [] as string[]);
+    const entries = await Promise.resolve().then(() => fs.readdir(safePath(dir, ''))).catch(() => [] as string[]);
 
     const items = [];
     for (const name of entries) {
       if (!/\.jar(\.disabled)?$/i.test(name)) continue;
-      const stat = await fs.stat(path.join(dir, name)).catch(() => null);
+      const stat = await fs.lstat(path.join(dir, name)).catch(() => null);
+      if (stat && !stat.isFile()) continue;
       if (!stat) continue;
       items.push({
         filename: name,
@@ -108,10 +109,10 @@ export default async function contentRoutes(app: FastifyInstance) {
     const body = z.object({ filename: z.string().min(1) }).parse(req.body);
     const safe = path.basename(body.filename);
 
-    const from = path.join(dir, safe);
-    const to = safe.endsWith('.disabled')
-      ? path.join(dir, safe.replace(/\.disabled$/, ''))
-      : path.join(dir, safe + '.disabled');
+    // safePath lehnt einen per Symlink umgebogenen mods-/plugins-Ordner ab –
+    // sonst ließen sich Dateien anderer Server umbenennen.
+    const from = safePath(dir, safe);
+    const to = safePath(dir, safe.endsWith('.disabled') ? safe.replace(/\.disabled$/, '') : safe + '.disabled');
 
     await fs.rename(from, to);
     return { ok: true, enabled: !to.endsWith('.disabled') };
@@ -122,7 +123,7 @@ export default async function contentRoutes(app: FastifyInstance) {
     const body = z.object({ filenames: z.array(z.string().min(1)).min(1) }).parse(req.body);
 
     for (const name of body.filenames) {
-      await fs.rm(path.join(dir, path.basename(name)), { force: true });
+      await fs.rm(safePath(dir, path.basename(name)), { force: true });
     }
     const kind = contentKindFor(access.server.type)!;
     await audit(

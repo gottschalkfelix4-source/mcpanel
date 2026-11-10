@@ -9,6 +9,7 @@ import * as dockerSvc from '../services/docker.js';
 import {
   addManualPort, listServerPorts, MANUAL_SOURCE, removeManualPort, setPortForward, syncServerPorts,
 } from '../services/serverPorts.js';
+import { withServerOperation } from '../services/operations.js';
 import { getPublicHost } from '../services/settings.js';
 import { getUnifiConfig, lastSyncStatus, ruleName, scheduleUnifiSync } from '../services/unifi.js';
 
@@ -16,12 +17,13 @@ type RouterState = 'off' | 'disabled' | 'forwarded' | 'conflict' | 'skipped' | '
 
 /** Zusatzports eines Servers (`/api/servers/:id/ports`). */
 export default async function portRoutes(app: FastifyInstance) {
-  async function describe(serverName: string, nodeId: string | null, rows: ServerPort[]) {
+  /** Router-Details (Fehlertexte, Namen fremder Regeln) sehen nur Administratoren. */
+  async function describe(serverName: string, nodeId: string | null, rows: ServerPort[], isAdmin: boolean) {
     const [config, host] = await Promise.all([getUnifiConfig(), getPublicHost()]);
     const status = lastSyncStatus();
     const playerHost = (nodeId ? nodeLocation(nodeId)?.publicHost : null) ?? host;
     return {
-      unifi: { enabled: config.enabled, lastSync: status?.at ?? null, error: status?.error ?? null },
+      unifi: { enabled: config.enabled, lastSync: status?.at ?? null, error: status?.error ? (isAdmin ? status.error : 'Abgleich fehlgeschlagen') : null },
       ports: rows.map((row) => {
         const name = ruleName(serverName, row.label);
         let router: RouterState;
@@ -29,10 +31,12 @@ export default async function portRoutes(app: FastifyInstance) {
         if (!config.enabled) router = 'disabled';
         else if (!row.forward) router = 'off';
         else if (!status) router = 'pending';
-        else if (status.error) { router = 'error'; routerNote = status.error; }
+        else if (status.error) { router = 'error'; routerNote = isAdmin ? status.error : null; }
         else if (status.conflicts.some((c) => c.port === row.hostPort)) {
           router = 'conflict';
-          routerNote = `Port ist im Router bereits durch „${status.conflicts.find((c) => c.port === row.hostPort)!.existing}“ belegt`;
+          routerNote = isAdmin
+            ? `Port ist im Router bereits durch „${status.conflicts.find((c) => c.port === row.hostPort)!.existing}“ belegt`
+            : 'Port ist im Router bereits belegt';
         } else if (status.skipped.some((s) => s.name === name)) {
           router = 'skipped';
           routerNote = status.skipped.find((s) => s.name === name)!.reason;
@@ -57,18 +61,19 @@ export default async function portRoutes(app: FastifyInstance) {
 
   app.get('/', async (req) => {
     const access = await requireServer(req);
-    return describe(access.server.name, access.server.nodeId, await listServerPorts(access.server.id));
+    return describe(access.server.name, access.server.nodeId, await listServerPorts(access.server.id), access.isAdmin);
   });
 
   /** Jetzt nach Erweiterungen suchen (sonst passiert das vor jedem Start). */
   app.post('/detect', async (req) => {
     const access = await requireServer(req, PERMISSIONS.SETTINGS_EDIT);
-    const result = await syncServerPorts(access.server);
+    // Unter der Serversperre: die Erkennung kann Konfigurationen umschreiben.
+    const result = await withServerOperation(access.server.id, 'Die Port-Erkennung', () => syncServerPorts(access.server));
     if (result.changed) scheduleUnifiSync();
     const state = await dockerSvc.getState(access.server).catch(() => null);
     const running = state?.state === 'running' || state?.state === 'starting';
     return {
-      ...(await describe(access.server.name, access.server.nodeId, result.ports)),
+      ...(await describe(access.server.name, access.server.nodeId, result.ports, access.isAdmin)),
       notes: result.notes,
       restartNeeded: result.changed && running,
     };

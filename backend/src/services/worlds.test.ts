@@ -24,7 +24,7 @@ vi.mock('../config.js', () => ({
 }));
 vi.mock('../db.js', () => ({ prisma: { server: { update: m.serverUpdate } } }));
 vi.mock('./docker.js', () => ({ getState: vi.fn(async () => ({ state: m.state })) }));
-vi.mock('./rcon.js', () => ({ rconCommand: m.rcon }));
+vi.mock('./rcon.js', () => ({ rconCommand: m.rcon, SAVE_FLUSH_TIMEOUT_MS: 180_000 }));
 vi.mock('./backups.js', () => ({ createBackup: m.createBackup }));
 vi.mock('./files.js', () => ({ dirSize: vi.fn(async () => 1000) }));
 vi.mock('./diskUsage.js', () => ({ invalidateDiskUsage: vi.fn() }));

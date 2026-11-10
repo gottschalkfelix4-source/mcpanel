@@ -18,6 +18,7 @@ interface UnifiConfig {
   forwardIp: string;
   wanInterface: WanInterface;
   forwardGamePorts: boolean;
+  autoForwardDetected: boolean;
   hasApiKey: boolean;
   hasPassword: boolean;
 }
@@ -71,6 +72,7 @@ export default function UnifiSettings() {
       apiKey: apiKey || undefined, username: next.username, password: password || undefined,
       verifyTls: next.verifyTls, fingerprint: next.fingerprint, forwardIp: next.forwardIp,
       wanInterface: next.wanInterface, forwardGamePorts: next.forwardGamePorts,
+      autoForwardDetected: next.autoForwardDetected,
     };
   };
 
@@ -203,6 +205,16 @@ export default function UnifiSettings() {
 
         <Toggle checked={form.forwardGamePorts} onChange={(v) => set('forwardGamePorts', v)}
           label="Auch die Spielports freigeben (bzw. den Port des Subdomain-Proxys)" />
+
+        <div>
+          <Toggle checked={form.autoForwardDetected} onChange={(v) => set('autoForwardDetected', v)}
+            label="Erkannte Mod-Ports ohne Rückfrage freigeben" />
+          <p className="mt-1 text-xs leading-relaxed text-stone-400">
+            Aus (empfohlen): Neue Ports erscheinen am Server unter „Zusätzliche Ports“ und ein Administrator schaltet die
+            Router-Freigabe einmal ein. An: Jeder erkannte Port wird sofort geöffnet – die Portnummer steht aber in Dateien
+            des Servers, die jedes Mitglied mit Dateirechten ändern kann.
+          </p>
+        </div>
 
         <div className="space-y-2 border border-stone-800 bg-stone-900/40 p-3">
           <Toggle checked={form.verifyTls} onChange={(v) => set('verifyTls', v)} label="Gültiges Zertifikat erzwingen (nur mit eigenem Zertifikat auf der Konsole)" />

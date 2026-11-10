@@ -147,6 +147,38 @@ describe('syncServerPorts', () => {
   });
 });
 
+describe('Router-Freigabe erkannter Ports', () => {
+  it('bleibt aus, bis ein Administrator sie einschaltet – auch bei geändertem Port', async () => {
+    await put('a', 'mods/voicechat-fabric.jar');
+    const [created] = (await syncServerPorts(server('a'))).ports;
+    expect(created.forward).toBe(false);
+    // Admin schaltet ein, danach trägt jemand einen anderen Port in die Datei ein.
+    m.rows[0].forward = true;
+    await put('a', 'config/voicechat/voicechat-server.properties', 'port=31000\n');
+    expect((await syncServerPorts(server('a'))).ports[0]).toMatchObject({ hostPort: 31000, forward: false });
+  });
+
+  it('wird nur mit der pauschalen Erlaubnis sofort gesetzt', async () => {
+    m.settings.set('unifi.config', JSON.stringify({ autoForwardDetected: true }));
+    const { saveUnifiConfig, getUnifiConfig } = await import('./unifi.js');
+    await saveUnifiConfig({ ...(await getUnifiConfig()), autoForwardDetected: true });
+    try {
+      await put('a', 'mods/voicechat-fabric.jar');
+      expect((await syncServerPorts(server('a'))).ports[0].forward).toBe(true);
+    } finally {
+      await saveUnifiConfig({ ...(await getUnifiConfig()), autoForwardDetected: false });
+    }
+  });
+
+  it('nimmt keine Ports unter 1024 aus der Konfiguration', async () => {
+    await put('a', 'mods/voicechat-fabric.jar');
+    await put('a', 'config/voicechat/voicechat-server.properties', 'port=445\n');
+    const [port] = (await syncServerPorts(server('a'))).ports;
+    expect(port.hostPort).toBeGreaterThanOrEqual(1024);
+    expect(await fs.readFile(path.join(m.root, 'a/config/voicechat/voicechat-server.properties'), 'utf8')).toBe(`port=${port.hostPort}\n`);
+  });
+});
+
 describe('manuelle Ports', () => {
   it('lehnt belegte und reservierte Ports ab', async () => {
     await expect(addManualPort(server('a'), { label: 'x', protocol: 'tcp', hostPort: 25566 })).rejects.toMatchObject({ statusCode: 409 });

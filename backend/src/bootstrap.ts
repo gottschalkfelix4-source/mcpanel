@@ -5,7 +5,9 @@ import path from 'node:path';
 import { config, setHostDataRoot } from './config.js';
 import { prisma } from './db.js';
 import { ensureDataDirs, runAutostart } from './services/serverManager.js';
-import { detectHostDataRoot, ensureNetwork, onServerStart, stop, recreateContainer } from './services/docker.js';
+import { detectHostDataRoot, ensureNetwork, getState, onServerStart, stop, recreateContainer } from './services/docker.js';
+import { rconCommand } from './services/rcon.js';
+import { cleanupPartialBackups } from './services/backups.js';
 import { loadServerPorts, reassignBusyPort, syncServerPorts } from './services/serverPorts.js';
 import { scheduleUnifiSync, setUnifiLogger } from './services/unifi.js';
 import { startPregenMonitor } from './services/pregen.js';
@@ -111,6 +113,29 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
     }
   }
 
+  // Lief beim letzten Ende noch etwas, kann der Minecraft-Server im Zustand
+  // „save-off“ hängen (Sicherung, Welt-Export, Kopie). Nach dem Start wieder
+  // einschalten – der Befehl schadet nicht, wenn Speichern ohnehin an ist.
+  const interrupted = await prisma.task.findMany({
+    where: { status: { in: ['PENDING', 'RUNNING'] }, serverId: { not: null } },
+    select: { serverId: true },
+  });
+  const interruptedServers = [...new Set(interrupted.map((task) => task.serverId!))];
+  setTimeout(() => {
+    void (async () => {
+      for (const id of interruptedServers) {
+        const server = await prisma.server.findUnique({ where: { id } });
+        if (!server) continue;
+        const state = await getState(server).catch(() => null);
+        if (state?.state !== 'running') continue;
+        await rconCommand(server, 'save-on').then(
+          () => log(`${server.name}: automatisches Speichern nach abgebrochenem Vorgang wieder eingeschaltet`),
+          (err) => log(`${server.name}: „save-on“ nach abgebrochenem Vorgang fehlgeschlagen – ${err instanceof Error ? err.message : err}`),
+        );
+      }
+    })().catch(() => {});
+  }, 20_000).unref();
+
   // Verwaiste Tasks aus einem vorherigen Lauf abschließen
   await prisma.task.updateMany({
     where: { status: { in: ['PENDING', 'RUNNING'] } },
@@ -121,6 +146,9 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
   // den Start des Panels nicht verhindern – sonst ist niemand mehr drin.
   for (const server of await prisma.server.findMany()) {
     try {
+      await cleanupPartialBackups(server.id).then((count) => {
+        if (count > 0) log(`${server.name}: ${count} unvollständige Sicherung(en) eines abgebrochenen Laufs entfernt`);
+      }).catch(() => {});
       const interrupted = await hasInterruptedRestore(server.id);
       if (interrupted) await stop(server);
       await recoverInterruptedRestore(server.id);

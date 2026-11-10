@@ -33,7 +33,7 @@ import { invalidateDiskUsage } from './diskUsage.js';
 import { isUploadTemp } from './files.js';
 import { assertNodeReady, nodeDocker } from './nodeClients.js';
 import { syncProxyRoutes } from './proxy.js';
-import { closeRconConnection, rconCommand } from './rcon.js';
+import { closeRconConnection, rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
 import type { TaskHandle } from './tasks.js';
 
 interface Inventory { files: number; bytes: number; skipped: string[] }
@@ -203,7 +203,7 @@ export async function migrateServer(server: Server, targetNodeId: string | null,
     // --- 2. zweiter Abgleich, noch online -----------------------------------
     if (wasRunning) {
       await task.update(65, 'Welt wird gespeichert und abgeglichen (Server online) …');
-      await rconCommand(server, 'save-all flush').catch(() => {});
+      await rconCommand(server, 'save-all flush', { timeoutMs: SAVE_FLUSH_TIMEOUT_MS }).catch(() => {});
       const second = await syncTree(sourceDir, tempDir);
       await task.log(`Zweiter Abgleich: ${second.files} geänderte Dateien (${formatMb(second.bytes)}), ${second.removed} entfernt`);
 

@@ -118,7 +118,7 @@ export class RconClient {
     }
   }
 
-  private send(type: number, body: string): Promise<string> {
+  private send(type: number, body: string, timeoutMs = this.timeoutMs): Promise<string> {
     if (!this.socket) return Promise.reject(notDelivered(new Error('RCON nicht verbunden')));
     const id = this.nextId++;
     const payload = Buffer.from(body, 'utf8');
@@ -134,7 +134,7 @@ export class RconClient {
         // Nach einem Timeout ist unklar, ob der Befehl bereits ausgeführt wurde.
         // Verbindung verwerfen und den Befehl niemals automatisch wiederholen.
         this.cleanup(new Error('RCON Timeout'));
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.pending.set(id, {
         resolve: (v) => {
           clearTimeout(timer);
@@ -149,8 +149,8 @@ export class RconClient {
     });
   }
 
-  command(cmd: string): Promise<string> {
-    return this.send(TYPE_COMMAND, cmd);
+  command(cmd: string, timeoutMs?: number): Promise<string> {
+    return this.send(TYPE_COMMAND, cmd, timeoutMs);
   }
 
   private cleanup(err: Error) {
@@ -242,7 +242,7 @@ function getConnection(server: Server): Connection {
   return entry;
 }
 
-function sendCommand(entry: Connection, command: string): Promise<string> {
+function sendCommand(entry: Connection, command: string, timeoutMs?: number): Promise<string> {
   clearTimeout(entry.idleTimer);
   entry.pending++;
   // Eine gemeinsame Verbindung, auch bei gleichzeitigen API-/Live-Abfragen.
@@ -253,7 +253,7 @@ function sendCommand(entry: Connection, command: string): Promise<string> {
       throw notDelivered(error);
     }
     if (entry.closed) throw notDelivered(new Error('RCON nicht verbunden'));
-    return entry.client.command(command);
+    return timeoutMs === undefined ? entry.client.command(command) : entry.client.command(command, timeoutMs);
   });
   entry.tail = result.catch(() => {});
   return result.catch(error => {
@@ -267,13 +267,20 @@ function sendCommand(entry: Connection, command: string): Promise<string> {
   });
 }
 
+/**
+ * `save-all flush` antwortet erst, wenn jeder Chunk auf der Platte liegt –
+ * bei großen Welten oder während einer Vorgenerierung dauert das deutlich
+ * länger als die üblichen 8 s.
+ */
+export const SAVE_FLUSH_TIMEOUT_MS = 180_000;
+
 /** Befehle teilen eine Verbindung pro Server; keine Wiederholung bei Fehlern. */
-export function rconCommand(server: Server, command: string): Promise<string> {
+export function rconCommand(server: Server, command: string, options: { timeoutMs?: number } = {}): Promise<string> {
   const entry = getConnection(server);
   entry.players = undefined;
   entry.playerRequest = undefined;
   entry.playerRevision++;
-  return sendCommand(entry, command);
+  return sendCommand(entry, command, options.timeoutMs);
 }
 
 /** Verbindung eines Servers schließen – etwa nach einem Umzug auf eine andere Node. */
@@ -342,7 +349,8 @@ export function parsePlayerList(raw: string): PlayerList {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  if (players.length !== online || players.some(name => !/^[A-Za-z0-9_]{1,16}$/.test(name))) {
+  // Bedrock-Spieler über Geyser/Floodgate tragen ein Präfix („.“ oder „*“).
+  if (players.length !== online || players.some(name => !/^[.*]?[A-Za-z0-9_]{1,32}$/.test(name))) {
     throw new Error('Spielerliste konnte nicht vollständig gelesen werden');
   }
   return { online, max, players };

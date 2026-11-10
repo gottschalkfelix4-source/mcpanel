@@ -41,6 +41,35 @@ const loginLimit = {
   },
 };
 
+/**
+ * Fehlversuche beim zweiten Faktor je Konto. Das Limit pro Adresse allein
+ * genügt nicht: ein sechsstelliger Code ließe sich mit vielen Adressen oder
+ * viel Geduld durchprobieren. Nach fünf Fehlversuchen ist das Konto für den
+ * zweiten Schritt gesperrt – erst 1 Minute, dann jeweils doppelt so lang
+ * (höchstens 1 Stunde). Eine erfolgreiche Anmeldung setzt den Zähler zurück.
+ */
+const totpFailures = new Map<string, { count: number; until: number }>();
+const TOTP_FREE_ATTEMPTS = 5;
+
+export function totpLockSeconds(userId: string, now = Date.now()): number {
+  const entry = totpFailures.get(userId);
+  return entry && entry.until > now ? Math.ceil((entry.until - now) / 1000) : 0;
+}
+
+export function noteTotpFailure(userId: string, now = Date.now()): void {
+  const entry = totpFailures.get(userId) ?? { count: 0, until: 0 };
+  entry.count++;
+  if (entry.count >= TOTP_FREE_ATTEMPTS) {
+    entry.until = now + Math.min(3600_000, 60_000 * 2 ** (entry.count - TOTP_FREE_ATTEMPTS));
+  }
+  totpFailures.set(userId, entry);
+  if (totpFailures.size > 10_000) totpFailures.delete(totpFailures.keys().next().value!);
+}
+
+export function clearTotpFailures(userId: string): void {
+  totpFailures.delete(userId);
+}
+
 /** Zuletzt verbrauchter Zeitschritt je Konto – ein Code gilt nur einmal. */
 const usedTotpSteps = new Map<string, number>();
 
@@ -126,12 +155,18 @@ export default async function authRoutes(app: FastifyInstance) {
   app.post('/login/totp', { config: loginLimit }, async (req) => {
     const { mfaToken, code } = z.object({ mfaToken: z.string().min(1), code: z.string().min(1).max(24) }).parse(req.body);
     const user = await authenticateToken(mfaToken, { purpose: 'mfa' });
+    const locked = totpLockSeconds(user.id);
+    if (locked > 0) {
+      throw new HttpError(429, `Zu viele falsche Codes. Bitte in ${locked > 90 ? `${Math.ceil(locked / 60)} Minuten` : `${locked} Sekunden`} erneut versuchen.`);
+    }
     const recovery = looksLikeRecoveryCode(code);
     const ok = user.totpEnabled && (recovery ? await consumeRecoveryCode(user, code) : checkTotp(user, code));
     if (!ok) {
+      noteTotpFailure(user.id);
       await audit(user.id, null, 'auth.login.failed', `falscher ${recovery ? 'Wiederherstellungscode' : 'Einmalcode'} von ${req.ip}`);
       throw unauthorized(recovery ? 'Der Wiederherstellungscode ist ungültig oder schon verbraucht' : 'Der Code ist falsch oder abgelaufen');
     }
+    clearTotpFailures(user.id);
     await audit(user.id, null, 'auth.login', `${recovery ? 'mit Wiederherstellungscode' : 'mit zweitem Faktor'} von ${req.ip}`);
     return {
       ...(await session(user, req)),

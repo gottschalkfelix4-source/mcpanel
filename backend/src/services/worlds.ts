@@ -8,7 +8,7 @@ import { collectSources, writeZip } from '../lib/zipWriter.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import * as dockerSvc from './docker.js';
-import { rconCommand } from './rcon.js';
+import { rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
 import { dirSize } from './files.js';
 import { readProperties, saveProperties } from './properties.js';
 import { withServerOperation } from './operations.js';
@@ -245,7 +245,7 @@ export function exportWorld(server: Server, rawName: string, task?: TaskHandle):
       await task?.update(5, 'Welt wird gespeichert …');
       try {
         await rconCommand(server, 'save-off');
-        await rconCommand(server, 'save-all flush');
+        await rconCommand(server, 'save-all flush', { timeoutMs: SAVE_FLUSH_TIMEOUT_MS });
       } catch {
         await rconCommand(server, 'save-on').catch(() => {});
         throw badRequest('Die Welt konnte nicht konsistent gespeichert werden – bitte erneut versuchen oder den Server stoppen.');

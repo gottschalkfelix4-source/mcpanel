@@ -159,6 +159,19 @@ export const PROTECTED_ENV_KEYS = [
   'RCON_PORT',
   'RCON_PASSWORD',
   'ENABLE_RCON',
+  // Die JVM liest diese Variablen selbst – gleiche Wirkung wie JVM_OPTS.
+  'JAVA_TOOL_OPTIONS',
+  '_JAVA_OPTIONS',
+  'JDK_JAVA_OPTIONS',
+  // Fremdes Server-Jar bzw. Befehle, die das Abbild von sich aus ausführt.
+  'CUSTOM_SERVER',
+  'CUSTOM_JAR_EXEC',
+  'EXEC_DIRECTLY',
+  'RCON_CMDS_STARTUP',
+  'RCON_CMDS_ON_CONNECT',
+  'RCON_CMDS_ON_DISCONNECT',
+  'RCON_CMDS_FIRST_CONNECT',
+  'RCON_CMDS_LAST_DISCONNECT',
 ] as const;
 
 /** Image eines Servers: explizite Vorgabe schlägt automatische Wahl. */

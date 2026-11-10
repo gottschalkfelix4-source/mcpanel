@@ -169,7 +169,11 @@ export default async function settingsRoutes(app: FastifyInstance) {
     const current = await getAssistantConfig();
     // Einen gespeicherten Key nur behalten, wenn der Anbieter gleich bleibt -
     // ein OpenRouter-Key wird bei Anthropic nie funktionieren.
-    const gleicherAnbieter = (current.provider ?? 'openai') === body.provider;
+    // … und nur für dieselbe Adresse: sonst ließe sich der gespeicherte Key
+    // durch bloßes Ändern der Base-URL an einen fremden Host schicken.
+    const hostOf = (value: string) => { try { return new URL(value).host; } catch { return ''; } };
+    const gleicherAnbieter = (current.provider ?? 'openai') === body.provider
+      && hostOf(current.baseUrl) === hostOf(body.baseUrl);
     const next = {
       provider: body.provider,
       // Ohne Schraegstrich am Ende, sonst wird daraus /v1//chat/completions -

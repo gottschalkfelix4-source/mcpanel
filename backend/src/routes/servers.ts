@@ -77,7 +77,12 @@ const updateSchema = z.object({
   mcVersion: z.string().min(1).optional(),
   memoryMb: z.number().int().min(512).max(65536).optional(),
   autoStart: z.boolean().optional(),
-  extraEnv: z.record(z.string()).optional(),
+  // Namen wie in einer Shell: ein „=“ im Namen würde Docker als Wert einer
+  // anderen (geschützten) Variable lesen.
+  extraEnv: z.record(
+    z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, 'Ungültiger Variablenname'),
+    z.string().max(4096).regex(/^[^\0\r\n]*$/, 'Ungültiger Wert'),
+  ).refine((env) => Object.keys(env).length <= 100, 'Zu viele Variablen').optional(),
 });
 
 /**
@@ -88,9 +93,12 @@ const updateSchema = z.object({
  */
 function assertProtectedEnvUnchanged(server: Server, next: Record<string, string>): void {
   const current = (server.extraEnv ?? {}) as Record<string, string>;
-  const changed = dockerSvc.PROTECTED_ENV_KEYS.filter(
-    (key) => (next[key] ?? '') !== (current[key] ?? ''),
-  );
+  // Unabhängig von Groß-/Kleinschreibung vergleichen – sicher ist sicher.
+  const value = (env: Record<string, string>, key: string) =>
+    Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1] ?? '';
+  const changed = dockerSvc.PROTECTED_ENV_KEYS.filter((key) => value(next, key) !== value(current, key));
+  // TYPE=CUSTOM startet ein beliebiges Jar – das ist Administratorsache.
+  if (value(next, 'TYPE').toUpperCase() === 'CUSTOM' && value(current, 'TYPE').toUpperCase() !== 'CUSTOM') changed.push('TYPE=CUSTOM' as never);
   if (changed.length > 0) {
     throw forbidden(`Nur ein Administrator kann ${changed.join(', ')} ändern`);
   }

@@ -10,7 +10,7 @@ import { parseProperties, mergeProperties } from './properties.js';
 import { createServer, deleteServer } from './serverManager.js';
 import { getState, recreateContainer } from './docker.js';
 import { dirSize } from './files.js';
-import { rconCommand } from './rcon.js';
+import { rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
 import { withServerOperation } from './operations.js';
 import type { TaskHandle } from './tasks.js';
 
@@ -58,7 +58,7 @@ export async function cloneServer(source: Server, options: { name: string; inclu
         await task.update(5, 'Welt wird konsistent gespeichert …');
         savingDisabled = true;
         await rconCommand(source, 'save-off');
-        await rconCommand(source, 'save-all flush');
+        await rconCommand(source, 'save-all flush', { timeoutMs: SAVE_FLUSH_TIMEOUT_MS });
       }
       await task.update(15, 'Eigenständiger Testserver wird angelegt …');
       target = await createServer({ name: options.name, description: `Testkopie von ${source.name}`, ownerId: source.ownerId,
