@@ -21,7 +21,20 @@ import { serverNodeLocation } from '../lib/serverLocation.js';
 import { detectModPorts } from './modPorts.js';
 
 /** Wohin das Panel für die Karte dieses Servers verbindet. */
-export async function bluemapTarget(server: Server): Promise<{ host: string; port: number } | null> {
+export function bluemapTarget(server: Server): Promise<{ host: string; port: number } | null> {
+  // Eine Karte lädt Hunderte Kacheln – das Ziel nicht für jede neu ermitteln.
+  const hit = targetCache.get(server.id);
+  if (hit && Date.now() - hit.at < 15_000) return hit.value;
+  const value = resolveTarget(server);
+  targetCache.set(server.id, { at: Date.now(), value });
+  value.catch(() => targetCache.delete(server.id));
+  if (targetCache.size > 500) targetCache.delete(targetCache.keys().next().value!);
+  return value;
+}
+
+const targetCache = new Map<string, { at: number; value: Promise<{ host: string; port: number } | null> }>();
+
+async function resolveTarget(server: Server): Promise<{ host: string; port: number } | null> {
   const node = serverNodeLocation(server.id);
   if (node) {
     // Auf Nodes ist der Port (ohne Router-Freigabe) auf dem Rechner veröffentlicht.

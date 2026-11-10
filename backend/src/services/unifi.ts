@@ -582,11 +582,30 @@ export function setUnifiLogger(fn: (msg: string) => void): void {
  * Abgleich anstoßen – gebündelt, weil ein Start, eine Portänderung und eine
  * Einstellung oft kurz hintereinander kommen.
  */
-export function scheduleUnifiSync(delayMs = 3000): void {
+export function scheduleUnifiSync(delayMs = 3000, attempt = 0): void {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
-    void getUnifiConfig().then((config) => (config.enabled ? syncUnifi(logger) : null)).catch((err) => logger(String(err)));
+    void getUnifiConfig()
+      .then((config) => (config.enabled ? syncUnifi(logger) : null))
+      .then((status) => {
+        // Konsole gerade nicht erreichbar (Neustart, Update)? Später erneut –
+        // sonst bliebe eine Freigabe offen oder fehlte bis zum nächsten Anlass.
+        if (status && !status.ok && attempt < RETRY_DELAYS.length && !timer) {
+          scheduleUnifiSync(RETRY_DELAYS[attempt], attempt + 1);
+        }
+      })
+      .catch((err) => logger(String(err)));
   }, delayMs);
   timer.unref?.();
+}
+
+const RETRY_DELAYS = [60_000, 180_000, 600_000];
+let reconcileTimer: NodeJS.Timeout | null = null;
+
+/** Zusätzlich alle 15 Minuten abgleichen – fängt alles, was ein Anlass verpasst hat. */
+export function startUnifiReconcile(): void {
+  if (reconcileTimer) return;
+  reconcileTimer = setInterval(() => { if (!timer) scheduleUnifiSync(0); }, 15 * 60_000);
+  reconcileTimer.unref();
 }

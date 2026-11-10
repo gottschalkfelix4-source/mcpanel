@@ -5,6 +5,7 @@ import { audit, getServerAccess } from '../auth/context.js';
 import { assertAutomationAccess } from '../auth/automationAccess.js';
 import { forbidden } from '../lib/errors.js';
 import * as dockerSvc from './docker.js';
+import { getSetting, setSetting } from './settings.js';
 import { rconCommand } from './rcon.js';
 import { createBackup } from './backups.js';
 import { checkForUpdate, installModpack } from './modpack.js';
@@ -333,6 +334,38 @@ const CRASH_LIMIT = 3;
 let timer: NodeJS.Timeout | null = null;
 let ticking = false;
 
+/**
+ * Zeitpläne werden nachgeholt, wenn ihre Minute verpasst wurde – etwa weil
+ * das Panel um 03:00 gerade neu startete (Abbild-Update) oder ein Durchlauf
+ * hing. Älter als dieses Fenster wird nichts mehr nachgeholt: ein Neustart
+ * von gestern Nacht soll nicht mittags auslösen.
+ */
+const CATCH_UP_MS = 2 * 3600_000;
+const LAST_TICK_KEY = 'automation.lastTick';
+let lastTickAt: number | null = null;
+let lastTickSaved = '';
+
+/** Minuten seit dem letzten Durchlauf (höchstens das Nachholfenster), älteste zuerst. */
+export function minutesSince(last: number | null, now: Date): Date[] {
+  const end = new Date(now);
+  end.setSeconds(0, 0);
+  if (last === null) return [end];
+  const start = new Date(Math.max(last, now.getTime() - CATCH_UP_MS));
+  start.setSeconds(0, 0);
+  const minutes: Date[] = [];
+  for (let t = start.getTime() + 60_000; t <= end.getTime(); t += 60_000) minutes.push(new Date(t));
+  // Derselbe Zeitpunkt wie beim letzten Durchlauf: nur die laufende Minute.
+  return minutes.length > 0 ? minutes : [end];
+}
+
+/** Ein hängender Docker-Daemon darf die Zeitpläne aller Server nicht anhalten. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label}: keine Antwort nach ${ms / 1000} s`)), ms);
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
 const minuteKey = (date: Date) =>
   `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
 
@@ -390,6 +423,17 @@ async function tick(log: (msg: string) => void): Promise<void> {
   try {
     const now = new Date();
     const key = minuteKey(now);
+    if (lastTickAt === null) {
+      const saved = Number(await getSetting(LAST_TICK_KEY, '').catch(() => ''));
+      lastTickAt = Number.isFinite(saved) && saved > 0 && saved <= now.getTime() ? saved : null;
+    }
+    const minutes = minutesSince(lastTickAt, now);
+    lastTickAt = now.getTime();
+    // Einmal je Minute festhalten – das genügt zum Nachholen nach einem Neustart.
+    if (lastTickSaved !== key) {
+      lastTickSaved = key;
+      void setSetting(LAST_TICK_KEY, String(now.getTime())).catch(() => {});
+    }
 
     const automations = await prisma.automation.findMany({ where: { enabled: true } });
     if (automations.length === 0) return;
@@ -405,7 +449,7 @@ async function tick(log: (msg: string) => void): Promise<void> {
       try {
         const server = await prisma.server.findUnique({ where: { id: serverId } });
         if (!server) return;
-        const current = await dockerSvc.getState(server);
+        const current = await withTimeout(dockerSvc.getState(server), 15_000, 'Docker');
         const isRunning = current.state === 'running' || current.state === 'starting';
         if (detectCrash(lastSeen.get(serverId), current, dockerSvc.wasPlannedStop(serverId))) {
           crashed.add(serverId);
@@ -432,7 +476,8 @@ async function tick(log: (msg: string) => void): Promise<void> {
 
       if (automation.trigger === 'SCHEDULE' && automation.cron) {
         try {
-          due = matchesCron(parseCron(automation.cron), now);
+          const fields = parseCron(automation.cron);
+          due = minutes.some((minute) => matchesCron(fields, minute));
         } catch {
           due = false;
         }

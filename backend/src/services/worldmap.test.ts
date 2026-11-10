@@ -7,7 +7,7 @@ const m = vi.hoisted(() => ({ root: '' }));
 vi.mock('../config.js', () => ({ serverDir: (id: string) => path.join(m.root, id), config: { jwtSecret: 'test-geheimnis' } }));
 vi.mock('../db.js', () => ({ prisma: {} }));
 
-const { headerBits, regionDirs, scanChunks } = await import('./regionScan.js');
+const { headerBits, regionDirs, scanChunksNow: scanChunks } = await import('./regionScan.js');
 const { parseDimension, parsePosition } = await import('./playerPositions.js');
 const { acceptBlueMapDownload, modrinthLoaders, pickVersion } = await import('./mapAddons.js');
 const { createMapToken, verifyMapToken, MAP_TOKEN_TTL_MS } = await import('../lib/mapToken.js');

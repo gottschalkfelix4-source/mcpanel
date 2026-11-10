@@ -468,6 +468,13 @@ async function restoreBackupUnlocked(server: Server, backupId: string, task?: Ta
       await finishRestore(server.id);
     } catch (err) {
       await recoverInterruptedRestore(server.id);
+      // Der alte Stand liegt wieder da – ein vorher laufender Server soll
+      // nicht bis zum nächsten Blick ins Panel aus bleiben.
+      if (wasRunning) {
+        await dockerSvc.recreateContainer(server).then(() => dockerSvc.start(server)).catch((startError) => {
+          console.error(`[restore] ${server.name}: Neustart nach fehlgeschlagener Wiederherstellung misslungen – ${startError instanceof Error ? startError.message : startError}`);
+        });
+      }
       throw err;
     } finally {
       await fs.rm(stage, { recursive: true, force: true });

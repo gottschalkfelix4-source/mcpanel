@@ -304,7 +304,7 @@ async function checkNode(node: Node, peers: Map<string, PeerStatus>, peerErrors:
     state.everReady = true;
     if (!state.autostarted) {
       state.autostarted = true;
-      void autostartNode(node);
+      void autostartNode(node).catch((err) => log(`Autostart auf „${node.name}“ fehlgeschlagen: ${err instanceof Error ? err.message : err}`));
     }
   } else if (!ready && wasReady) {
     log(`Node „${node.name}“ getrennt: ${reason}`);

@@ -12,6 +12,27 @@ const queues = new Map<string, Promise<unknown>>();
  * dann ins leere lokale Einhängeverzeichnis schreiben. Als Rückruf gelöst,
  * damit dieses Modul nichts importieren muss.
  */
+/** Interne Kennungen in dem Deutsch, das der Nutzer in der Meldung liest. */
+const LABELS: Record<string, string> = {
+  createBackup: 'Eine Sicherung',
+  deleteBackup: 'Das Löschen einer Sicherung',
+  restoreBackup: 'Eine Wiederherstellung',
+  installModpack: 'Eine Modpack-Installation',
+  deleteServer: 'Das Löschen des Servers',
+  updateServerSettings: 'Eine Änderung der Einstellungen',
+  recreateContainer: 'Der Neuaufbau des Containers',
+  removeContainer: 'Das Entfernen des Containers',
+  start: 'Der Start',
+  stop: 'Das Stoppen',
+  restart: 'Ein Neustart',
+  createDir: 'Eine Dateiänderung',
+  writeFile: 'Eine Dateiänderung',
+  rename: 'Eine Dateiänderung',
+  remove: 'Eine Dateiänderung',
+  unzip: 'Das Entpacken eines Archivs',
+  saveProperties: 'Eine Konfigurationsänderung',
+};
+
 let operationGuard: ((serverId: string) => void) | null = null;
 export function setOperationGuard(fn: ((serverId: string) => void) | null): void {
   operationGuard = fn;
@@ -31,7 +52,7 @@ export async function withServerOperation<T>(serverId: string, label: string, fn
   const existing = active.get(serverId);
   if (existing) {
     if (context.getStore()?.get(serverId) === existing.token) return fn();
-    throw conflict(`${existing.label} läuft für diesen Server bereits. Bitte abwarten.`);
+    throw conflict(`${LABELS[existing.label] ?? existing.label} läuft für diesen Server bereits. Bitte abwarten.`);
   }
   operationGuard?.(serverId);
   const token = Symbol(label);

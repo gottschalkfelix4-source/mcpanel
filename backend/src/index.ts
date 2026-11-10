@@ -154,6 +154,13 @@ catch (err) { app.log.error({ err }, 'SFTP-Dateizugriff konnte nicht gestartet w
 await app.listen({ port: config.port, host: '0.0.0.0' });
 app.log.info(`MCPanel-Backend läuft auf Port ${config.port}`);
 
+// Eine vergessene Fehlerbehandlung irgendwo im Hintergrund darf nicht das
+// ganze Panel beenden – im Alles-in-einem-Abbild risse das Datenbank und
+// nginx mit und bräche jede laufende Sicherung ab.
+process.on('unhandledRejection', (reason) => {
+  app.log.error({ err: reason }, 'Unbehandelter Fehler im Hintergrund');
+});
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     app.log.info('Fahre herunter …');

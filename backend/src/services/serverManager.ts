@@ -9,7 +9,7 @@ import { conflict } from '../lib/errors.js';
 import * as dockerSvc from './docker.js';
 import { getDiskUsage, invalidateDiskUsage } from './diskUsage.js';
 import { getPlayerCount } from './playerCount.js';
-import { getPublicHost } from './settings.js';
+import { deleteSetting, getPublicHost } from './settings.js';
 import { getProxyConfig } from './proxy.js';
 import { removeBackup } from './backupTarget.js';
 import { forgetServer, nodeLocation, setServerNode } from '../lib/serverLocation.js';
@@ -128,6 +128,8 @@ async function deleteServerUnlocked(server: Server, deleteFiles: boolean): Promi
   } finally {
     forgetServer(server.id);
     setExtraPorts(server.id, []);
+    // Reste des Servers in den Einstellungen (Vorgenerierung, Karte).
+    await deleteSetting(`pregen.${server.id}`).catch(() => {});
     // Router-Freigaben des gelöschten Servers wieder schließen.
     scheduleUnifiSync();
   }

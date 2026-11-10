@@ -627,7 +627,7 @@ type ContainerStats = { cpuPercent: number; memoryUsed: number; memoryLimit: num
  * kurz zwischengespeicherte Messung statt jede selbst anzustoßen.
  */
 const statsCache = new Map<string, { at: number; value: Promise<ContainerStats> }>();
-const STATS_TTL_MS = 4000;
+const STATS_TTL_MS = 8000;
 
 export function getStats(server: Server): Promise<ContainerStats> {
   const now = Date.now();
@@ -715,6 +715,8 @@ export async function writeStdin(server: Server, line: string): Promise<void> {
     stderr: false,
     hijack: true,
   });
+  // Ohne Listener beendete ein Verbindungsfehler den ganzen Prozess.
+  stream.on('error', () => {});
   stream.write(line.endsWith('\n') ? line : line + '\n');
   stream.end();
 }

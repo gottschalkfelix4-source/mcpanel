@@ -9,7 +9,7 @@ import { detectHostDataRoot, ensureNetwork, getState, onServerStart, stop, recre
 import { rconCommand } from './services/rcon.js';
 import { cleanupPartialBackups } from './services/backups.js';
 import { loadServerPorts, reassignBusyPort, syncServerPorts } from './services/serverPorts.js';
-import { scheduleUnifiSync, setUnifiLogger } from './services/unifi.js';
+import { scheduleUnifiSync, setUnifiLogger, startUnifiReconcile } from './services/unifi.js';
 import { startPregenMonitor } from './services/pregen.js';
 import { startWatcher } from './services/notify.js';
 import { startPanelBackupScheduler } from './services/panelBackups.js';
@@ -172,8 +172,9 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
     portBusy: (server, hostPort) => reassignBusyPort(server, hostPort),
   });
   scheduleUnifiSync(10_000);
+  startUnifiReconcile();
 
-  void runAutostart();
+  void runAutostart().catch((err) => log(`Autostart fehlgeschlagen: ${err instanceof Error ? err.message : err}`));
   await reconcileProxy().catch(err => log(`Proxy: ${err.message}`));
 
   // Eine eingerichtete Samba-Freigabe muss nach jedem Neustart wieder

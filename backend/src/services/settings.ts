@@ -21,12 +21,29 @@ export const panelUrlSchema = z.string().trim().max(2048, 'Die Panel-URL ist zu 
 
 const cache = new Map<string, string>();
 
+/**
+ * Schlüssel ohne Wert. Ohne dieses Merken fragte jede Serverliste bei einer
+ * Standardinstallation mehrfach je Server dieselben leeren Einstellungen ab.
+ */
+const missing = new Set<string>();
+
 export async function getSetting(key: string, fallback = ''): Promise<string> {
   if (cache.has(key)) return cache.get(key)!;
+  if (missing.has(key)) return fallback;
   const row = await prisma.setting.findUnique({ where: { key } });
-  const value = row?.value ?? fallback;
-  if (value) cache.set(key, value);
-  return value;
+  if (row?.value) cache.set(key, row.value);
+  else {
+    missing.add(key);
+    if (missing.size > 5000) missing.clear();
+  }
+  return row?.value ?? fallback;
+}
+
+/** Einstellung samt Zeile entfernen (z. B. beim Löschen eines Servers). */
+export async function deleteSetting(key: string): Promise<void> {
+  await prisma.setting.deleteMany({ where: { key } });
+  cache.delete(key);
+  missing.add(key);
 }
 
 export async function setSetting(key: string, value: string): Promise<void> {
@@ -35,6 +52,7 @@ export async function setSetting(key: string, value: string): Promise<void> {
     update: { value },
     create: { key, value },
   });
+  missing.delete(key);
   if (value) cache.set(key, value);
   else cache.delete(key);
 }

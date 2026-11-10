@@ -26,7 +26,8 @@ import { acceptBlueMapDownload, installedAddon } from './mapAddons.js';
 import { remainingDiskBytes } from './quota.js';
 import { listPlayers, rconCommand } from './rcon.js';
 import { levelName, type Dimension } from './regionScan.js';
-import { getSetting, setSetting } from './settings.js';
+import { withQueuedOperation } from './operations.js';
+import { deleteSetting, getSetting, setSetting } from './settings.js';
 import { getTickMetrics } from './tickMetrics.js';
 
 const KEY = (serverId: string) => `pregen.${serverId}`;
@@ -177,7 +178,7 @@ async function assertRunning(server: Server): Promise<void> {
   if (state !== 'running') throw conflict('Der Server muss laufen, damit Chunky Befehle annimmt.');
 }
 
-export async function startPregen(server: Server, input: PregenInput, userId: string): Promise<PregenJob> {
+async function startPregenUnlocked(server: Server, input: PregenInput, userId: string): Promise<PregenJob> {
   const settings = await getMapSettings(server.id);
   if (settings.job && settings.job.status === 'running') {
     throw conflict('Es läuft bereits eine Vorgenerierung. Erst pausieren oder abbrechen.');
@@ -216,7 +217,7 @@ export async function startPregen(server: Server, input: PregenInput, userId: st
   return job;
 }
 
-export async function pausePregen(server: Server): Promise<PregenJob> {
+async function pausePregenUnlocked(server: Server): Promise<PregenJob> {
   const settings = await getMapSettings(server.id);
   const job = settings.job;
   if (!job || job.status !== 'running') throw conflict('Es läuft keine Vorgenerierung.');
@@ -227,7 +228,7 @@ export async function pausePregen(server: Server): Promise<PregenJob> {
   return (await updateJob(server.id, (j) => { j.status = 'paused'; j.autoPaused = null; j.rate = null; j.etaSeconds = null; }))!;
 }
 
-export async function resumePregen(server: Server): Promise<PregenJob> {
+async function resumePregenUnlocked(server: Server): Promise<PregenJob> {
   const settings = await getMapSettings(server.id);
   const job = settings.job;
   if (!job || job.status !== 'paused') throw conflict('Es gibt keine pausierte Vorgenerierung.');
@@ -240,7 +241,7 @@ export async function resumePregen(server: Server): Promise<PregenJob> {
   return (await updateJob(server.id, (j) => { j.status = 'running'; j.autoPaused = null; j.message = null; }))!;
 }
 
-export async function cancelPregen(server: Server): Promise<PregenJob | null> {
+async function cancelPregenUnlocked(server: Server): Promise<PregenJob | null> {
   const settings = await getMapSettings(server.id);
   const job = settings.job;
   if (!job) return null;
@@ -274,17 +275,22 @@ export async function clearPregen(serverId: string): Promise<void> {
 
 const lastResume = new Map<string, number>();
 const busy = new Set<string>();
+const acceptApplied = new Set<string>();
 
 /** Ein Durchlauf für einen Server: Fortschritt lesen, automatische Pausen, Fortsetzen nach Neustart. */
-export async function monitorServer(server: Server): Promise<void> {
+async function monitorServerUnlocked(server: Server): Promise<void> {
   if (busy.has(server.id)) return;
   busy.add(server.id);
   try {
     const settings = await getMapSettings(server.id);
     const { state } = await dockerSvc.getState(server);
 
-    if (state === 'running' && settings.bluemapAccepted) {
-      if (await acceptBlueMapDownload(server) === 'changed') await command(server, 'bluemap reload').catch(() => '');
+    // Zustimmung eintragen, sobald BlueMap seine Konfiguration angelegt hat –
+    // danach nicht mehr bei jedem Durchlauf nachsehen.
+    if (state === 'running' && settings.bluemapAccepted && !acceptApplied.has(server.id)) {
+      const result = await acceptBlueMapDownload(server);
+      if (result === 'changed') await command(server, 'bluemap reload').catch(() => '');
+      if (result !== 'missing') acceptApplied.add(server.id);
     }
 
     const job = settings.job;
@@ -392,6 +398,17 @@ async function applyAutoPause(server: Server, job: PregenJob): Promise<void> {
   }
 }
 
+// Überwachung und Bedienung desselben Servers laufen nacheinander. Sonst
+// überschriebe ein gerade laufender Prüfdurchlauf ein „Pausieren“ mit seinem
+// veralteten Stand und schickte Chunky wieder los.
+const queued = <T>(serverId: string, fn: () => Promise<T>) => withQueuedOperation(`pregen:${serverId}`, 'Die Vorgenerierung', fn);
+
+export const startPregen = (server: Server, input: PregenInput, userId: string) => queued(server.id, () => startPregenUnlocked(server, input, userId));
+export const pausePregen = (server: Server) => queued(server.id, () => pausePregenUnlocked(server));
+export const resumePregen = (server: Server) => queued(server.id, () => resumePregenUnlocked(server));
+export const cancelPregen = (server: Server) => queued(server.id, () => cancelPregenUnlocked(server));
+export const monitorServer = (server: Server) => queued(server.id, () => monitorServerUnlocked(server));
+
 let timer: NodeJS.Timeout | null = null;
 
 /** Alle 5 s die Server mit Auftrag bzw. offener BlueMap-Zustimmung durchgehen. */
@@ -404,7 +421,7 @@ export function startPregenMonitor(log: (msg: string) => void): void {
         const serverId = row.key.slice('pregen.'.length);
         const server = await prisma.server.findUnique({ where: { id: serverId } });
         if (!server) {
-          await prisma.setting.delete({ where: { key: row.key } }).catch(() => {});
+          await deleteSetting(row.key).catch(() => {});
           continue;
         }
         await monitorServer(server);

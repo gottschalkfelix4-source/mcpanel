@@ -99,7 +99,21 @@ async function readRegion(file: string): Promise<{ bits: string; count: number }
   }
 }
 
-export async function scanChunks(serverId: string, dimension: Dimension): Promise<ChunkMap> {
+const scanCache = new Map<string, { at: number; value: Promise<ChunkMap> }>();
+
+/** Wie `scanChunksNow`, aber mehrere offene Karten teilen sich 5 s lang ein Ergebnis. */
+export function scanChunks(serverId: string, dimension: Dimension): Promise<ChunkMap> {
+  const key = `${serverId}:${dimension}`;
+  const hit = scanCache.get(key);
+  if (hit && Date.now() - hit.at < 5000) return hit.value;
+  const value = scanChunksNow(serverId, dimension);
+  scanCache.set(key, { at: Date.now(), value });
+  value.catch(() => scanCache.delete(key));
+  if (scanCache.size > 300) scanCache.delete(scanCache.keys().next().value!);
+  return value;
+}
+
+export async function scanChunksNow(serverId: string, dimension: Dimension): Promise<ChunkMap> {
   const root = serverDir(serverId);
   const level = await levelName(serverId);
   const result: ChunkMap = { dimension, regions: [], chunks: 0, truncated: false };
