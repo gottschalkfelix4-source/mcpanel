@@ -97,6 +97,8 @@ das Panel steuert sie über den Docker-Socket.
 - **Zweitablage**, eingerichtet in den Panel-Einstellungen (nicht in der `.env`):
   - **Samba-Freigabe** – NAS oder Windows-Rechner im Netz; das Panel hängt die Freigabe selbst ein
   - **S3-Speicher** – AWS S3, MinIO, Backblaze B2, Wasabi; Upload mehrteilig, also auch über 5 GB
+  - **WebDAV** – Nextcloud, ownCloud, Synology, QNAP, Hetzner Storage Box; nur die Adresse des
+    Ordners plus Benutzer und Kennwort (bei Nextcloud mit Zwei-Faktor ein App-Passwort)
   - Jede fertige Sicherung wird dorthin kopiert und in der Liste als *2. Ablage* gekennzeichnet.
     Fehlt die Hauptdatei, holen Download und Wiederherstellung sie von dort zurück.
   - Zugangsdaten liegen in der Datenbank und werden nie an die Oberfläche zurückgegeben;
@@ -780,6 +782,15 @@ Die Icons entstehen aus [gen-icons.mjs](frontend/scripts/gen-icons.mjs)
   - Ob etwas eingehängt ist, wird aus `/proc/mounts` gelesen, nicht aus der Ausgabe von
     `mount`: im Container gibt es keine `/etc/mtab`, busybox' `mount` gibt dann nichts aus –
     und jede Einbindung würde sich auf die vorige stapeln, bis der Punkt als belegt gilt.
+  - **WebDAV** spricht reines HTTP (`services/webdav.ts`, ohne Zusatzpaket) und braucht keine
+    zusätzlichen Container-Rechte. Hochgeladen wird unter einem Zwischennamen
+    (`mcpanel-upload-….tmp`) und erst danach per `MOVE` umbenannt – ein abgebrochener Upload
+    hinterlässt nie eine halbe Sicherung unter dem echten Namen. Weiterleitungen werden nicht
+    verfolgt, damit die Anmeldung nicht an einen anderen Host geht; aus demselben Grund gilt
+    ein gespeichertes Kennwort nur für den Server (Schema, Host, Port), für den es
+    eingetragen wurde. Der Verbindungstest legt den Ordner bei Bedarf an, schreibt eine
+    Probedatei und liest den freien Platz (`quota-available-bytes`), sofern der Server ihn
+    nennt. Zertifikate werden normal geprüft; im Heimnetz geht notfalls `http://`.
   - S3-Fehler werden übersetzt: `HeadBucket` antwortet ohne Rumpf, das SDK meldet sonst nur
     „UnknownError“, obwohl der Status-Code (403 / 404 / 301) die Ursache genau benennt.
 - Der Benachrichtigungs-Wächter pollt alle Server im 20-Sekunden-Takt, unabhängig davon,

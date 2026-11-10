@@ -82,3 +82,29 @@ it('BUG-30: a failing S3 source stream rejects and removes partial temporary fil
   const dir = await temporary.mock.results.at(-1)!.value;
   await expect(fs.stat(dir)).rejects.toMatchObject({ code: 'ENOENT' });
 });
+it('WebDAV: gespeichertes Kennwort gilt nur für denselben Server', async () => {
+  const current = structuredClone(await target.getTarget());
+  current.kind = 'WEBDAV';
+  current.webdav = { url: 'https://cloud.example.de/remote.php/dav/files/anna/Backups', username: 'anna', password: 'geheim' };
+  const input = (url: string, password?: string) => ({
+    ...current, smb: { ...current.smb }, s3: { ...current.s3 }, webdav: { url, username: 'anna', password },
+  });
+  expect(target.keepStoredSecrets(input('https://cloud.example.de/anderer/Ordner'), current).webdav.password).toBe('geheim');
+  expect(target.keepStoredSecrets(input('https://boese.example/dav'), current).webdav.password).toBe('');
+  expect(target.keepStoredSecrets(input('http://cloud.example.de/remote.php/dav'), current).webdav.password).toBe('');
+  expect(target.keepStoredSecrets(input('https://boese.example/dav', 'neu'), current).webdav.password).toBe('neu');
+});
+it('WebDAV: Kennwort erscheint nie in der Antwort an die Oberfläche', async () => {
+  const cfg = structuredClone(await target.getTarget());
+  cfg.webdav = { url: 'https://nas/dav', username: 'anna', password: 'streng-geheim' };
+  const shown = target.publicTarget(cfg);
+  expect(JSON.stringify(shown)).not.toContain('streng-geheim');
+  expect(shown.webdav).toEqual({ url: 'https://nas/dav', username: 'anna', passwordSet: true });
+});
+it('WebDAV: ältere Ziel-Fassungen ohne WebDAV-Feld bleiben lesbar', async () => {
+  m.setting = JSON.stringify({ kind: 'S3', s3: { bucket: 'b' } });
+  const loaded = await target.getTarget();
+  expect(loaded.webdav).toEqual({ url: '', username: '', password: '' });
+  expect(() => target.assertComplete({ ...loaded, kind: 'WEBDAV' })).toThrow('WebDAV-Adresse fehlt');
+  expect(() => target.assertComplete({ ...loaded, kind: 'WEBDAV', webdav: { url: 'ftp://x', username: '', password: '' } })).toThrow('http://');
+});

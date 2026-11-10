@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Ban, Check, Cloud, HardDrive, Plug, TriangleAlert } from 'lucide-react';
+import { Ban, Check, Cloud, Globe, HardDrive, Plug, TriangleAlert } from 'lucide-react';
 import { api } from '../lib/api';
 import { Badge, Button, ErrorNote, Field, InfoNote, LoadingBlock, Panel, Toggle, useToast } from './ui';
 
-type TargetKind = 'NONE' | 'SMB' | 'S3';
+type TargetKind = 'NONE' | 'SMB' | 'S3' | 'WEBDAV';
 
 interface TargetView {
   kind: TargetKind;
@@ -27,6 +27,11 @@ interface TargetView {
     forcePathStyle: boolean;
     secretMasked: string;
     secretSet: boolean;
+  };
+  webdav: {
+    url: string;
+    username: string;
+    passwordSet: boolean;
   };
 }
 
@@ -59,7 +64,25 @@ const KINDS: { key: TargetKind; label: string; hint: string; Icon: typeof Cloud;
     Icon: Cloud,
     tint: '#4AEDD9',
   },
+  {
+    key: 'WEBDAV',
+    label: 'WebDAV',
+    hint: 'Nextcloud, ownCloud, Synology, QNAP, Hetzner Storage Box – ein Ordner per Adresse.',
+    Icon: Globe,
+    tint: '#55AAFF',
+  },
 ];
+
+const KIND_LABEL: Record<TargetKind, string> = { NONE: 'Keine', SMB: 'Samba', S3: 'S3', WEBDAV: 'WebDAV' };
+
+/** Gilt ein gespeichertes Kennwort noch? Nur für denselben Server (wie im Backend). */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a.trim()).origin === new URL(b.trim()).origin;
+  } catch {
+    return false;
+  }
+}
 
 /** Zweitablage für Backups: Art wählen, Zugang eintragen, Verbindung prüfen. */
 export default function BackupTarget() {
@@ -78,6 +101,7 @@ export default function BackupTarget() {
     endpoint: '', region: 'us-east-1', bucket: '', prefix: '',
     accessKeyId: '', secretAccessKey: '', forcePathStyle: true,
   });
+  const [webdav, setWebdav] = useState({ url: '', username: '', password: '' });
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<TargetStatus | null>(null);
 
@@ -89,9 +113,10 @@ export default function BackupTarget() {
     setKind(t.kind);
     setSmb({ ...t.smb, password: '' });
     setS3({ ...t.s3, secretAccessKey: '' });
+    setWebdav({ url: t.webdav.url, username: t.webdav.username, password: '' });
   }, [query.data]);
 
-  const body = () => ({ kind, smb, s3 });
+  const body = () => ({ kind, smb, s3, webdav });
 
   const test = useMutation({
     mutationFn: () => api.post<TargetStatus>('/settings/backup-target/test', body()),
@@ -143,7 +168,7 @@ export default function BackupTarget() {
           <Badge tone={saved.kind === 'NONE' ? 'neutral' : status?.ok ? 'green' : 'red'}>
             {saved.kind === 'NONE'
               ? 'nicht eingerichtet'
-              : `${saved.kind === 'SMB' ? 'Samba' : 'S3'}${status?.ok ? '' : ' – gestört'}`}
+              : `${KIND_LABEL[saved.kind]}${status?.ok ? '' : ' – gestört'}`}
           </Badge>
         )
       }
@@ -151,7 +176,7 @@ export default function BackupTarget() {
       <div className="space-y-4">
         {error && <ErrorNote>{error}</ErrorNote>}
 
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {KINDS.map((option) => {
             const active = kind === option.key;
             return (
@@ -315,6 +340,57 @@ export default function BackupTarget() {
                 label="Pfad-Adressierung (für MinIO und die meisten Nicht-AWS-Anbieter nötig)"
               />
             </div>
+          </div>
+        )}
+
+        {kind === 'WEBDAV' && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <Field
+                label="Adresse des Ordners"
+                hint="Nextcloud: …/remote.php/dav/files/BENUTZER/Ordner · Synology: http://nas:5005/Freigabe/Ordner. Fehlt der letzte Ordner, legt das Panel ihn an."
+              >
+                <input
+                  className="mc-input w-full font-mono text-xs"
+                  value={webdav.url}
+                  onChange={(e) => setWebdav((p) => ({ ...p, url: e.target.value }))}
+                  placeholder="https://cloud.example.de/remote.php/dav/files/anna/MCPanel"
+                />
+              </Field>
+            </div>
+            <Field label="Benutzer">
+              <input
+                className="mc-input w-full"
+                value={webdav.username}
+                onChange={(e) => setWebdav((p) => ({ ...p, username: e.target.value }))}
+                autoComplete="off"
+              />
+            </Field>
+            <Field
+              label="Kennwort"
+              hint={
+                saved?.webdav.passwordSet && sameOrigin(webdav.url, saved.webdav.url)
+                  ? 'Gespeichert – leer lassen, um es zu behalten.'
+                  : 'Bei Nextcloud mit Zwei-Faktor ein App-Passwort. Wird nie zurückgegeben.'
+              }
+            >
+              <input
+                type="password"
+                className="mc-input w-full"
+                value={webdav.password}
+                onChange={(e) => setWebdav((p) => ({ ...p, password: e.target.value }))}
+                placeholder={saved?.webdav.passwordSet && sameOrigin(webdav.url, saved.webdav.url) ? '••••••••' : ''}
+                autoComplete="new-password"
+              />
+            </Field>
+            {/^http:\/\//i.test(webdav.url.trim()) && (
+              <div className="sm:col-span-2">
+                <InfoNote>
+                  Mit http:// gehen Kennwort und Sicherungen unverschlüsselt durchs Netz – nur im
+                  eigenen Heimnetz verwenden, im Internet immer https://.
+                </InfoNote>
+              </div>
+            )}
           </div>
         )}
 

@@ -8,7 +8,7 @@ import { getCurseforgeKey, getPanelUrl, getPublicHost, panelUrlSchema, setSettin
 import * as curseforge from '../providers/curseforge.js';
 import * as dockerSvc from '../services/docker.js';
 import {
-  assertComplete, getTarget, publicTarget, saveTarget, testTarget,
+  assertComplete, getTarget, keepStoredSecrets, publicTarget, saveTarget, testTarget,
   type TargetConfig,
 } from '../services/backupTarget.js';
 import { globalNotificationRoutes } from './notifications.js';
@@ -226,7 +226,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
   // --- Zweitablage für Backups -------------------------------------------
 
   const targetSchema = z.object({
-    kind: z.enum(['NONE', 'SMB', 'S3']),
+    kind: z.enum(['NONE', 'SMB', 'S3', 'WEBDAV']),
     smb: z
       .object({
         host: z.string().max(200).default(''),
@@ -249,6 +249,13 @@ export default async function settingsRoutes(app: FastifyInstance) {
         forcePathStyle: z.boolean().default(true),
       })
       .default({}),
+    webdav: z
+      .object({
+        url: z.string().trim().max(500).default(''),
+        username: z.string().max(200).default(''),
+        password: z.string().max(500).optional(),
+      })
+      .default({}),
   });
 
   /**
@@ -256,20 +263,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
    * bekommt sie nie zu sehen und kann sie deshalb nicht zurückschicken.
    */
   async function merge(body: z.infer<typeof targetSchema>): Promise<TargetConfig> {
-    const current = await getTarget();
-    return {
-      kind: body.kind,
-      smb: {
-        ...body.smb,
-        password: body.smb.password?.length ? body.smb.password : current.smb.password,
-      },
-      s3: {
-        ...body.s3,
-        secretAccessKey: body.s3.secretAccessKey?.length
-          ? body.s3.secretAccessKey
-          : current.s3.secretAccessKey,
-      },
-    };
+    return keepStoredSecrets(body, await getTarget());
   }
 
   app.get('/backup-target', { preHandler: requireAdmin }, async () => {

@@ -1,12 +1,14 @@
 /**
  * Zweitablage für Backups – konfigurierbar in der Oberfläche, nicht über die
- * Umgebung. Zwei Arten:
+ * Umgebung. Drei Arten:
  *
  *   SMB  – eine Samba-/Windows-Freigabe. Sie wird als CIFS-Mount in den
  *          Backend-Container gehängt; danach ist sie ein ganz normaler Ordner,
  *          und das Kopieren großer Archive erledigt der Kernel.
  *   S3   – beliebiger S3-kompatibler Speicher (AWS, MinIO, Backblaze B2,
  *          Wasabi). Der Upload läuft mehrteilig, sonst wäre bei 5 GB Schluss.
+ *   WEBDAV – Nextcloud, ownCloud, Synology, QNAP, Hetzner Storage Box & Co.
+ *          Reines HTTP, braucht keine zusätzlichen Container-Rechte.
  *
  * Zugangsdaten liegen in der Setting-Tabelle und verlassen den Server nie:
  * die Oberfläche bekommt nur eine maskierte Fassung.
@@ -26,6 +28,7 @@ import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, S3Client } fr
 import { Upload } from '@aws-sdk/lib-storage';
 
 import { getSetting, setSetting } from './settings.js';
+import { deleteFile, getFile, probe as probeWebdav, putFile, webdavBase, type WebdavConfig } from './webdav.js';
 import { badRequest } from '../lib/errors.js';
 
 const run = promisify(execFile);
@@ -40,7 +43,7 @@ const SMB_MOUNT = '/mnt/backup-target';
  */
 const SMB_PROBE = '/mnt/backup-probe';
 
-export type TargetKind = 'NONE' | 'SMB' | 'S3';
+export type TargetKind = 'NONE' | 'SMB' | 'S3' | 'WEBDAV';
 
 export interface SmbConfig {
   /** Server oder IP, z. B. "nas.fritz.box" oder "192.168.1.20" */
@@ -73,6 +76,7 @@ export interface TargetConfig {
   kind: TargetKind;
   smb: SmbConfig;
   s3: S3Config;
+  webdav: WebdavConfig;
 }
 
 const EMPTY: TargetConfig = {
@@ -87,6 +91,7 @@ const EMPTY: TargetConfig = {
     secretAccessKey: '',
     forcePathStyle: true,
   },
+  webdav: { url: '', username: '', password: '' },
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +113,7 @@ export async function getTarget(): Promise<TargetConfig> {
       kind: parsed.kind ?? 'NONE',
       smb: { ...EMPTY.smb, ...(parsed.smb ?? {}) },
       s3: { ...EMPTY.s3, ...(parsed.s3 ?? {}) },
+      webdav: { ...EMPTY.webdav, ...(parsed.webdav ?? {}) },
     };
   } catch {
     cached = EMPTY;
@@ -157,6 +163,50 @@ export function publicTarget(config: TargetConfig) {
       forcePathStyle: config.s3.forcePathStyle,
       secretMasked: mask(config.s3.secretAccessKey),
       secretSet: Boolean(config.s3.secretAccessKey),
+    },
+    webdav: {
+      url: config.webdav.url,
+      username: config.webdav.username,
+      passwordSet: Boolean(config.webdav.password),
+    },
+  };
+}
+
+/** Eingabe aus der Oberfläche: Geheimnisse leer = „unverändert lassen“. */
+export interface TargetInput {
+  kind: TargetKind;
+  smb: Omit<SmbConfig, 'password'> & { password?: string };
+  s3: Omit<S3Config, 'secretAccessKey'> & { secretAccessKey?: string };
+  webdav: Omit<WebdavConfig, 'password'> & { password?: string };
+}
+
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a.trim()).origin === new URL(b.trim()).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Übernimmt gespeicherte Geheimnisse für leer gelassene Felder. Das
+ * WebDAV-Kennwort gilt nur für den Server, für den es eingetragen wurde –
+ * sonst ließe es sich durch eine neue Adresse an einen fremden Host umleiten.
+ */
+export function keepStoredSecrets(input: TargetInput, current: TargetConfig): TargetConfig {
+  const stored = webdavOf(current);
+  return {
+    kind: input.kind,
+    smb: { ...input.smb, password: input.smb.password?.length ? input.smb.password : current.smb.password },
+    s3: {
+      ...input.s3,
+      secretAccessKey: input.s3.secretAccessKey?.length ? input.s3.secretAccessKey : current.s3.secretAccessKey,
+    },
+    webdav: {
+      ...input.webdav,
+      password: input.webdav.password?.length
+        ? input.webdav.password
+        : sameOrigin(input.webdav.url, stored.url) ? stored.password : '',
     },
   };
 }
@@ -361,6 +411,11 @@ async function putBackupUnlocked(
     } catch (err) {
       throw new Error(describeS3Error(err));
     }
+    return;
+  }
+
+  if (config.kind === 'WEBDAV') {
+    await putFile(webdavOf(config), [serverId], filename, localPath, onProgress);
   }
 }
 
@@ -407,6 +462,21 @@ async function fetchBackupUnlocked(
     } finally { client.destroy(); }
   }
 
+  if (config.kind === 'WEBDAV') {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcpanel-backup-'));
+    const tmp = path.join(dir, 'archive');
+    try {
+      if (!(await getFile(webdavOf(config), [serverId, filename], tmp))) {
+        await fsp.rm(dir, { recursive: true, force: true });
+        return null;
+      }
+      return { path: tmp, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
+    } catch (err) {
+      await fsp.rm(dir, { recursive: true, force: true });
+      throw err;
+    }
+  }
+
   return null;
 }
 
@@ -429,6 +499,11 @@ async function removeBackupUnlocked(serverId: string, filename: string, targetId
         }),
       )
       .catch(() => {});
+    return;
+  }
+
+  if (config.kind === 'WEBDAV') {
+    await deleteFile(webdavOf(config), [serverId, filename]).catch(() => {});
   }
 }
 
@@ -482,6 +557,16 @@ async function testTargetUnlocked(config?: TargetConfig): Promise<TargetStatus> 
     }
   }
 
+  if (target.kind === 'WEBDAV') {
+    try {
+      if (!target.webdav.url) throw new Error('Die WebDAV-Adresse fehlt');
+      const { freeBytes } = await probeWebdav(webdavOf(target));
+      return { kind: 'WEBDAV', ok: true, message: 'WebDAV-Ordner erreichbar und beschreibbar', freeBytes };
+    } catch (err) {
+      return { kind: 'WEBDAV', ok: false, message: err instanceof Error ? err.message : 'WebDAV nicht erreichbar', freeBytes: null };
+    }
+  }
+
   try {
     if (!target.s3.bucket) throw new Error('Bucket fehlt');
     await s3Client(target.s3).send(new HeadBucketCommand({ Bucket: target.s3.bucket }));
@@ -523,6 +608,18 @@ export function assertComplete(config: TargetConfig): void {
     if (!config.s3.accessKeyId.trim()) throw badRequest('Die Zugriffsschlüssel-ID fehlt');
     if (!config.s3.secretAccessKey.trim()) throw badRequest('Der geheime Schlüssel fehlt');
   }
+  if (config.kind === 'WEBDAV') {
+    if (!config.webdav.url.trim()) throw badRequest('Die WebDAV-Adresse fehlt');
+    webdavBase(config.webdav);
+  }
+}
+
+/**
+ * WebDAV-Angaben einer Sicherung. Ältere gespeicherte Ziel-Fassungen kennen
+ * das Feld noch nicht – dann gilt die leere Vorgabe.
+ */
+function webdavOf(config: TargetConfig): WebdavConfig {
+  return { ...EMPTY.webdav, ...(config.webdav ?? {}) };
 }
 
 export async function registerTarget(target: TargetConfig): Promise<string> {
