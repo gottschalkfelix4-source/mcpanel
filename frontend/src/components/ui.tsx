@@ -261,7 +261,8 @@ export function ConfirmDialog({
     if (open) setTyped('');
   }, [open]);
 
-  const blocked = Boolean(requireText) && typed !== requireText;
+  // Leerzeichen am Rand (Autovervollständigung auf dem Handy) zählen nicht.
+  const blocked = Boolean(requireText) && typed.trim() !== requireText?.trim();
 
   return (
     <Modal
@@ -297,14 +298,23 @@ export function ConfirmDialog({
         <div>{message}</div>
         {requireText && (
           <div>
-            <label className="mc-label">
-              Tippe <span className="text-redstone">{requireText}</span> zum Bestätigen
+            {/* mc-label schreibt in Großbuchstaben – der geforderte Text muss
+                aber genau so erscheinen, wie er eingegeben werden soll. */}
+            <label className="mc-label" htmlFor="confirm-require-text">
+              Tippe{' '}
+              <span className="select-all font-mono normal-case tracking-normal text-redstone">{requireText}</span>{' '}
+              zum Bestätigen
             </label>
             <input
+              id="confirm-require-text"
               className="mc-input"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               autoFocus
+              autoCapitalize="off"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
             />
           </div>
         )}
