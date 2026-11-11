@@ -39,6 +39,7 @@ Taggen wird daraus eine Versionsüberschrift.
 - Meldungen wie „createBackup läuft …“ sind jetzt deutsch.
 
 ### Geändert
+- **Modpack-Installation ohne Kopieren der Welt**: Ordner, die das Modpack nicht anfasst – Welt, Karten, mod-eigene Sicherungen – werden beim Installieren und Aktualisieren nicht mehr kopiert, sondern beim Austausch umgehängt. Das dauert unabhängig von der Größe nur einen Augenblick. Der verbleibende Kopierschritt zeigt, wie viel schon kopiert ist.
 - **Sicherungen direkt ins Speicherziel**: Ist ein Speicherziel (Samba, S3, WebDAV) eingerichtet, entsteht das Archiv dort, noch während gepackt wird – ohne lokale Kopie und ohne zweiten Durchgang zum Hochladen. Das spart Platz und Zeit. Ist das Ziel nicht erreichbar, wird ausnahmsweise lokal gesichert. Wer weiterhin zwei Kopien möchte, schaltet „Zusätzlich eine lokale Kopie im Panel behalten“ ein. Bereits vorhandene lokale Sicherungen bleiben unverändert.
 - **Modpack-Version wechseln ohne Zwangs-Backup**: Beim Versionswechsel und beim Installieren eines anderen Modpacks lässt sich das vorherige Backup abschalten. Der Dialog zeigt dazu, von wann die letzte Sicherung ist.
 - **Schnellere Oberfläche**: Verwaltungsseiten und Karte werden erst beim Aufruf geladen; die Konsole bleibt auch bei viel Ausgabe flüssig.

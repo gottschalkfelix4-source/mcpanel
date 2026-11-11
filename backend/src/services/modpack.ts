@@ -152,17 +152,37 @@ async function installModpackImpl(
   const { stage: dir } = restorePaths(serverId);
   await fs.mkdir(original, { recursive: true });
   await task.update(23, 'Vorhandene Daten werden für die sichere Installation vorbereitet …');
-  // Reflink where supported; otherwise copy. Hardlinks would compromise rollback.
-  // Old mods/scripts are discarded on updates, so never copy them just to delete them.
-  const replaced = new Set(['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']);
-  if (request.reinstall) await prepareReinstallData(server, dir, request.reinstall.keepWorld);
-  else await fs.cp(original, dir, {
-    recursive: true, mode: fsConstants.COPYFILE_FICLONE,
-    filter: source => !isUpdate || !replaced.has(path.relative(original, source).split(path.sep).join('/')),
-  });
   const rawProperties = await fs.readFile(safePath(original, 'server.properties'), 'utf8').catch(() => '');
   const worldName = parseProperties(rawProperties)['level-name'] || 'world';
   const protectedPath = (relative: string) => isProtectedPackPath(relative, worldName, request.keepConfig ?? false);
+  // Reflink where supported; otherwise copy. Hardlinks would compromise rollback.
+  // Old mods/scripts are discarded on updates, so never copy them just to delete them.
+  const replaced = new Set(['mods', 'kubejs/startup_scripts', 'kubejs/server_scripts']);
+  // Ordner, die das Modpack gar nicht anfasst (Welt, Karten, mod-eigene
+  // Sicherungen …), werden nicht kopiert, sondern beim Austausch umgehängt –
+  // ohne Reflink dauerte das Kopieren einer großen Welt sonst sehr lange.
+  const carried = request.reinstall ? [] : await untouchedDirs(original, plan, protectedPath);
+  const carriedSet = new Set(carried);
+  if (carried.length > 0) await task.log(`Wird unverändert übernommen statt kopiert: ${carried.join(', ')}`);
+  if (request.reinstall) await prepareReinstallData(server, dir, request.reinstall.keepWorld);
+  else {
+    const skip = (source: string) => {
+      const relative = path.relative(original, source).split(path.sep).join('/');
+      return carriedSet.has(relative.split('/')[0]) || (isUpdate && replaced.has(relative));
+    };
+    const total = await copySize(original, skip);
+    const progress = setInterval(() => {
+      void dirSize(dir).then((done) => task.update(23, `Vorhandene Daten werden vorbereitet … ${formatGb(done)} von ${formatGb(total)} kopiert`)).catch(() => {});
+    }, 2500);
+    try {
+      await fs.cp(original, dir, { recursive: true, mode: fsConstants.COPYFILE_FICLONE, filter: source => !skip(source) });
+    } finally {
+      clearInterval(progress);
+    }
+  }
+  // Fürs Kontingent zählt auch, was erst beim Austausch dazukommt.
+  let carriedBytes = 0;
+  if (server.quotaDiskMb > 0) for (const name of carried) carriedBytes += await dirSize(path.join(original, name));
   // Validate all paths before removing/replacing anything, even in staging.
   for (const item of plan.downloads) archiveEntryPath(dir, item.path);
   for (const prefixDir of plan.overrideDirs) {
@@ -182,7 +202,7 @@ async function installModpackImpl(
 
   // --- 4. Archivinhalt entpacken ------------------------------------------
   await task.update(26, 'Modpack-Dateien werden entpackt …');
-  const extracted = await extractOverrides(plan, dir, { keepConfig: request.keepConfig ?? false, worldName, maxGrowth: server.quotaDiskMb > 0 ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity });
+  const extracted = await extractOverrides(plan, dir, { keepConfig: request.keepConfig ?? false, worldName, maxGrowth: server.quotaDiskMb > 0 ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - carriedBytes - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity });
   if (plan.isServerPack) {
     await task.log(`${extracted} Dateien aus dem Serverpaket entpackt.`);
   }
@@ -194,7 +214,7 @@ async function installModpackImpl(
   // Without a quota, a small worker pool overlaps CDN latency without flooding HDDs.
   const limited = server.quotaDiskMb > 0;
   const concurrency = limited ? 1 : 4;
-  let remaining = limited ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity;
+  let remaining = limited ? Math.max(0, server.quotaDiskMb * 1024 * 1024 - carriedBytes - await dirSize(dir) - await dirSize(serverBackupDir(serverId))) : Infinity;
   const queue = [...plan.downloads];
 
   const worker = async () => {
@@ -285,7 +305,7 @@ async function installModpackImpl(
     if (plan.loader === 'QUILT') extraEnv.QUILT_LOADER_VERSION = plan.loaderVersion;
   }
 
-  if (server.quotaDiskMb > 0 && await dirSize(dir) + await dirSize(serverBackupDir(serverId)) > server.quotaDiskMb * 1024 * 1024) throw new Error('Modpack überschreitet das Speicherkontingent');
+  if (server.quotaDiskMb > 0 && carriedBytes + await dirSize(dir) + await dirSize(serverBackupDir(serverId)) > server.quotaDiskMb * 1024 * 1024) throw new Error('Modpack überschreitet das Speicherkontingent');
   await saveRestoreMetadata(serverId, request.reinstall ? reinstallMetadata(server) : {
     type: server.type, mcVersion: server.mcVersion, extraEnv: server.extraEnv,
     modpackProvider: server.modpackProvider, modpackProjectId: server.modpackProjectId,
@@ -312,7 +332,7 @@ async function installModpackImpl(
 
   // --- 8. Container neu aufsetzen -----------------------------------------
   await task.update(97, 'Container wird neu aufgesetzt …');
-  await commitRestore(serverId);
+  await commitRestore(serverId, carried);
   await dockerSvc.recreateContainer(updated);
   invalidateDiskUsage(serverId);
 
@@ -1200,6 +1220,56 @@ function throttle<A extends unknown[]>(fn: (...args: A) => void, ms = 400): (...
 }
 
 export const installModpack = (...args: Parameters<typeof installModpackUnlocked>) => withServerOperation(args[0], "installModpack", () => installModpackUnlocked(...args));
+
+const formatGb = (bytes: number) => (bytes >= 1024 ** 3
+  ? `${(bytes / 1024 ** 3).toLocaleString('de-DE', { maximumFractionDigits: 1 })} GB`
+  : `${Math.round(bytes / 1024 ** 2)} MB`);
+
+/** Größe dessen, was tatsächlich kopiert wird – für die Fortschrittsanzeige. */
+async function copySize(root: string, skip: (source: string) => boolean): Promise<number> {
+  let total = 0;
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop()!;
+    const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const abs = path.join(current, entry.name);
+      if (skip(abs)) continue;
+      if (entry.isDirectory()) stack.push(abs);
+      else if (entry.isFile()) total += (await fs.stat(abs).catch(() => null))?.size ?? 0;
+    }
+  }
+  return total;
+}
+
+/**
+ * Ordner direkt im Serverordner, in die das Modpack nichts schreibt: kein
+ * Eintrag des Pakets (Overrides, Downloads) liegt darin – oder nur solche,
+ * die ohnehin übersprungen werden (Welt). `mods` und `kubejs` gehören nie
+ * dazu: Teile davon werden bei einem Update gezielt geleert.
+ */
+export async function untouchedDirs(original: string, plan: Pick<PackPlan, 'downloads' | 'overrideDirs' | 'zip'>, protectedPath: (relative: string) => boolean): Promise<string[]> {
+  const touched = new Set<string>(['mods', 'kubejs']);
+  const note = (raw: string) => {
+    const relative = raw.replace(/\\/g, '/').replace(/^\.?\/+/, '');
+    if (!relative || protectedPath(relative)) return;
+    touched.add(relative.split('/')[0]);
+  };
+  for (const item of plan.downloads) note(item.path);
+  for (const prefixDir of plan.overrideDirs) {
+    const prefix = prefixDir === '.' ? '' : prefixDir.replace(/\/+$/, '') + '/';
+    for (const entry of plan.zip.getEntries()) {
+      const name = entry.entryName.replace(/\\/g, '/');
+      if (!prefix) note(name);
+      else if (name.startsWith(prefix)) note(name.slice(prefix.length));
+    }
+  }
+  const entries = await fs.readdir(original, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && !touched.has(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+}
 
 export function isProtectedPackPath(relative: string, worldName: string, keepConfig: boolean): boolean {
   const name = relative.replace(/\\/g, '/');

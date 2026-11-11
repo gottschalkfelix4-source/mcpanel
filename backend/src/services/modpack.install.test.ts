@@ -430,3 +430,33 @@ it.each([
 ])('lässt .mrpack-Downloads nur von erlaubten Hosts zu: %s → %s', (url, allowed) => {
   expect(allowedMrpackUrl(url)).toBe(allowed);
 });
+
+it('hängt die Welt beim Austausch um, statt sie zu kopieren, und kopiert sie nie in den Zwischenstand', async () => {
+  await fs.mkdir(path.join(dir(), 'bluemap/web'), { recursive: true });
+  await fs.writeFile(path.join(dir(), 'bluemap/web/kachel.bin'), 'karte');
+  const weltVorher = (await fs.stat(path.join(dir(), 'customworld/level.dat'))).ino;
+  archive([{ path: 'mods/new.jar', downloads: ['https://cdn.modrinth.com/fixture/mod'] }], { 'defaultconfigs/neu.conf': 'aus dem Paket' });
+  const log: string[] = [];
+  await installModpack('a', request, { ...task(), log: async (line: string) => { log.push(line); } } as never);
+
+  // Dieselbe Datei wie vorher (gleiche Inode) – nicht eine Kopie.
+  expect((await fs.stat(path.join(dir(), 'customworld/level.dat'))).ino).toBe(weltVorher);
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  expect(await fs.readFile(path.join(dir(), 'bluemap/web/kachel.bin'), 'utf8')).toBe('karte');
+  // Was das Paket anfasst, wurde wie bisher kopiert und ergänzt.
+  expect(await fs.readFile(path.join(dir(), 'config/user.conf'), 'utf8')).toBe('config original');
+  expect(await fs.readFile(path.join(dir(), 'defaultconfigs/neu.conf'), 'utf8')).toBe('aus dem Paket');
+  expect(log.join('\n')).toMatch(/unverändert übernommen statt kopiert: .*customworld/);
+  await expect(fs.stat(dir() + '.restore-old')).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('legt die umgehängte Welt bei einem Fehlstart wieder an ihren alten Platz', async () => {
+  const weltVorher = (await fs.stat(path.join(dir(), 'customworld/level.dat'))).ino;
+  archive([], { 'mods/new.jar': modJar('neu', '*') });
+  m.ready.mockRejectedValueOnce(new Error('Minecraft-Start fehlgeschlagen'));
+  await expect(installModpack('a', request, task())).rejects.toThrow('Minecraft-Start');
+  expect((await fs.stat(path.join(dir(), 'customworld/level.dat'))).ino).toBe(weltVorher);
+  expect(await fs.readFile(path.join(dir(), 'customworld/level.dat'), 'utf8')).toBe('world original');
+  expect(await fs.readFile(path.join(dir(), 'mods/old.jar'), 'utf8')).toBe('working old mod');
+  await expect(fs.stat(dir() + '.restore-old')).rejects.toMatchObject({ code: 'ENOENT' });
+});

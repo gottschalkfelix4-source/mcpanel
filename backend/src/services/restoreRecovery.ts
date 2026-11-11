@@ -57,6 +57,30 @@ export async function finishRestore(id: string): Promise<void> {
   await fs.rm(journal, { force: true });
 }
 
+/** Nur einfache Ordnernamen direkt im Serverordner – nie Pfade. */
+function movedNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((name): name is string =>
+    typeof name === 'string' && name.length > 0 && name !== '.' && name !== '..' && !/[/\\\0]/.test(name));
+}
+
+/**
+ * Beim Austausch umgehängte Ordner (Welt & Co.) vor dem Zurückrollen wieder
+ * an ihren alten Platz legen. Muss vollständig gelingen, bevor der neue
+ * Ordner gelöscht wird – sonst ginge die Welt mit ihm verloren.
+ */
+async function moveBack(dir: string, old: string, names: string[]): Promise<void> {
+  for (const name of names) {
+    const current = path.join(dir, name);
+    if (!(await exists(current))) continue;
+    const previous = path.join(old, name);
+    if (await exists(previous)) {
+      throw new Error(`Wiederherstellung angehalten: „${name}“ liegt im alten und im neuen Stand. Bitte von Hand prüfen (${old}).`);
+    }
+    await fs.rename(current, previous);
+  }
+}
+
 /** Directory renames are atomic. Presence of old means the commit was interrupted. */
 export async function recoverInterruptedRestore(id: string): Promise<void> {
   const { dir, old, stage, journal } = restorePaths(id);
@@ -71,6 +95,7 @@ export async function recoverInterruptedRestore(id: string): Promise<void> {
       console.warn(`[restore] ${id}: unterbrochener Vorgang vom ${new Date(since!).toISOString()} wird nicht mehr zurückgerollt – alter Stand liegt unter ${kept}`);
     }
   } else if (!record?.committed && await exists(old)) {
+    await moveBack(dir, old, movedNames(record?.moved));
     await fs.rm(dir, { recursive: true, force: true });
     await fs.rename(old, dir);
   }
@@ -100,14 +125,34 @@ export async function recoverInterruptedRestore(id: string): Promise<void> {
   }
 }
 
-/** Call only after the staged contents have been validated and the server is stopped. */
-export async function commitRestore(id: string): Promise<void> {
-  const { dir, old, stage } = restorePaths(id);
+/**
+ * Call only after the staged contents have been validated and the server is stopped.
+ *
+ * `moved`: Ordner des bisherigen Stands, die unverändert übernommen werden
+ * (Welt, Karten, mod-eigene Sicherungen). Sie wurden nicht in den neuen Stand
+ * kopiert, sondern werden hier umgehängt – auf demselben Dateisystem dauert
+ * das unabhängig von der Größe nur einen Augenblick. Die Namen stehen vorher
+ * im Journal, damit ein Zurückrollen sie wieder an ihren Platz legt.
+ */
+export async function commitRestore(id: string, moved: string[] = []): Promise<void> {
+  const { dir, old, stage, journal } = restorePaths(id);
+  const names = movedNames(moved);
+  if (names.length !== moved.length) throw new Error('Ungültiger Ordnername beim Übernehmen');
+  for (const name of names) {
+    if (await exists(path.join(stage, name))) throw new Error(`„${name}“ existiert im neuen Stand bereits – Übernehmen abgebrochen`);
+  }
+  if (names.length > 0) {
+    const record = (await readJournal(journal)) ?? { committed: false, at: Date.now() };
+    await writeJournal(id, { ...record, moved: names });
+  }
   await fs.rename(dir, old);
   try {
     await fs.rename(stage, dir);
   } catch (err) {
     await fs.rename(old, dir);
     throw err;
+  }
+  for (const name of names) {
+    if (await exists(path.join(old, name))) await fs.rename(path.join(old, name), path.join(dir, name));
   }
 }
