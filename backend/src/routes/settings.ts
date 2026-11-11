@@ -231,6 +231,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
 
   const targetSchema = z.object({
     kind: z.enum(['NONE', 'SMB', 'S3', 'WEBDAV']),
+    keepLocal: z.boolean().default(false),
     smb: z
       .object({
         host: z.string().max(200).default(''),

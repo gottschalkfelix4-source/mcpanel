@@ -168,10 +168,10 @@ export default function BackupsTab() {
                     {backup.mirrored && (
                       <span
                         className="inline-flex shrink-0 items-center gap-1 border border-emerald/40 bg-emerald/[0.12] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-emerald"
-                        title="Liegt zusätzlich in der Zweitablage"
+                        title={backup.local === false ? 'Liegt im Speicherziel, nicht lokal im Panel' : 'Liegt lokal und zusätzlich im Speicherziel'}
                       >
                         <HardDrive size={10} />
-                        2. Ablage
+                        {backup.local === false ? 'Speicherziel' : 'lokal + Ziel'}
                       </span>
                     )}
                   </p>

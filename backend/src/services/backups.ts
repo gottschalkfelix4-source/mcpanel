@@ -2,7 +2,7 @@ import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { crc32 } from 'node:zlib';
 import { openPromise } from 'yauzl';
-import { collectSources, writeZip } from '../lib/zipWriter.js';
+import { collectSources, writeZip, writeZipStream } from '../lib/zipWriter.js';
 import { dirSize, isUploadTemp } from './files.js';
 import { extractServerZip, readZipEntries } from './serverImport.js';
 import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths } from './restoreRecovery.js';
@@ -19,7 +19,7 @@ import * as dockerSvc from './docker.js';
 import { rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
 import { invalidateDiskUsage } from './diskUsage.js';
 import { notify } from './notify.js';
-import { fetchBackup, getTarget, isEnabled, putBackup, removeBackup, registerTarget } from './backupTarget.js';
+import { fetchBackup, getTarget, isEnabled, openBackupSink, putBackup, removeBackup, registerTarget, type BackupSink } from './backupTarget.js';
 import { assertDiskAvailable, pruneToBackupLimit, remainingDiskBytes } from './quota.js';
 import type { TaskHandle } from './tasks.js';
 
@@ -127,11 +127,44 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
     }
   }
 
+  // Ist ein Speicherziel eingerichtet, entsteht das Archiv direkt dort – ohne
+  // lokale Kopie und ohne zweiten Durchgang zum Hochladen. Klappt das nicht
+  // (Ziel nicht erreichbar, Server nimmt keinen Upload unbekannter Länge an),
+  // wird wie früher lokal gepackt und danach hochgeladen.
+  const store = await getTarget();
+  const targetActive = isEnabled(store);
+  const targetId = targetActive ? await registerTarget(store) : null;
+  let direct: { size: number; entries: number } | null = null;
+  let directError: string | null = null;
+
   let entries: string[] = [];
   try {
     await task?.update(15, 'Dateien werden gesammelt …');
     entries = (await fs.readdir(dir)).filter((e) => !EXCLUDE.has(e));
     const sources = await collectSources(dir, entries, (relative) => !isUploadTemp(relative));
+
+    if (targetActive && !store.keepLocal) {
+      let sink: BackupSink | null = null;
+      try {
+        sink = await openBackupSink(server.id, filename, targetId);
+        const result = await writeZipStream(sink.stream, sources, {
+          onProgress: (done, total) => {
+            const percent = total > 0 ? Math.round((done / total) * 100) : 100;
+            void task?.update(20 + Math.round(percent * 0.7), `Archiv wird direkt ins Speicherziel geschrieben … ${percent} %`);
+          },
+        });
+        await task?.update(92, 'Speicherziel schließt die Datei ab …');
+        await sink.finish();
+        if (result.entries === 0 && entries.length > 0) throw new Error('Archiv ist leer');
+        direct = { size: result.size, entries: result.entries };
+      } catch (err) {
+        await sink?.abort().catch(() => {});
+        directError = err instanceof Error ? err.message : String(err);
+        await task?.log(`Direktes Schreiben ins Speicherziel fehlgeschlagen (${directError}) – es wird lokal gesichert.`);
+      }
+    }
+
+    if (!direct) {
     const budget = await remainingDiskBytes(server);
     // Erst unter einem vorläufigen Namen: bricht das Panel mittendrin ab,
     // räumt der nächste Start die halbe Datei weg (`cleanupPartialBackups`).
@@ -150,28 +183,31 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
       await fs.rm(target, { force: true });
       throw err;
     }
+    }
   } finally {
     if (running) await restoreAutosave(server);
   }
 
-  const stat = await fs.stat(target);
+  const stat = direct ?? await fs.stat(target);
 
-  // Einmal komplett durchlesen: ein Archiv, das sich nicht entpacken ließe,
-  // soll gar nicht erst als Sicherung in der Liste stehen.
-  await task?.update(80, 'Archiv wird geprüft …');
-  let check: ArchiveCheck;
-  try {
-    check = await inspectArchive(target, (percent) => task?.update(80 + Math.round(percent * 0.1), `Archiv wird geprüft … ${percent} %`));
-    if (check.entries === 0 && entries.length > 0) throw new Error('Archiv ist leer');
-  } catch (err) {
-    await fs.rm(target, { force: true });
-    throw badRequest(`Das neue Archiv ist fehlerhaft und wurde verworfen: ${err instanceof Error ? err.message : err}`);
+  // Lokales Archiv einmal komplett durchlesen: eines, das sich nicht entpacken
+  // ließe, soll gar nicht erst als Sicherung in der Liste stehen. Ein direkt
+  // ins Speicherziel geschriebenes wird nicht zurückgeladen – das kostete die
+  // gesparte Zeit wieder; Prüfsummen und Längen hat der Schreiber selbst
+  // gebildet, „Prüfen“ in der Liste liest es auf Wunsch nach.
+  let check: ArchiveCheck | null = null;
+  if (!direct) {
+    await task?.update(80, 'Archiv wird geprüft …');
+    try {
+      check = await inspectArchive(target, (percent) => task?.update(80 + Math.round(percent * 0.1), `Archiv wird geprüft … ${percent} %`));
+      if (check.entries === 0 && entries.length > 0) throw new Error('Archiv ist leer');
+    } catch (err) {
+      await fs.rm(target, { force: true });
+      throw badRequest(`Das neue Archiv ist fehlerhaft und wurde verworfen: ${err instanceof Error ? err.message : err}`);
+    }
   }
-  await task?.update(90, 'Backup wird registriert …');
+  await task?.update(direct ? 95 : 90, 'Backup wird registriert …');
 
-  const store = await getTarget();
-  const targetActive = isEnabled(store);
-  const targetId = targetActive ? await registerTarget(store) : null;
   const backup = await prisma.backup.create({
     data: {
       serverId: server.id,
@@ -183,9 +219,10 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
       createdById: options.createdById ?? null,
       origin: options.origin ?? 'MANUAL',
       automationId: options.automationId ?? null,
-      verifiedAt: new Date(),
-      verifyStatus: 'OK',
-      verifyMessage: describeCheck(check),
+      mirrored: Boolean(direct),
+      ...(check
+        ? { verifiedAt: new Date(), verifyStatus: 'OK', verifyMessage: describeCheck(check) }
+        : { verifyMessage: `${direct!.entries} Einträge direkt ins Speicherziel geschrieben – noch nicht nachgelesen` }),
     },
   });
 
@@ -195,9 +232,9 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
 
   // Zweitablage: fehlschlagen darf das, ohne die Sicherung zu entwerten –
   // die Hauptkopie liegt bereits vollstaendig auf der Platte.
-  let mirrored = false;
+  let mirrored = Boolean(direct);
   let mirrorError: string | null = null;
-  if (targetActive) {
+  if (targetActive && !direct) {
     await task?.update(95, 'Zweitkopie wird geschrieben …');
     try {
       await putBackup(server.id, filename, primaryPath(server.id, filename), (percent) => {
@@ -205,6 +242,11 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
       }, targetId);
       mirrored = true;
       await prisma.backup.update({ where: { id: backup.id }, data: { mirrored: true } });
+      // Liegt sicher im Speicherziel – die lokale Kopie wird nicht gebraucht.
+      if (!store.keepLocal) {
+        await fs.rm(primaryPath(server.id, filename), { force: true });
+        invalidateDiskUsage(server.id);
+      }
     } catch (err) {
       mirrorError = err instanceof Error ? err.message : String(err);
     }
@@ -212,7 +254,9 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
 
   await task?.update(
     100,
-    mirrorError ? `Backup erstellt (${size}) – Zweitkopie fehlgeschlagen` : `Backup erstellt (${size})`,
+    mirrorError
+      ? `Backup erstellt (${size}) – liegt nur lokal, das Speicherziel war nicht erreichbar`
+      : `Backup erstellt (${size})${mirrored && !store.keepLocal ? ' – im Speicherziel' : ''}`,
   );
 
   void notify('backup.done', {
@@ -221,12 +265,12 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
     title: `Backup von ${server.name}`,
     message: mirrorError ? `${backup.name}
 
-Zweitkopie fehlgeschlagen: ${mirrorError}` : backup.name,
+Speicherziel nicht erreichbar – die Sicherung liegt nur lokal: ${mirrorError}` : backup.name,
     fields: [
       { name: 'Größe', value: size },
       { name: 'Server lief', value: running ? 'ja' : 'nein' },
       ...(pruned > 0 ? [{ name: 'Alte entfernt', value: String(pruned) }] : []),
-      ...(targetActive ? [{ name: 'Zweitablage', value: mirrored ? 'ja' : 'fehlgeschlagen' }] : []),
+      ...(targetActive ? [{ name: 'Speicherziel', value: mirrored ? (direct ? 'direkt geschrieben' : 'ja') : 'fehlgeschlagen' }] : []),
     ],
   });
 

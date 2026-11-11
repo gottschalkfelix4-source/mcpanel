@@ -213,6 +213,27 @@ export async function putFile(
   onProgress?.(100);
 }
 
+/**
+ * Lädt einen Datenstrom hoch, dessen Länge noch nicht feststeht (ein Archiv,
+ * das gerade erst entsteht) – ohne `Content-Length`, also stückweise
+ * (chunked). Nicht jeder WebDAV-Server nimmt das an; der Aufrufer weicht dann
+ * auf `putFile` mit einer fertigen Datei aus.
+ */
+export async function putStream(config: WebdavConfig, dir: string[], filename: string, body: NodeJS.ReadableStream): Promise<void> {
+  await ensureDir(config, dir);
+  const temp = resolve(config, [...dir, `mcpanel-upload-${crypto.randomUUID()}.tmp`]);
+  const target = resolve(config, [...dir, filename]);
+  try {
+    const status = await call(config, 'PUT', temp, { headers: { 'Content-Type': 'application/octet-stream' }, body });
+    if (status !== 200 && status !== 201 && status !== 204) throw new WebdavError(describeStatus(status, 'Hochladen'), status);
+    const moved = await call(config, 'MOVE', temp, { headers: { Destination: target.href, Overwrite: 'T' } });
+    if (moved !== 201 && moved !== 204) throw new WebdavError(describeStatus(moved, 'Umbenennen'), moved);
+  } catch (err) {
+    await call(config, 'DELETE', temp).catch(() => 0);
+    throw err;
+  }
+}
+
 /** Lädt eine Datei herunter. `false`, wenn es sie nicht gibt. */
 export async function getFile(config: WebdavConfig, segments: string[], destination: string): Promise<boolean> {
   const res = await send(config, 'GET', resolve(config, segments));

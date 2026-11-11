@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   recreateContainer: vi.fn(),
   fetchBackup: vi.fn(),
   prune: vi.fn(async () => 0),
+  target: null as null | { kind: string; keepLocal: boolean },
+  openSink: vi.fn(),
+  putBackup: vi.fn(),
 }));
 
 const serverDirOf = (id: string) => path.join(mocks.root, 'servers', id);
@@ -53,9 +56,11 @@ vi.mock('./quota.js', () => ({
 }));
 vi.mock('./backupTarget.js', () => ({
   fetchBackup: mocks.fetchBackup,
-  getTarget: vi.fn(async () => null),
-  isEnabled: () => false,
-  putBackup: vi.fn(),
+  getTarget: vi.fn(async () => mocks.target),
+  isEnabled: (target: { kind: string } | null) => Boolean(target) && target!.kind !== 'NONE',
+  registerTarget: vi.fn(async () => 'ziel-1'),
+  openBackupSink: mocks.openSink,
+  putBackup: mocks.putBackup,
   removeBackup: vi.fn(),
 }));
 
@@ -104,6 +109,7 @@ beforeEach(async () => {
   mocks.findFirst.mockResolvedValue({ id: 'bk-1', serverId: SERVER_ID, filename: FILENAME });
   mocks.fetchBackup.mockResolvedValue(null);
   mocks.create.mockImplementation(async ({ data }) => ({ id: 'bk-sicher', ...data }));
+  mocks.target = null;
 });
 
 afterEach(async () => {
@@ -328,5 +334,95 @@ describe('ZIP-Backups', () => {
     await expect(restoreBackup(server, 'bk-zip')).rejects.toThrow(/beschädigt oder unvollständig/);
     expect(await fs.readFile(path.join(dir(), 'server.properties'), 'utf8')).toBe('motd=Alter Stand\n');
     expect(mocks.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe('Sicherung direkt ins Speicherziel', () => {
+  const zielDatei = () => path.join(mocks.root, 'ziel', 'archiv.zip');
+
+  /** Speicherziel, das in eine Datei schreibt – wie eine eingehängte Freigabe. */
+  function dateiZiel() {
+    mocks.openSink.mockImplementation(async () => {
+      await fs.mkdir(path.dirname(zielDatei()), { recursive: true });
+      const { createWriteStream } = await import('node:fs');
+      const stream = createWriteStream(zielDatei() + '.teil');
+      return {
+        stream,
+        finish: async () => {
+          await new Promise<void>((resolve, reject) => stream.end((err?: Error | null) => (err ? reject(err) : resolve())));
+          await fs.rename(zielDatei() + '.teil', zielDatei());
+        },
+        abort: async () => { stream.destroy(); await fs.rm(zielDatei() + '.teil', { force: true }); },
+      };
+    });
+  }
+
+  it('schreibt das Archiv nur ins Ziel – lokal bleibt nichts liegen', async () => {
+    mocks.target = { kind: 'SMB', keepLocal: false };
+    dateiZiel();
+    await legeServerstandAn();
+    const backup = await createBackup(server);
+
+    expect(backup.mirrored).toBe(true);
+    const { data } = mocks.create.mock.calls.at(-1)![0];
+    expect(data).toMatchObject({ mirrored: true, targetId: 'ziel-1' });
+    expect(data.verifyStatus).toBeUndefined();
+    expect(Number(data.sizeBytes)).toBe((await fs.stat(zielDatei())).size);
+    expect(await zipNamen(zielDatei())).toEqual(expect.arrayContaining(['server.properties', 'world/level.dat']));
+    expect(await fs.readdir(backupDirOf(SERVER_ID))).toEqual([]);
+    expect(mocks.putBackup).not.toHaveBeenCalled();
+  });
+
+  it('weicht bei einem Fehler des Ziels auf lokal + Hochladen aus und räumt die lokale Kopie danach weg', async () => {
+    mocks.target = { kind: 'WEBDAV', keepLocal: false };
+    mocks.openSink.mockRejectedValue(new Error('Server verlangt eine Längenangabe (411)'));
+    mocks.putBackup.mockResolvedValue(undefined);
+    await legeServerstandAn();
+    const backup = await createBackup(server);
+
+    expect(backup.mirrored).toBe(true);
+    const { data } = mocks.create.mock.calls.at(-1)![0];
+    expect(data.verifyStatus).toBe('OK');
+    expect(mocks.putBackup).toHaveBeenCalledOnce();
+    expect(await fs.readdir(backupDirOf(SERVER_ID))).toEqual([]);
+  });
+
+  it('behält die lokale Sicherung, wenn das Ziel gar nicht erreichbar ist', async () => {
+    mocks.target = { kind: 'S3', keepLocal: false };
+    mocks.openSink.mockRejectedValue(new Error('nicht erreichbar'));
+    mocks.putBackup.mockRejectedValue(new Error('nicht erreichbar'));
+    await legeServerstandAn();
+    const backup = await createBackup(server);
+
+    expect(backup.mirrored).toBe(false);
+    const files = await fs.readdir(backupDirOf(SERVER_ID));
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^backup-.*\.zip$/);
+  });
+
+  it('räumt ein mitten im Schreiben abgebrochenes Ziel auf', async () => {
+    mocks.target = { kind: 'SMB', keepLocal: false };
+    const abort = vi.fn(async () => {});
+    mocks.openSink.mockImplementation(async () => {
+      const { Writable } = await import('node:stream');
+      const stream = new Writable({ write(_chunk, _enc, cb) { cb(new Error('Freigabe getrennt')); } });
+      stream.on('error', () => {});
+      return { stream, finish: async () => {}, abort };
+    });
+    mocks.putBackup.mockResolvedValue(undefined);
+    await legeServerstandAn();
+    await createBackup(server);
+    expect(abort).toHaveBeenCalledOnce();
+    expect(mocks.putBackup).toHaveBeenCalledOnce();
+  });
+
+  it('schreibt mit „lokale Kopie behalten“ wie bisher lokal und zusätzlich ins Ziel', async () => {
+    mocks.target = { kind: 'SMB', keepLocal: true };
+    mocks.putBackup.mockResolvedValue(undefined);
+    await legeServerstandAn();
+    await createBackup(server);
+    expect(mocks.openSink).not.toHaveBeenCalled();
+    expect(mocks.putBackup).toHaveBeenCalledOnce();
+    expect(await fs.readdir(backupDirOf(SERVER_ID))).toHaveLength(1);
   });
 });

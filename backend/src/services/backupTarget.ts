@@ -15,6 +15,7 @@
  */
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
+import { PassThrough, type Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { prisma } from '../db.js';
 import { withQueuedOperation } from './operations.js';
@@ -28,7 +29,7 @@ import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, S3Client } fr
 import { Upload } from '@aws-sdk/lib-storage';
 
 import { getSetting, setSetting } from './settings.js';
-import { deleteFile, getFile, probe as probeWebdav, putFile, webdavBase, type WebdavConfig } from './webdav.js';
+import { deleteFile, getFile, probe as probeWebdav, putFile, webdavBase, type WebdavConfig, putStream } from './webdav.js';
 import { badRequest } from '../lib/errors.js';
 
 const run = promisify(execFile);
@@ -74,6 +75,11 @@ export interface S3Config {
 
 export interface TargetConfig {
   kind: TargetKind;
+  /**
+   * Zusätzlich eine Kopie im Panel behalten. Aus (Vorgabe): Sicherungen
+   * entstehen direkt im Speicherziel, lokal bleibt nichts liegen.
+   */
+  keepLocal: boolean;
   smb: SmbConfig;
   s3: S3Config;
   webdav: WebdavConfig;
@@ -81,6 +87,7 @@ export interface TargetConfig {
 
 const EMPTY: TargetConfig = {
   kind: 'NONE',
+  keepLocal: false,
   smb: { host: '', share: '', path: '', username: '', password: '', domain: '', version: '3.0' },
   s3: {
     endpoint: '',
@@ -111,6 +118,7 @@ export async function getTarget(): Promise<TargetConfig> {
     const parsed = JSON.parse(raw) as Partial<TargetConfig>;
     cached = {
       kind: parsed.kind ?? 'NONE',
+      keepLocal: parsed.keepLocal === true,
       smb: { ...EMPTY.smb, ...(parsed.smb ?? {}) },
       s3: { ...EMPTY.s3, ...(parsed.s3 ?? {}) },
       webdav: { ...EMPTY.webdav, ...(parsed.webdav ?? {}) },
@@ -145,6 +153,7 @@ export function publicTarget(config: TargetConfig) {
 
   return {
     kind: config.kind,
+    keepLocal: config.keepLocal,
     smb: {
       host: config.smb.host,
       share: config.smb.share,
@@ -175,6 +184,7 @@ export function publicTarget(config: TargetConfig) {
 /** Eingabe aus der Oberfläche: Geheimnisse leer = „unverändert lassen“. */
 export interface TargetInput {
   kind: TargetKind;
+  keepLocal?: boolean;
   smb: Omit<SmbConfig, 'password'> & { password?: string };
   s3: Omit<S3Config, 'secretAccessKey'> & { secretAccessKey?: string };
   webdav: Omit<WebdavConfig, 'password'> & { password?: string };
@@ -197,6 +207,7 @@ export function keepStoredSecrets(input: TargetInput, current: TargetConfig): Ta
   const stored = webdavOf(current);
   return {
     kind: input.kind,
+    keepLocal: input.keepLocal ?? false,
     smb: { ...input.smb, password: input.smb.password?.length ? input.smb.password : current.smb.password },
     s3: {
       ...input.s3,
@@ -417,6 +428,79 @@ async function putBackupUnlocked(
   if (config.kind === 'WEBDAV') {
     await putFile(webdavOf(config), [serverId], filename, localPath, onProgress);
   }
+}
+
+export interface BackupSink {
+  /** Hierhin schreibt der ZIP-Schreiber */
+  stream: Writable;
+  /** Abschließen: wartet, bis das Ziel alles hat, und gibt der Datei ihren Namen */
+  finish(): Promise<void>;
+  /** Abbrechen und Bruchstücke im Ziel entfernen */
+  abort(): Promise<void>;
+}
+
+/**
+ * Öffnet das Speicherziel zum direkten Schreiben einer neuen Sicherung – das
+ * Archiv entsteht dort, während gepackt wird, ohne lokale Zwischendatei.
+ * Geschrieben wird überall erst unter einem vorläufigen Namen.
+ */
+export async function openBackupSink(serverId: string, filename: string, targetId?: string | null): Promise<BackupSink> {
+  const config = await targetForBackup(targetId);
+
+  if (config.kind === 'SMB') {
+    await withQueuedOperation('backup-target', 'Backup-Zweitablage', () => mountSmb(config.smb));
+    const dir = smbDir(config, serverId);
+    await fsp.mkdir(dir, { recursive: true });
+    const temp = path.posix.join(dir, `.partial-${crypto.randomUUID()}`);
+    const stream = fs.createWriteStream(temp, { highWaterMark: 4 * 1024 * 1024 });
+    const closed = new Promise<void>((resolve, reject) => { stream.once('close', resolve); stream.once('error', reject); });
+    closed.catch(() => {});
+    return {
+      stream,
+      finish: async () => {
+        stream.end();
+        await closed;
+        await fsp.rename(temp, path.posix.join(dir, filename));
+      },
+      abort: async () => {
+        stream.destroy();
+        await fsp.rm(temp, { force: true }).catch(() => {});
+      },
+    };
+  }
+
+  if (config.kind === 'S3') {
+    const stream = new PassThrough({ highWaterMark: 4 * 1024 * 1024 });
+    const client = s3Client(config.s3);
+    const upload = new Upload({
+      client,
+      params: { Bucket: config.s3.bucket, Key: s3Key(config, serverId, filename), Body: stream },
+      partSize: 64 * 1024 * 1024,
+      queueSize: 3,
+    });
+    // Ein unvollständiger mehrteiliger Upload wird von S3 nie sichtbar.
+    const done = upload.done().then(() => undefined, (err) => { stream.destroy(); throw new Error(describeS3Error(err)); });
+    done.catch(() => {});
+    return {
+      stream,
+      finish: async () => { stream.end(); try { await done; } finally { client.destroy(); } },
+      abort: async () => { await upload.abort().catch(() => {}); stream.destroy(); client.destroy(); },
+    };
+  }
+
+  if (config.kind === 'WEBDAV') {
+    const stream = new PassThrough({ highWaterMark: 4 * 1024 * 1024 });
+    const done = putStream(webdavOf(config), [serverId], filename, stream).catch((err) => { stream.destroy(err as Error); throw err; });
+    done.catch(() => {});
+    return {
+      stream,
+      finish: async () => { stream.end(); await done; },
+      // Den Upload abreißen lassen; putStream räumt die Zwischendatei weg.
+      abort: async () => { stream.destroy(new Error('Abgebrochen')); await done.catch(() => {}); },
+    };
+  }
+
+  throw new Error('Kein Speicherziel eingerichtet');
 }
 
 /**

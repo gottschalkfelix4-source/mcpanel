@@ -9,6 +9,7 @@ type TargetKind = 'NONE' | 'SMB' | 'S3' | 'WEBDAV';
 
 interface TargetView {
   kind: TargetKind;
+  keepLocal: boolean;
   smb: {
     host: string;
     share: string;
@@ -84,7 +85,7 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
-/** Zweitablage für Backups: Art wählen, Zugang eintragen, Verbindung prüfen. */
+/** Speicherziel für Backups: Art wählen, Zugang eintragen, Verbindung prüfen. */
 export default function BackupTarget() {
   const toast = useToast();
 
@@ -94,6 +95,7 @@ export default function BackupTarget() {
   });
 
   const [kind, setKind] = useState<TargetKind>('NONE');
+  const [keepLocal, setKeepLocal] = useState(false);
   const [smb, setSmb] = useState({
     host: '', share: '', path: '', username: '', password: '', domain: '', version: '3.0',
   });
@@ -111,12 +113,13 @@ export default function BackupTarget() {
     const t = query.data?.target;
     if (!t) return;
     setKind(t.kind);
+    setKeepLocal(t.keepLocal);
     setSmb({ ...t.smb, password: '' });
     setS3({ ...t.s3, secretAccessKey: '' });
     setWebdav({ url: t.webdav.url, username: t.webdav.username, password: '' });
   }, [query.data]);
 
-  const body = () => ({ kind, smb, s3, webdav });
+  const body = () => ({ kind, keepLocal, smb, s3, webdav });
 
   const test = useMutation({
     mutationFn: () => api.post<TargetStatus>('/settings/backup-target/test', body()),
@@ -420,6 +423,17 @@ export default function BackupTarget() {
             Ohne Zweitablage liegen die Sicherungen auf derselben Platte wie die Serverdaten. Das
             hilft gegen versehentliches Löschen, aber nicht gegen einen Plattenausfall.
           </InfoNote>
+        )}
+
+        {kind !== 'NONE' && (
+          <div className="space-y-1.5 border border-stone-700 bg-stone-900/40 p-3">
+            <Toggle checked={keepLocal} onChange={setKeepLocal} label="Zusätzlich eine lokale Kopie im Panel behalten" />
+            <p className="text-xs leading-relaxed text-stone-400">
+              {keepLocal
+                ? 'Jede Sicherung wird lokal gepackt und danach ins Speicherziel kopiert – zwei Kopien, doppelter Platz, längere Laufzeit.'
+                : 'Sicherungen entstehen direkt im Speicherziel, noch während gepackt wird – ohne lokale Kopie und ohne zweiten Durchgang. Ist das Ziel einmal nicht erreichbar, wird ausnahmsweise lokal gesichert.'}
+            </p>
+          </div>
         )}
 
         <div className="flex flex-wrap gap-2">

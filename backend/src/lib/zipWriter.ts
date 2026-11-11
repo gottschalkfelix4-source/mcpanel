@@ -121,6 +121,21 @@ interface Eintrag {
   zeit: { time: number; date: number };
   external: number;
   zip64Lokal: boolean;
+  /**
+   * Größe und Prüfsumme stehen hinter den Daten (Data Descriptor) statt im
+   * lokalen Kopf – nötig, wenn das Ziel kein Zurückspringen erlaubt (Stream).
+   */
+  deskriptor?: boolean;
+}
+
+/** Data Descriptor im ZIP64-Format: Signatur, CRC, gepackte und echte Größe. */
+function deskriptor(e: Eintrag): Buffer {
+  const buf = Buffer.alloc(24);
+  buf.writeUInt32LE(0x08074b50, 0);
+  buf.writeUInt32LE(e.crc >>> 0, 4);
+  buf.writeBigUInt64LE(BigInt(e.compressed), 8);
+  buf.writeBigUInt64LE(BigInt(e.size), 16);
+  return buf;
 }
 
 function lokalerKopf(e: Eintrag): Buffer {
@@ -128,11 +143,11 @@ function lokalerKopf(e: Eintrag): Buffer {
   const buf = Buffer.alloc(30 + e.name.length + extra);
   buf.writeUInt32LE(0x04034b50, 0);
   buf.writeUInt16LE(e.zip64Lokal ? 45 : 20, 4);
-  buf.writeUInt16LE(0x0800, 6); // Dateinamen in UTF-8
+  buf.writeUInt16LE(e.deskriptor ? 0x0808 : 0x0800, 6); // Dateinamen in UTF-8 (+ Data Descriptor)
   buf.writeUInt16LE(e.method, 8);
   buf.writeUInt16LE(e.zeit.time, 10);
   buf.writeUInt16LE(e.zeit.date, 12);
-  buf.writeUInt32LE(e.crc >>> 0, 14);
+  buf.writeUInt32LE(e.deskriptor ? 0 : e.crc >>> 0, 14);
   buf.writeUInt32LE(e.zip64Lokal ? MAX32 : e.compressed, 18);
   buf.writeUInt32LE(e.zip64Lokal ? MAX32 : e.size, 22);
   buf.writeUInt16LE(e.name.length, 26);
@@ -142,8 +157,8 @@ function lokalerKopf(e: Eintrag): Buffer {
     const at = 30 + e.name.length;
     buf.writeUInt16LE(0x0001, at);
     buf.writeUInt16LE(16, at + 2);
-    buf.writeBigUInt64LE(BigInt(e.size), at + 4);
-    buf.writeBigUInt64LE(BigInt(e.compressed), at + 12);
+    buf.writeBigUInt64LE(e.deskriptor ? 0n : BigInt(e.size), at + 4);
+    buf.writeBigUInt64LE(e.deskriptor ? 0n : BigInt(e.compressed), at + 12);
   }
   return buf;
 }
@@ -157,8 +172,8 @@ function zentralerKopf(e: Eintrag): Buffer {
   const buf = Buffer.alloc(46 + e.name.length + extra);
   buf.writeUInt32LE(0x02014b50, 0);
   buf.writeUInt16LE((3 << 8) | 45, 4); // Unix, ZIP 4.5
-  buf.writeUInt16LE(felder.length ? 45 : 20, 6);
-  buf.writeUInt16LE(0x0800, 8);
+  buf.writeUInt16LE(felder.length || e.deskriptor ? 45 : 20, 6);
+  buf.writeUInt16LE(e.deskriptor ? 0x0808 : 0x0800, 8);
   buf.writeUInt16LE(e.method, 10);
   buf.writeUInt16LE(e.zeit.time, 12);
   buf.writeUInt16LE(e.zeit.date, 14);
@@ -212,10 +227,59 @@ function ende(anzahl: number, cdOffset: number, cdSize: number): Buffer {
   return Buffer.concat(teile);
 }
 
-/** Schreibt an feste Positionen; der Kopf großer Dateien wird hinterher ergänzt. */
-class Ausgabe {
+interface Ziel {
+  pos: number;
+  /** Kann nachträglich an eine frühere Stelle schreiben */
+  readonly springt: boolean;
+  write(buf: Buffer): Promise<void>;
+  at(buf: Buffer, position: number): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * Schreibt fortlaufend in einen Stream – etwa direkt in einen Upload. Achtet
+ * auf Rückstau, damit bei langsamer Leitung nicht das ganze Archiv im
+ * Arbeitsspeicher landet, und reicht einen Fehler des Ziels an den nächsten
+ * Schreibversuch weiter.
+ */
+class StromAusgabe implements Ziel {
   pos = 0;
+  readonly springt = false;
+  private fehler: Error | null = null;
+  constructor(private readonly strom: Writable, private readonly max: number) {
+    strom.on('error', (err) => { this.fehler = err; });
+  }
+
+  async write(buf: Buffer) {
+    if (this.fehler) throw this.fehler;
+    if (this.pos + buf.length > this.max) throw badRequest('Speicherkontingent reicht für diese Datei nicht aus');
+    this.pos += buf.length;
+    if (this.strom.write(buf)) return;
+    await new Promise<void>((resolve, reject) => {
+      const weiter = () => { aufraeumen(); resolve(); };
+      const kaputt = (err: Error) => { aufraeumen(); reject(err); };
+      const zu = () => { aufraeumen(); reject(this.fehler ?? new Error('Das Ziel hat die Verbindung geschlossen')); };
+      const aufraeumen = () => {
+        this.strom.off('drain', weiter); this.strom.off('error', kaputt); this.strom.off('close', zu);
+      };
+      this.strom.once('drain', weiter); this.strom.once('error', kaputt); this.strom.once('close', zu);
+    });
+  }
+
+  async at(): Promise<void> {
+    throw new Error('Ein Stream erlaubt kein Zurückspringen');
+  }
+
+  async close() { /* Abschließen ist Sache des Aufrufers – er wartet auf den Upload. */ }
+}
+
+/** Schreibt an feste Positionen; der Kopf großer Dateien wird hinterher ergänzt. */
+class Ausgabe implements Ziel {
+  pos = 0;
+  readonly springt = true;
   constructor(private readonly fh: fs.FileHandle, private readonly max: number) {}
+
+  close() { return this.fh.close(); }
 
   async write(buf: Buffer) {
     if (this.pos + buf.length > this.max) throw badRequest('Speicherkontingent reicht für diese Datei nicht aus');
@@ -264,6 +328,21 @@ async function vorbereiten(source: ZipSource): Promise<Vorbereitet | null> {
  * Aufrufer entfernt werden.
  */
 export async function writeZip(target: string, sources: ZipSource[], options: ZipOptions = {}): Promise<ZipResult> {
+  const fh = await fs.open(target, 'wx', 0o600);
+  return schreibe(new Ausgabe(fh, options.maxBytes ?? Infinity), sources, options);
+}
+
+/**
+ * Wie `writeZip`, aber fortlaufend in einen Stream – das Archiv entsteht
+ * direkt am Ziel (Upload), ohne Zwischendatei. Große Dateien bekommen dafür
+ * einen Data Descriptor; gängige Entpacker und `yauzl` lesen das.
+ * Der Stream wird nicht beendet: das übernimmt der Aufrufer.
+ */
+export function writeZipStream(target: Writable, sources: ZipSource[], options: ZipOptions = {}): Promise<ZipResult> {
+  return schreibe(new StromAusgabe(target, options.maxBytes ?? Infinity), sources, options);
+}
+
+async function schreibe(out: Ziel, sources: ZipSource[], options: ZipOptions): Promise<ZipResult> {
   const total = sources.reduce((sum, s) => sum + s.size, 0);
   let done = 0;
   let zuletzt = 0;
@@ -274,8 +353,6 @@ export async function writeZip(target: string, sources: ZipSource[], options: Zi
     options.onProgress(done, total);
   };
 
-  const fh = await fs.open(target, 'wx', 0o600);
-  const out = new Ausgabe(fh, options.maxBytes ?? Infinity);
   const eintraege: Eintrag[] = [];
 
   // Vorausschauend vorbereiten, aber in Reihenfolge schreiben.
@@ -340,7 +417,10 @@ export async function writeZip(target: string, sources: ZipSource[], options: Zi
       }
       const e: Eintrag = {
         ...basis, method: shouldStore(s.name) ? 0 : 8, crc: 0, size: 0, compressed: 0,
-        zip64Lokal: s.size >= ZIP64_SCHWELLE,
+        // Im Stream stehen Größen erst hinter den Daten – immer im ZIP64-Format,
+        // dann ist die Länge des Descriptors eindeutig.
+        zip64Lokal: !out.springt || s.size >= ZIP64_SCHWELLE,
+        deskriptor: !out.springt,
       };
       const kopfPos = out.pos;
       await out.write(lokalerKopf(e));
@@ -374,7 +454,8 @@ export async function writeZip(target: string, sources: ZipSource[], options: Zi
       if (!e.zip64Lokal && (e.size >= MAX32 || e.compressed >= MAX32)) {
         throw new Error(`${s.name} ist während des Packens über 4 GB gewachsen`);
       }
-      await out.at(lokalerKopf(e), kopfPos);
+      if (out.springt) await out.at(lokalerKopf(e), kopfPos);
+      else await out.write(deskriptor(e));
       eintraege.push(e);
     }
 
@@ -389,6 +470,6 @@ export async function writeZip(target: string, sources: ZipSource[], options: Zi
       size: out.pos,
     };
   } finally {
-    await fh.close();
+    await out.close();
   }
 }

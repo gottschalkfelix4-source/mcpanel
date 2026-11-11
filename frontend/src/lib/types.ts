@@ -129,8 +129,10 @@ export interface Backup {
   name: string;
   filename: string;
   sizeBytes: number;
-  /** Liegt zusaetzlich in der Zweitablage. */
+  /** Liegt im Speicherziel (Samba, S3, WebDAV). */
   mirrored: boolean;
+  /** Liegt (auch) lokal im Panel. */
+  local?: boolean;
   note: string;
   createdAt: string;
   createdBy: { id: string; username: string } | null;

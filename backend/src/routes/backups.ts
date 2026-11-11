@@ -1,3 +1,5 @@
+import { serverBackupDir } from '../config.js';
+import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -18,7 +20,10 @@ export default async function backupRoutes(app: FastifyInstance) {
       orderBy: { createdAt: 'desc' },
       include: { createdBy: { select: { id: true, username: true } } },
     });
-    return backups.map((b) => ({ ...b, sizeBytes: Number(b.sizeBytes) }));
+    // Wo liegt das Archiv? Mit Speicherziel entsteht es nur noch dort.
+    const dir = serverBackupDir(access.server.id);
+    const local = new Set(await fsp.readdir(dir).catch(() => [] as string[]));
+    return backups.map((b) => ({ ...b, sizeBytes: Number(b.sizeBytes), local: local.has(b.filename) }));
   });
 
   app.post('/', async (req) => {

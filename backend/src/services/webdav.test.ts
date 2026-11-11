@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
-import { deleteFile, getFile, parseQuota, probe, putFile, webdavBase, type WebdavConfig } from './webdav.js';
+import { deleteFile, getFile, parseQuota, probe, putFile, putStream, webdavBase, type WebdavConfig } from './webdav.js';
 
 /** Kleiner WebDAV-Server im Arbeitsspeicher – genug für die genutzten Methoden. */
 const dav = {
@@ -149,4 +149,29 @@ it('liest den freien Platz mit beliebigem Namensraum-Präfix', () => {
   expect(parseQuota('<D:quota-available-bytes>42</D:quota-available-bytes>')).toBe(42);
   expect(parseQuota('<quota-available-bytes xmlns="DAV:">7</quota-available-bytes>')).toBe(7);
   expect(parseQuota('<d:prop/>')).toBeNull();
+});
+
+it('lädt einen Datenstrom unbekannter Länge hoch und räumt bei Abbruch auf', async () => {
+  const { PassThrough } = await import('node:stream');
+  dav.dirs.add('/dav/Sicherungen/');
+  const body = new PassThrough();
+  const upload = putStream(config(), ['srv2'], 'direkt.zip', body);
+  body.write('Teil 1 ');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  body.end('Teil 2');
+  await upload;
+  const target = path.join(os.tmpdir(), `mcpanel-webdav-strom-${Date.now()}`);
+  try {
+    expect(await getFile(config(), ['srv2', 'direkt.zip'], target)).toBe(true);
+    expect(await fs.readFile(target, 'utf8')).toBe('Teil 1 Teil 2');
+  } finally {
+    await fs.rm(target, { force: true });
+  }
+
+  dav.failPutWith = 411;
+  const second = new PassThrough();
+  second.end('x');
+  await expect(putStream(config(), ['srv2'], 'b.zip', second)).rejects.toThrow();
+  dav.failPutWith = 0;
+  expect([...dav.files.keys()].filter((name) => name.includes('mcpanel-upload-'))).toEqual([]);
 });
