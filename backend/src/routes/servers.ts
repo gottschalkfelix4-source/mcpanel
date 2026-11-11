@@ -42,6 +42,7 @@ import notificationRoutes from './notifications.js';
 import assistantRoutes from './assistant.js';
 import portRoutes from './ports.js';
 import worldMapRoutes from './worldmap.js';
+import teamRoutes from './teams.js';
 
 const SERVER_TYPES = [
   'VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT', 'MODPACK',
@@ -434,6 +435,7 @@ export default async function serverRoutes(app: FastifyInstance) {
   await app.register(assistantRoutes, { prefix: '/:id/assistant' });
   await app.register(portRoutes, { prefix: '/:id/ports' });
   await app.register(worldMapRoutes, { prefix: '/:id/map' });
+  await app.register(teamRoutes, { prefix: '/:id/teams' });
 }
 
 export { getServerAccess };

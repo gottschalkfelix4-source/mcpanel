@@ -5,6 +5,7 @@ import { api } from '../../lib/api';
 import { Badge, Button, EmptyState, ErrorNote, LoadingBlock, Panel, useToast } from '../../components/ui';
 import { PixelHead } from '../../components/pixel';
 import PlayerStats from '../../components/PlayerStats';
+import FtbTeams from '../../components/FtbTeams';
 import { useServer } from './ServerLayout';
 
 interface PlayerLists {
@@ -284,6 +285,8 @@ export default function PlayersTab() {
           )}
         </Panel>
       </div>
+
+      {can('console.read') && <FtbTeams serverId={server.id} running={!offline} online={players?.players ?? []} />}
 
       <PlayerStats serverId={server.id} />
     </div>
