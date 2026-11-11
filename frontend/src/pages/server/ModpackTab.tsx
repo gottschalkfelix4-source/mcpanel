@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatDate } from '../../lib/format';
-import type { ProjectVersion } from '../../lib/types';
+import type { Backup, ProjectVersion } from '../../lib/types';
 import { ModpackBrowser } from '../../components/ModpackBrowser';
 import { TaskProgress } from '../../components/TaskProgress';
 import {
@@ -261,11 +261,7 @@ export default function ModpackTab() {
                 </div>
 
                 <div className="space-y-2.5">
-                  <Toggle
-                    checked={backupFirst}
-                    onChange={setBackupFirst}
-                    label="Vorher automatisch ein Backup erstellen (empfohlen)"
-                  />
+                  <BackupChoice serverId={server.id} checked={backupFirst} onChange={setBackupFirst} />
                   <Toggle
                     checked={keepConfig}
                     onChange={setKeepConfig}
@@ -316,15 +312,15 @@ export default function ModpackTab() {
         <div className="space-y-4">
           <ErrorNote>
             Ein anderes Modpack ersetzt den Ordner <code>mods/</code> und die Modpack-Konfiguration.
-            Lege vorher ein Backup an!
           </ErrorNote>
+          <BackupChoice serverId={server.id} checked={backupFirst} onChange={setBackupFirst} />
           <ModpackBrowser
             onPick={(project, version) =>
               install.mutateAsync({
                 provider: project.provider,
                 projectId: project.id,
                 versionId: version.id,
-                backupFirst: true,
+                backupFirst,
                 keepConfig: false,
               })
             }
@@ -342,10 +338,12 @@ export default function ModpackTab() {
             provider: installed!.provider,
             projectId: installed!.projectId,
             versionId: version.id,
-            backupFirst: true,
+            backupFirst,
             keepConfig,
           })
         }
+        backupFirst={backupFirst}
+        setBackupFirst={setBackupFirst}
       />
 
       <ConfirmDialog
@@ -361,18 +359,47 @@ export default function ModpackTab() {
   );
 }
 
+/**
+ * Schalter „vorher sichern“ mit dem Alter der letzten Sicherung – wer heute
+ * schon eine hat, braucht nicht unbedingt eine weitere.
+ */
+function BackupChoice({ serverId, checked, onChange }: { serverId: string; checked: boolean; onChange: (value: boolean) => void }) {
+  const backups = useQuery({
+    queryKey: ['backups', serverId],
+    queryFn: () => api.get<Backup[]>(`/servers/${serverId}/backups`),
+    retry: false,
+  });
+  const latest = [...(backups.data ?? [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  const today = latest && new Date(latest.createdAt).toDateString() === new Date().toDateString();
+  return (
+    <div className="space-y-1.5">
+      <Toggle checked={checked} onChange={onChange} label="Vorher automatisch ein Backup erstellen (empfohlen)" />
+      <p className={checked ? 'text-xs text-stone-400' : 'text-xs text-gold'}>
+        {latest
+          ? `Letzte Sicherung: ${formatDate(latest.createdAt)}${today ? ' – heute' : ''} („${latest.name}“).`
+          : backups.isSuccess ? 'Es gibt noch keine Sicherung dieses Servers.' : ''}
+        {!checked && ' Ohne Backup lässt sich der Wechsel nur mit einer vorhandenen Sicherung rückgängig machen.'}
+      </p>
+    </div>
+  );
+}
+
 function VersionSwitcher({
   open,
   onClose,
   serverId,
   currentVersionId,
   onSelect,
+  backupFirst,
+  setBackupFirst,
 }: {
   open: boolean;
   onClose: () => void;
   serverId: string;
   currentVersionId: string | null;
   onSelect: (version: ProjectVersion) => Promise<unknown>;
+  backupFirst: boolean;
+  setBackupFirst: (value: boolean) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -388,10 +415,13 @@ function VersionSwitcher({
 
   return (
     <Modal open={open} onClose={onClose} title="Version wechseln" size="lg">
+      <div className="mb-3">
+        <BackupChoice serverId={serverId} checked={backupFirst} onChange={setBackupFirst} />
+      </div>
       {versions.isLoading ? (
         <LoadingBlock />
       ) : (
-        <div className="mc-well max-h-[60vh] divide-y divide-stone-875 overflow-y-auto">
+        <div className="mc-well max-h-[55vh] divide-y divide-stone-875 overflow-y-auto">
           {sorted.map((version, i) => {
             const current = version.id === currentVersionId;
             return (

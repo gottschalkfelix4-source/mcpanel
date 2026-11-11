@@ -39,6 +39,7 @@ Taggen wird daraus eine Versionsüberschrift.
 - Meldungen wie „createBackup läuft …“ sind jetzt deutsch.
 
 ### Geändert
+- **Modpack-Version wechseln ohne Zwangs-Backup**: Beim Versionswechsel und beim Installieren eines anderen Modpacks lässt sich das vorherige Backup abschalten. Der Dialog zeigt dazu, von wann die letzte Sicherung ist.
 - **Schnellere Oberfläche**: Verwaltungsseiten und Karte werden erst beim Aufruf geladen; die Konsole bleibt auch bei viel Ausgabe flüssig.
 - **Arbeitsspeicher nur durch Administratoren**: Besitzer und Mitglieder können den Java-Heap nicht mehr ändern – weder in den Einstellungen noch bei Neuinstallation, ZIP-Import oder über den Assistenten. Das Kontingentfeld „Max. Java-Heap“ entfällt.
 - **Neuinstallation leichter zu finden**: Die Reiterleiste bricht um, statt hintere Reiter unsichtbar abzuschneiden; zusätzlich führt ein Knopf in den Einstellungen dorthin.
