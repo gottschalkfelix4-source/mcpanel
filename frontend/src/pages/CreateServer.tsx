@@ -324,7 +324,7 @@ export default function CreateServerPage({ existingServer }: { existingServer?: 
                     return (
                       <option key={node.id ?? 'local'} value={node.id ?? 'local'} disabled={node.status !== 'online'}>
                         {node.name}
-                        {node.status !== 'online' ? ' – getrennt' : free !== null ? ` – ${(free / 1024).toFixed(1)} GB frei` : ''}
+                        {node.status !== 'online' ? ' – getrennt' : free !== null ? ` – ${(free / 1024).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} GB frei` : ''}
                       </option>
                     );
                   })}

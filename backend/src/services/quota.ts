@@ -14,6 +14,7 @@ import { config } from '../config.js';
 import { prisma } from '../db.js';
 import { badRequest, forbidden } from '../lib/errors.js';
 import { computeDiskUsage, getDiskUsage } from './diskUsage.js';
+import { reservedBytes } from './diskReservation.js';
 
 export interface QuotaState {
   /** Obergrenze in Bytes, 0 = unbegrenzt */
@@ -30,7 +31,8 @@ export interface QuotaState {
 const MB = 1024 * 1024;
 export async function remainingDiskBytes(server: Server): Promise<number> {
   if (server.quotaDiskMb <= 0) return Infinity;
-  return Math.max(0, server.quotaDiskMb * MB - (await computeDiskUsage(server.id)).total);
+  // Laufende Uploads zählen schon mit – sonst sähe jeder dasselbe Restkontingent.
+  return Math.max(0, server.quotaDiskMb * MB - (await computeDiskUsage(server.id)).total - reservedBytes(server.id));
 }
 
 /** Zustand für die Anzeige – blockiert nicht, nutzt zwischengespeicherte Werte. */

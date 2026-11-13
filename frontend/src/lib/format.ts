@@ -3,7 +3,9 @@ export function formatBytes(bytes: number, digits = 1): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i === 0 ? 0 : digits)} ${units[i]}`;
+  // Deutsches Dezimalkomma („9,4 GB“), wie überall sonst im Panel.
+  const places = i === 0 ? 0 : digits;
+  return `${value.toLocaleString('de-DE', { minimumFractionDigits: places, maximumFractionDigits: places })} ${units[i]}`;
 }
 
 export function formatNumber(value: number): string {

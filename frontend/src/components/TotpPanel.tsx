@@ -97,11 +97,12 @@ export default function TotpPanel() {
   });
 
   const enable = useMutation({
-    mutationFn: () => api.post<{ token: string; recoveryCodes: string[] }>('/auth/totp/enable', { code }),
+    mutationFn: () => api.post<{ token: string; recoveryCodes: string[] }>('/auth/totp/enable', { code, password }),
     onSuccess: (res) => {
       adoptToken(res.token);
       setSetup(null);
       setCode('');
+      setPassword('');
       setError(null);
       // Erst nach dem Sichern der Codes neu laden (siehe RecoveryCodes).
       setCodes(res.recoveryCodes);
@@ -197,15 +198,25 @@ export default function TotpPanel() {
                 required
               />
             </Field>
+            <Field label="Aktuelles Passwort">
+              <input
+                className="mc-input max-w-xs"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </Field>
             <InfoNote>
               Nach dem Aktivieren werden alle anderen Sitzungen abgemeldet. Du bekommst zehn
               Wiederherstellungscodes für den Fall, dass die App einmal nicht greifbar ist.
             </InfoNote>
             <div className="flex gap-2">
-              <Button type="submit" variant="primary" loading={enable.isPending} disabled={code.length !== 6}>
+              <Button type="submit" variant="primary" loading={enable.isPending} disabled={code.length !== 6 || !password}>
                 Aktivieren
               </Button>
-              <Button type="button" variant="ghost" onClick={() => { setSetup(null); setError(null); }}>
+              <Button type="button" variant="ghost" onClick={() => { setSetup(null); setPassword(''); setError(null); }}>
                 Abbrechen
               </Button>
             </div>

@@ -164,7 +164,7 @@ export default function SettingsTab() {
                 .sort((a, b) => a - b)
                 .map((mb) => (
                   <option key={mb} value={mb}>
-                    {mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 ? 1 : 0)} GB` : `${mb} MB`}
+                    {mb >= 1024 ? `${(mb / 1024).toLocaleString('de-DE', { maximumFractionDigits: 1 })} GB` : `${mb} MB`}
                   </option>
                 ))}
             </select>

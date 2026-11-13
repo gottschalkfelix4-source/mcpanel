@@ -288,10 +288,13 @@ export default async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/totp/enable', { preHandler: authenticate, config: loginLimit }, async (req) => {
-    const { code } = z.object({ code: z.string().min(1).max(12) }).parse(req.body);
+    const { code, password } = z.object({ code: z.string().min(1).max(12), password: z.string().min(1).max(200) }).parse(req.body);
     const user = req.user!;
     if (user.totpEnabled) throw badRequest('Der zweite Faktor ist bereits aktiv');
     if (!user.totpSecret) throw badRequest('Bitte zuerst die Einrichtung starten');
+    // Wie beim Passwortwechsel: mit einer erbeuteten Sitzung allein ließe sich
+    // sonst ein eigener zweiter Faktor setzen – das Konto wäre dauerhaft weg.
+    if (!(await bcrypt.compare(password, user.passwordHash))) throw badRequest('Passwort ist falsch');
     if (!checkTotp(user, code)) throw badRequest('Der Code passt nicht – Uhrzeit des Geräts prüfen');
     // Bestehende Sitzungen ohne zweiten Faktor beenden.
     const { codes, hashes } = generateRecoveryCodes();

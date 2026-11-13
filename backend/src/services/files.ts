@@ -11,6 +11,7 @@ import { HttpError, badRequest, notFound } from '../lib/errors.js';
 import { archivePath, safePath } from '../lib/safePath.js';
 import { pipeline } from 'node:stream/promises';
 import { byteLimit } from '../lib/byteLimit.js';
+import { reservationMeter, type DiskReservation } from './diskReservation.js';
 
 export interface FileEntry {
   name: string;
@@ -139,6 +140,7 @@ async function saveUploadUnlocked(
   filename: string,
   stream: NodeJS.ReadableStream,
   maxBytes = Infinity,
+  reservation?: DiskReservation,
 ): Promise<void> {
   const safeName = path.basename(filename).replace(/[\\/:*?"<>|]/g, '_');
   const dir = resolveSafe(serverId, relativeDir);
@@ -149,7 +151,9 @@ async function saveUploadUnlocked(
   try {
     // Die Übertragung selbst läuft ohne Serversperre: ein langsamer Client soll
     // weder Backups noch Automationen aufhalten. Gesperrt wird nur das Ersetzen.
-    await pipeline(stream, byteLimit(maxBytes), fsSync.createWriteStream(temporary));
+    await (reservation
+      ? pipeline(stream, byteLimit(maxBytes), reservationMeter(reservation), fsSync.createWriteStream(temporary))
+      : pipeline(stream, byteLimit(maxBytes), fsSync.createWriteStream(temporary)));
     if ((stream as { truncated?: boolean }).truncated) throw badRequest('Upload wurde abgeschnitten');
     await waitForServerOperation(serverId, 'Datei-Upload', async () => {
       // Nach dem Warten neu prüfen – inzwischen kann ein Ordner ersetzt worden sein.

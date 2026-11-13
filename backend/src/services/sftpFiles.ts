@@ -10,6 +10,7 @@ import { badRequest, forbidden, notFound, unauthorized } from '../lib/errors.js'
 import * as files from './files.js';
 import { waitForServerOperation, withServerOperation } from './operations.js';
 import { remainingDiskBytes } from './quota.js';
+import { reserveDisk, type DiskReservation } from './diskReservation.js';
 import { adjustDiskUsage, invalidateDiskUsage } from './diskUsage.js';
 
 type Location = { serverId: string; relative: string };
@@ -17,6 +18,8 @@ type OpenFile = Location & {
   file: FileHandle; writable: boolean; readable: boolean; append: boolean;
   maxSize: number; temporaryDir?: string;
   failed: boolean; pending: Promise<unknown>;
+  /** Gemeinsamer Zähler aller laufenden Uploads des Servers und die bisher größte Schreibposition */
+  reservation?: DiskReservation; size: number;
 };
 
 /** Virtuelle Wurzel: ausschließlich Serververzeichnisse, niemals Panel- oder Datenbankdateien. */
@@ -91,6 +94,7 @@ export class SftpFiles {
     const writable = Boolean(flags & 2);
     const permission = writable ? PERMISSIONS.FILES_WRITE : PERMISSIONS.FILES_READ;
     let temporaryDir: string | undefined;
+    let reservation: DiskReservation | undefined;
     let file: FileHandle | undefined;
     try {
       await this.access(location, permission);
@@ -108,6 +112,7 @@ export class SftpFiles {
       let maxSize = Infinity;
       if (writable) {
         maxSize = await remainingDiskBytes(server) + (original?.size ?? 0);
+        reservation = reserveDisk(server, original?.size ?? 0);
         const destination = files.resolveSafe(location.serverId, location.relative);
         temporaryDir = await fs.mkdtemp(path.join(path.dirname(destination), '.sftp-upload-'));
         const temporary = () => files.resolveSafe(location.serverId, files.toRelative(location.serverId, path.join(temporaryDir!, 'content')));
@@ -130,9 +135,10 @@ export class SftpFiles {
       if (this.disposed || this.handles.size >= 32) throw badRequest('Verbindung geschlossen oder zu viele offene Dateien');
       const handle = crypto.randomBytes(16).toString('hex');
       this.handles.set(handle, { ...location, file, writable, readable: Boolean(flags & 1), append: Boolean(flags & 4), maxSize,
-        temporaryDir, failed: false, pending: Promise.resolve() });
+        temporaryDir, failed: false, pending: Promise.resolve(), reservation, size: original && !(flags & 16) ? original.size : 0 });
       return handle;
     } catch (err) {
+      reservation?.release();
       await file?.close().catch(() => {});
       if (temporaryDir) {
         try { await fs.rm(files.resolveSafe(location.serverId, files.toRelative(location.serverId, temporaryDir)), { recursive: true, force: true }); } catch { /* Ein veränderter Pfad darf keine fremden Daten löschen. */ }
@@ -168,6 +174,11 @@ export class SftpFiles {
         if (handle.append) offset = (await handle.file.stat()).size;
         if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(offset + data.length)) throw badRequest('Ungültiger Schreibbereich');
         if (offset + data.length > handle.maxSize) throw badRequest('Speicherkontingent reicht für den Upload nicht aus');
+        // Gemeinsam mit allen anderen laufenden Übertragungen dieses Servers.
+        if (offset + data.length > handle.size) {
+          handle.reservation?.update(offset + data.length);
+          handle.size = offset + data.length;
+        }
         let written = 0;
         while (written < data.length) {
           const result = await handle.file.write(data, written, data.length - written, offset + written);
@@ -227,6 +238,7 @@ export class SftpFiles {
         await audit(this.identity.id, handle.serverId, 'files.sftp.upload', handle.relative);
       }
     } finally {
+      handle.reservation?.release();
       await handle.file.close().catch(() => {});
       if (handle.temporaryDir) {
         try { await fs.rm(files.resolveSafe(handle.serverId, files.toRelative(handle.serverId, handle.temporaryDir)), { recursive: true, force: true }); } catch { /* Ein veränderter Pfad darf keine fremden Daten löschen. */ }

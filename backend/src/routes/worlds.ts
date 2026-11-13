@@ -8,7 +8,9 @@ import { audit, authenticate, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import { cacheDir } from '../config.js';
 import { attachment } from '../lib/contentDisposition.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { remainingDiskBytes } from '../services/quota.js';
+import { reservationMeter, reserveDisk } from '../services/diskReservation.js';
 import { prisma } from '../db.js';
 import { byteLimit } from '../lib/byteLimit.js';
 import { runTask } from '../services/tasks.js';
@@ -17,6 +19,9 @@ import {
   activateWorld, assertWorldName, createWorld, deleteWorld, exportWorld, findWorldExport, importWorld, inspectWorldZip, listWorlds,
   resetWorld,
 } from '../services/worlds.js';
+
+/** Server, für die gerade eine Welt hochgeladen wird. */
+const worldUploads = new Set<string>();
 
 const seedSchema = z.string().trim().max(64).default('');
 
@@ -106,37 +111,47 @@ export default async function worldRoutes(app: FastifyInstance) {
     }).parse(req.query);
     const name = assertWorldName(query.name);
     const access = await requireServer(req, PERMISSIONS.FILES_WRITE);
-    const base = path.join(cacheDir(), 'world-import');
-    await fs.mkdir(base, { recursive: true });
-    const directory = await fs.mkdtemp(path.join(base, 'upload-'));
-    const archive = path.join(directory, 'world.zip');
-    let background = false;
+    // Ein Welt-Upload je Server: jeder rechnete sonst mit demselben freien Platz.
+    if (worldUploads.has(access.server.id)) throw conflict('Für diesen Server wird bereits eine Welt hochgeladen.');
+    worldUploads.add(access.server.id);
+    const reservation = reserveDisk(access.server);
     try {
-      let count = 0;
-      const free = await fs.statfs(directory);
-      const limit = Math.min(IMPORT_UPLOAD_LIMIT, Math.max(0, free.bavail * free.bsize - 64 * 1024 ** 2));
-      for await (const part of req.parts({ limits: { files: 1, fields: 0, parts: 1, fileSize: limit } })) {
-        if (part.type !== 'file' || ++count !== 1 || !/\.zip$/i.test(part.filename)) throw badRequest('Bitte genau eine ZIP-Datei hochladen.');
-        await pipeline(part.file, byteLimit(limit), createWriteStream(archive, { flags: 'wx', mode: 0o600 }));
-        if (part.file.truncated) throw badRequest('Das ZIP ist zu groß oder wurde unvollständig übertragen.');
-      }
-      if (count !== 1) throw badRequest('Keine ZIP-Datei empfangen.');
-      const plan = await inspectWorldZip(archive, IMPORT_EXPANDED_LIMIT);
-      // Rechte nach dem (womöglich langen) Upload erneut prüfen.
-      await authenticate(req, reply);
-      const current = await requireServer(req, PERMISSIONS.FILES_WRITE);
-      const taskId = await runTask(current.server.id, 'world.import', async (task) => {
-        try {
-          await importWorld(current.server, archive, plan, name, query.activate, task);
-        } finally {
-          await fs.rm(directory, { recursive: true, force: true });
+      const base = path.join(cacheDir(), 'world-import');
+      await fs.mkdir(base, { recursive: true });
+      const directory = await fs.mkdtemp(path.join(base, 'upload-'));
+      const archive = path.join(directory, 'world.zip');
+      let background = false;
+      try {
+        let count = 0;
+        const free = await fs.statfs(directory);
+        // Die Welt landet danach im Server – das Kontingent gilt schon für das ZIP.
+        const limit = Math.min(IMPORT_UPLOAD_LIMIT, Math.max(0, free.bavail * free.bsize - 64 * 1024 ** 2), await remainingDiskBytes(access.server));
+        for await (const part of req.parts({ limits: { files: 1, fields: 0, parts: 1, fileSize: limit } })) {
+          if (part.type !== 'file' || ++count !== 1 || !/\.zip$/i.test(part.filename)) throw badRequest('Bitte genau eine ZIP-Datei hochladen.');
+          await pipeline(part.file, byteLimit(limit), reservationMeter(reservation), createWriteStream(archive, { flags: 'wx', mode: 0o600 }));
+          if (part.file.truncated) throw badRequest('Das ZIP ist zu groß oder wurde unvollständig übertragen.');
         }
-      });
-      background = true;
-      await audit(req.user!.id, access.server.id, 'world.upload', name);
-      return { ok: true, taskId };
+        if (count !== 1) throw badRequest('Keine ZIP-Datei empfangen.');
+        const plan = await inspectWorldZip(archive, IMPORT_EXPANDED_LIMIT);
+        // Rechte nach dem (womöglich langen) Upload erneut prüfen.
+        await authenticate(req, reply);
+        const current = await requireServer(req, PERMISSIONS.FILES_WRITE);
+        const taskId = await runTask(current.server.id, 'world.import', async (task) => {
+          try {
+            await importWorld(current.server, archive, plan, name, query.activate, task);
+          } finally {
+            await fs.rm(directory, { recursive: true, force: true });
+          }
+        });
+        background = true;
+        await audit(req.user!.id, access.server.id, 'world.upload', name);
+        return { ok: true, taskId };
+      } finally {
+        if (!background) await fs.rm(directory, { recursive: true, force: true });
+      }
     } finally {
-      if (!background) await fs.rm(directory, { recursive: true, force: true });
+      reservation.release();
+      worldUploads.delete(access.server.id);
     }
   });
 }

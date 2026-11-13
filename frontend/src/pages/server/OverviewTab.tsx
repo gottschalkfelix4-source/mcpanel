@@ -68,7 +68,7 @@ export default function OverviewTab() {
           icon={<Cpu size={13} />}
           tint="#4AEDD9"
           label="CPU"
-          value={running ? `${cpuCount.toFixed(1)} %` : '–'}
+          value={running ? `${cpuCount.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %` : '–'}
           sub="Anteil an allen Kernen"
           percent={cpuPercent}
           delay={0.06}

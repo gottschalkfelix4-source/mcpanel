@@ -413,7 +413,7 @@ export default function BackupTarget() {
             )}
             <span className="min-w-0 break-words">
               {status.message}
-              {status.freeBytes !== null && ` · ${(status.freeBytes / 1024 ** 3).toFixed(1)} GB frei`}
+              {status.freeBytes !== null && ` · ${(status.freeBytes / 1024 ** 3).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} GB frei`}
             </span>
           </div>
         )}

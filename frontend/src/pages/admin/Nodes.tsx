@@ -142,7 +142,7 @@ function NodeCard({ node, panelVersion, onInstall, onDelete, onUpdate }: {
           <Meter icon={<MemoryStick size={12} />} label="RAM belegt" value={memUsed}
             detail={`${formatMemory(m.memTotalMb - m.memAvailableMb)} / ${formatMemory(m.memTotalMb)}`} />
           <Meter icon={<Cpu size={12} />} label={`CPU-Last (${m.cpus} Kerne)`} value={load}
-            detail={`${m.load[0].toFixed(2)} · ${m.load[1].toFixed(2)} · ${m.load[2].toFixed(2)}`} />
+            detail={m.load.slice(0, 3).map((value) => value.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })).join(' · ')} />
           <Meter icon={<HardDrive size={12} />} label="Speicherplatz" value={disk}
             detail={`${formatMemory(m.diskFreeMb)} frei`} />
         </div>

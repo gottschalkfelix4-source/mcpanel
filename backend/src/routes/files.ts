@@ -12,6 +12,7 @@ import { assertDiskAvailable, remainingDiskBytes } from '../services/quota.js';
 import { guardMutations } from './mutationGuard.js';
 import { getSftpInfo } from '../services/sftp.js';
 import { getSftpHost } from '../services/settings.js';
+import { reserveDisk } from '../services/diskReservation.js';
 import { forgetTreeStats, treeStats, type TreeStats } from '../services/treeStats.js';
 import { serverDir } from '../config.js';
 
@@ -135,7 +136,13 @@ export default async function fileRoutes(app: FastifyInstance) {
       if (part.type !== 'file') continue;
       const safeName = path.basename(part.filename).replace(/[\\/:*?"<>|]/g, '_');
       const old = await fsp.stat(files.resolveSafe(access.server.id, path.join(dir, safeName))).catch(() => null);
-      await files.saveUpload(access.server.id, dir, part.filename, part.file, await remainingDiskBytes(access.server) + (old?.size ?? 0));
+      // Gleichzeitige Uploads teilen sich das Restkontingent.
+      const reservation = reserveDisk(access.server, old?.size ?? 0);
+      try {
+        await files.saveUpload(access.server.id, dir, part.filename, part.file, await remainingDiskBytes(access.server) + (old?.size ?? 0), reservation);
+      } finally {
+        reservation.release();
+      }
       saved.push(part.filename);
     }
     if (saved.length === 0) throw badRequest('Keine Datei empfangen');
