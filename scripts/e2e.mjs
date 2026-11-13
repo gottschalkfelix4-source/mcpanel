@@ -218,8 +218,11 @@ ok((await api('DELETE', `/users/${friendId}`, { token: admin })).status >= 400, 
 // 8) Zwei-Faktor
 const ts = await api('POST', '/auth/totp/setup', { token: friend });
 ok(Boolean(ts.json?.secret) && ts.json?.url?.startsWith('otpauth://'), 'TOTP-Einrichtung liefert Geheimnis');
-ok((await api('POST', '/auth/totp/enable', { token: friend, body: { code: '000000' } })).status >= 400, 'falscher Code aktiviert nicht');
-const en = await api('POST', '/auth/totp/enable', { token: friend, body: { code: totp(ts.json.secret) } });
+ok((await api('POST', '/auth/totp/enable', { token: friend, body: { code: '000000', password: FRIEND.password } })).status >= 400, 'falscher Code aktiviert nicht');
+// Mit einer Sitzung allein darf sich kein eigener zweiter Faktor setzen lassen.
+ok((await api('POST', '/auth/totp/enable', { token: friend, body: { code: totp(ts.json.secret) } })).status === 400, 'Aktivieren ohne Passwort abgelehnt');
+ok((await api('POST', '/auth/totp/enable', { token: friend, body: { code: totp(ts.json.secret), password: 'falsch' } })).status === 400, 'Aktivieren mit falschem Passwort abgelehnt');
+const en = await api('POST', '/auth/totp/enable', { token: friend, body: { code: totp(ts.json.secret), password: FRIEND.password } });
 ok(en.status === 200 && Boolean(en.json?.token), 'TOTP aktiviert, neues Token', en.json?.error ?? '');
 ok((await api('GET', '/auth/me', { token: friend })).status === 401, 'altes Token nach Aktivierung ungültig');
 friend = en.json.token;
@@ -347,7 +350,7 @@ ok((await listBackups(admin, serverId)).some((b) => b.origin === 'SAFETY' && /We
 // 16) Zwei-Faktor-Pflicht (zuletzt – danach braucht der Admin einen Code)
 ok((await api('PUT', '/settings/security', { token: admin, body: { requireTotp: 'admins' } })).status === 400, 'Pflicht ohne eigenen zweiten Faktor abgelehnt');
 const ats = await api('POST', '/auth/totp/setup', { token: admin });
-const aen = await api('POST', '/auth/totp/enable', { token: admin, body: { code: totp(ats.json.secret) } });
+const aen = await api('POST', '/auth/totp/enable', { token: admin, body: { code: totp(ats.json.secret), password: ADMIN.password } });
 ok(aen.status === 200, 'Admin richtet zweiten Faktor ein', aen.json?.error ?? '');
 admin = aen.json.token;
 ok((await api('PUT', '/settings/security', { token: admin, body: { requireTotp: 'all' } })).status === 200, 'Pflicht für alle gesetzt');
