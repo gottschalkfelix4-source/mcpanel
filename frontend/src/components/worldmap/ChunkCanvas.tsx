@@ -163,11 +163,27 @@ export const ChunkCanvas = forwardRef<ChunkCanvasHandle, Props>(function ChunkCa
       }
     }
 
+    // Zurücksetzen: was wegfällt, rot überlagern – außerhalb oder innerhalb.
+    if (area?.trim) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(232, 69, 60, 0.32)';
+      if (area.trim === 'outside') {
+        ctx.beginPath();
+        ctx.rect(0, 0, size.w, size.h);
+        areaPath(ctx, area, sx, sz, view.scale, false);
+        ctx.fill('evenodd');
+      } else {
+        areaPath(ctx, area, sx, sz, view.scale);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     if (area) {
       ctx.save();
       ctx.setLineDash([8, 6]);
       ctx.lineWidth = 2;
-      ctx.strokeStyle = '#FFAA00';
+      ctx.strokeStyle = area.trim ? '#E8453C' : '#FFAA00';
       areaPath(ctx, area, sx, sz, view.scale);
       ctx.stroke();
       ctx.restore();
@@ -289,8 +305,9 @@ export const ChunkCanvas = forwardRef<ChunkCanvasHandle, Props>(function ChunkCa
 
       <div className="pointer-events-none absolute bottom-3 left-3 flex flex-wrap gap-3 border border-stone-700 bg-stone-950/85 px-2.5 py-1.5 text-xs text-stone-200">
         <Legend color="#5B8731" label="generiert" />
-        {area && <Legend color="#2c2c33" label="noch leer" />}
-        {area && <Legend dashed label="Bereich" />}
+        {area && !area.trim && <Legend color="#2c2c33" label="noch leer" />}
+        {area && <Legend dashed={area.trim ? '#E8453C' : '#FFAA00'} label="Bereich" />}
+        {area?.trim && <Legend color="rgba(232, 69, 60, 0.6)" label="wird zurückgesetzt" />}
         <Legend color="#4AEDD9" label="Spieler" />
         <Legend color="#E8453C" label="Weltmitte" />
       </div>
@@ -301,10 +318,10 @@ export const ChunkCanvas = forwardRef<ChunkCanvasHandle, Props>(function ChunkCa
   );
 });
 
-function Legend({ color, label, dashed }: { color?: string; label: string; dashed?: boolean }) {
+function Legend({ color, label, dashed }: { color?: string; label: string; dashed?: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span aria-hidden="true" className="block h-3 w-3" style={dashed ? { border: '2px dashed #FFAA00' } : { background: color, border: '1px solid #0d0d0f' }} />
+      <span aria-hidden="true" className="block h-3 w-3" style={dashed ? { border: `2px dashed ${dashed}` } : { background: color, border: '1px solid #0d0d0f' }} />
       {label}
     </span>
   );
@@ -315,9 +332,10 @@ function clamp(scale: number): number {
 }
 
 function areaPath(
-  ctx: CanvasRenderingContext2D, area: Area, sx: (x: number) => number, sz: (z: number) => number, scale: number,
+  ctx: CanvasRenderingContext2D, area: Area, sx: (x: number) => number, sz: (z: number) => number, scale: number, begin = true,
 ) {
-  ctx.beginPath();
+  if (begin) ctx.beginPath();
+  else ctx.moveTo(sx(area.centerX + (area.shape === 'circle' ? area.radius : -area.radius)), sz(area.centerZ - (area.shape === 'circle' ? 0 : area.radius)));
   if (area.shape === 'circle') ctx.arc(sx(area.centerX), sz(area.centerZ), area.radius * scale, 0, Math.PI * 2);
   else ctx.rect(sx(area.centerX - area.radius), sz(area.centerZ - area.radius), area.radius * 2 * scale, area.radius * 2 * scale);
 }

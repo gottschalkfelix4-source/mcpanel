@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Map as MapIcon, Maximize2, Puzzle, Users } from 'lucide-react';
+import { HardDrive, Map as MapIcon, Maximize2, Puzzle, Users } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../../lib/api';
 import { Badge, Button, ErrorNote, InfoNote, LoadErrorBlock, LoadingBlock, Panel, useToast } from '../../components/ui';
 import { TaskProgress } from '../../components/TaskProgress';
 import { ChunkCanvas, type ChunkCanvasHandle } from '../../components/worldmap/ChunkCanvas';
 import { PregenPanel, type PregenForm } from '../../components/worldmap/PregenPanel';
+import { TrimPanel, type TrimForm } from '../../components/worldmap/TrimPanel';
+import { formatBytes } from '../../lib/format';
 import {
-  DIMENSION_IDS, DIMENSION_LABELS, type Area, type ChunkMapData, type Dimension, type MapInfo, type PlayersResponse,
+  DIMENSION_IDS, DIMENSION_LABELS, type Area, type ChunkMapData, type Dimension, type MapInfo, type PlayersResponse, type WorldSize,
 } from '../../components/worldmap/types';
 import { useServer } from './ServerLayout';
 
@@ -35,7 +37,13 @@ export default function MapTab() {
     dimension: 'overworld', shape: 'circle', centerX: 0, centerZ: 0, radius: 2500,
     onlyWhenEmpty: false, tpsGuard: true, pauseRender: true,
   });
-  const [picking, setPicking] = useState(false);
+  const [trimForm, setTrimForm] = useState<TrimForm>({
+    dimension: 'overworld', shape: 'circle', centerX: 0, centerZ: 0, radius: 2500, mode: 'outside',
+  });
+  /** Welches Panel die Karte gerade zeigt – das zuletzt benutzte. */
+  const [tool, setTool] = useState<'pregen' | 'trim'>('pregen');
+  /** Klick auf die Karte setzt den Mittelpunkt dieses Panels. */
+  const [picking, setPickingFor] = useState<'pregen' | 'trim' | null>(null);
   const [viewDim, setViewDim] = useState<Dimension>('overworld');
   const [layer, setLayer] = useState<'terrain' | 'chunks'>('chunks');
   const bluemapInstalled = Boolean(info.data?.addons.bluemap.installed);
@@ -51,6 +59,13 @@ export default function MapTab() {
   // Während eines Laufs zeigt die Karte dessen Dimension.
   useEffect(() => { if (activeJob) setViewDim(activeJob.dimension); }, [activeJob?.dimension]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!activeJob) setViewDim(form.dimension); }, [form.dimension]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!activeJob) setViewDim(trimForm.dimension); }, [trimForm.dimension]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const worldSize = useQuery({
+    queryKey: ['map-size', server.id],
+    queryFn: () => api.get<WorldSize>(`/servers/${server.id}/map/size`),
+    refetchInterval: jobRunning ? 30_000 : 120_000,
+  });
 
   const chunks = useQuery({
     queryKey: ['map-chunks', server.id, viewDim],
@@ -67,9 +82,10 @@ export default function MapTab() {
 
   const area: Area | null = useMemo(() => {
     if (activeJob) return activeJob;
+    if (tool === 'trim') return viewDim === trimForm.dimension ? { ...trimForm, trim: trimForm.mode } : null;
     if (!info.data?.canPregen || viewDim !== form.dimension) return null;
     return form;
-  }, [activeJob, info.data?.canPregen, viewDim, form]);
+  }, [activeJob, info.data?.canPregen, viewDim, form, tool, trimForm]);
 
   if (info.isLoading) return <LoadingBlock label="Karte wird geladen …" />;
   if (!info.data) return <LoadErrorBlock error={info.error} onRetry={() => void info.refetch()} />;
@@ -105,7 +121,11 @@ export default function MapTab() {
               dimensionId={DIMENSION_IDS[viewDim]}
               area={area}
               current={activeJob?.status === 'running' && !activeJob.autoPaused ? activeJob.current : null}
-              onPick={picking ? (x, z) => { setForm({ ...form, centerX: x, centerZ: z }); setPicking(false); } : undefined}
+              onPick={picking ? (x, z) => {
+                if (picking === 'trim') setTrimForm({ ...trimForm, centerX: x, centerZ: z });
+                else setForm({ ...form, centerX: x, centerZ: z });
+                setPickingFor(null);
+              } : undefined}
             />
             {chunks.error && <div className="p-3"><ErrorNote>{(chunks.error as Error).message}</ErrorNote></div>}
           </>
@@ -114,13 +134,25 @@ export default function MapTab() {
           {layer === 'terrain'
             ? 'Gelände und Spieler von BlueMap – neu generierte Gebiete erscheinen, sobald BlueMap sie gerendert hat.'
             : 'Aus den Regionsdateien der Welt – zeigt jeden gespeicherten Chunk, auch bei gestopptem Server. Spieler alle 2 s.'}
+          {layer === 'chunks' && chunks.data && ` ${DIMENSION_LABELS[viewDim]}: ${chunks.data.chunks.toLocaleString('de-DE')} Chunks, ${formatBytes(chunks.data.bytes)} in Regionsdateien.`}
         </p>
       </Panel>
 
       <aside className="flex min-w-0 flex-[1_1_340px] flex-col gap-5">
         <AddonsPanel serverId={server.id} info={data} canInstall={data.canPregen} running={running}
           onDone={() => { void queryClient.invalidateQueries({ queryKey: ['map', server.id] }); }} />
-        <PregenPanel serverId={server.id} info={data} form={form} setForm={setForm} picking={picking} setPicking={setPicking} running={running} />
+        <WorldSizePanel size={worldSize.data} loading={worldSize.isLoading} />
+        <div onPointerDownCapture={() => setTool('pregen')} onFocusCapture={() => setTool('pregen')}>
+          <PregenPanel serverId={server.id} info={data} form={form} setForm={setForm} picking={picking === 'pregen'}
+            setPicking={(value) => setPickingFor(value ? 'pregen' : null)} running={running} />
+        </div>
+        {(data.canTrim || data.canPregen) && !activeJob && (
+          <div onPointerDownCapture={() => setTool('trim')} onFocusCapture={() => setTool('trim')}>
+            <TrimPanel serverId={server.id} serverName={server.name} info={data} form={trimForm} setForm={setTrimForm}
+              picking={picking === 'trim'} setPicking={(value) => setPickingFor(value ? 'trim' : null)} running={running || liveState === 'starting'}
+              onDone={() => { void queryClient.invalidateQueries({ queryKey: ['map', server.id] }); }} />
+          </div>
+        )}
         <Panel title={`Spieler · ${players.data?.online ?? 0} online`} icon={<Users size={16} />} bodyClassName="!p-0">
           {!running ? (
             <p className="p-4 text-sm text-stone-400">Der Server ist aus.</p>
@@ -156,6 +188,26 @@ export default function MapTab() {
         </Panel>
       </aside>
     </div>
+  );
+}
+
+function WorldSizePanel({ size, loading }: { size: WorldSize | undefined; loading: boolean }) {
+  return (
+    <Panel title="Weltgröße" icon={<HardDrive size={16} />}>
+      {!size ? (
+        <p className="text-sm text-stone-400">{loading ? 'Wird gezählt …' : 'Keine Welt gefunden.'}</p>
+      ) : (
+        <div className="space-y-2">
+          <p className="font-pixel text-2xl text-stone-50">{size.partial ? '≥ ' : ''}{formatBytes(size.bytes, 2)}</p>
+          <ul className="space-y-0.5 text-xs text-stone-400">
+            {size.folders.map((folder) => (
+              <li key={folder.name} className="flex justify-between gap-2"><span className="font-mono">{folder.name}/</span><span>{formatBytes(folder.bytes)}</span></li>
+            ))}
+            <li>{size.files.toLocaleString('de-DE')} Dateien</li>
+          </ul>
+        </div>
+      )}
+    </Panel>
   );
 }
 

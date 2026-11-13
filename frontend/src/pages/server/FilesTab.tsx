@@ -49,6 +49,19 @@ export default function FilesTab() {
       ),
   });
 
+  // Ordnergrößen kommen getrennt: die Liste steht sofort, die Summen folgen,
+  // sobald der Server große Ordner (Welt, Kartenkacheln) durchgezählt hat.
+  const hasDirs = Boolean(listing.data?.entries.some((entry) => entry.isDir));
+  const sizes = useQuery({
+    queryKey: ['files', server.id, path, 'sizes'],
+    queryFn: () =>
+      api.get<{ path: string; sizes: Record<string, { bytes: number; files: number; partial: boolean }> }>(
+        `/servers/${server.id}/files/sizes?path=${encodeURIComponent(path)}`,
+      ),
+    enabled: hasDirs,
+    staleTime: 15_000,
+  });
+
   useEffect(() => setSelected(new Set()), [path]);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['files', server.id] });
@@ -244,7 +257,7 @@ export default function FilesTab() {
                   {/* max-w-0 + w-full zwingt die Namensspalte zum Kürzen,
                       sonst schiebt sie die Aktionen aus dem Bild. */}
                   <th className="w-full max-w-0 px-2 py-2">Name</th>
-                  <th className="hidden px-2 py-2 sm:table-cell">Größe</th>
+                  <th className="hidden px-2 py-2 text-right sm:table-cell">Größe</th>
                   <th className="hidden px-2 py-2 md:table-cell">Geändert</th>
                   <th className="w-24 px-3 py-2 text-right sm:w-32 sm:px-4">Aktionen</th>
                 </tr>
@@ -298,8 +311,8 @@ export default function FilesTab() {
                         <span className="truncate">{entry.name}</span>
                       </button>
                     </td>
-                    <td className="hidden px-2 py-2 font-mono text-xs text-stone-450 sm:table-cell">
-                      {entry.isDir ? '–' : formatBytes(entry.size)}
+                    <td className="hidden whitespace-nowrap px-2 py-2 text-right font-mono text-xs text-stone-450 sm:table-cell">
+                      {entry.isDir ? <FolderSize stats={sizes.data?.sizes[entry.name]} loading={sizes.isLoading} /> : formatBytes(entry.size)}
                     </td>
                     <td className="hidden px-2 py-2 font-mono text-xs text-stone-450 md:table-cell">
                       {formatDate(entry.modified)}
@@ -464,4 +477,14 @@ export default function FilesTab() {
 
 function joinPath(base: string, name: string): string {
   return `${base.replace(/\/+$/, '')}/${name}`.replace(/\/{2,}/g, '/');
+}
+
+function FolderSize({ stats, loading }: { stats?: { bytes: number; files: number; partial: boolean }; loading: boolean }) {
+  if (!stats) return <span className="text-stone-600" title={loading ? 'Wird gezählt …' : undefined}>{loading ? '…' : '–'}</span>;
+  const files = `${stats.files.toLocaleString('de-DE')} ${stats.files === 1 ? 'Datei' : 'Dateien'}`;
+  return (
+    <span title={stats.partial ? `Mindestens ${files} – zu groß zum vollständigen Zählen` : files}>
+      {stats.partial ? '≥ ' : ''}{formatBytes(stats.bytes)}
+    </span>
+  );
 }

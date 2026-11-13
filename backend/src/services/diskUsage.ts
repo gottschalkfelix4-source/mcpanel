@@ -1,5 +1,6 @@
 import { serverBackupDir, serverDir } from '../config.js';
 import { dirSize } from './files.js';
+import { forgetTreeStats } from './treeStats.js';
 
 export interface DiskUsage {
   data: number;
@@ -74,6 +75,7 @@ export function getDiskUsage(serverId: string): DiskUsage {
 /** Nach Installationen, Backups oder Löschungen den Wert verwerfen. */
 export function invalidateDiskUsage(serverId: string): void {
   cache.delete(serverId);
+  forgetTreeStats(serverDir(serverId));
 }
 
 /**
@@ -99,6 +101,7 @@ const QUOTA_FRESH_MS = 30_000;
  * zwischengespeicherten Wert ein, statt ihn zu verwerfen.
  */
 export function adjustDiskUsage(serverId: string, deltaBytes: number): void {
+  forgetTreeStats(serverDir(serverId));
   const hit = cache.get(serverId);
   if (!hit || !Number.isFinite(deltaBytes)) return;
   hit.data = Math.max(0, hit.data + deltaBytes);

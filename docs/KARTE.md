@@ -49,6 +49,38 @@ Recht: **Welt vorgenerieren** (`world.pregen`) – Administratoren und Besitzer 
 es automatisch, Mitglieder nur, wenn es vergeben wird. Die Karte sieht jeder mit
 „Konsole lesen“.
 
+## Weltgröße
+
+Das Panel „Weltgröße“ zählt alle Weltordner (`<level-name>`, bei Paper & Co.
+auch `<level-name>_nether` und `<level-name>_the_end`) samt Unterordnern. Unter
+der Karte steht zusätzlich, wie viel Platz die Regionsdateien der angezeigten
+Dimension belegen.
+
+## Chunks zurücksetzen
+
+Entfernt Chunks aus den Regionsdateien; Minecraft erzeugt sie beim nächsten
+Betreten neu.
+
+- **Alles außerhalb**: Nur der gewählte Kreis bzw. das Quadrat bleibt – die Welt
+  wird auf einen Umkreis zurückgestutzt.
+- **Nur den Bereich**: Genau dieses Gebiet wird neu generiert, etwa nach einem
+  Mod-Update für neue Biome oder Erze.
+
+Maßgeblich ist die Mitte eines Chunks, wie bei Chunky. Die Karte zeigt rot, was
+wegfällt; die Vorschau rechnet Chunks und frei werdenden Platz aus den
+Tabellen der Regionsdateien aus.
+
+- Läuft nur bei **gestopptem Server** (er hält die Regionsdateien offen) und
+  nicht, solange für dieselbe Dimension eine Vorgenerierung läuft.
+- Vorgabe: vorher ein **Backup** (abwählbar). Gebraucht werden die Rechte
+  „Welt vorgenerieren“ und „Dateien bearbeiten“, für das Backup zusätzlich
+  „Backups erstellen“.
+- `region/`, `entities/` und `poi/` werden gemeinsam gekürzt, ausgelagerte
+  Riesen-Chunks (`c.<x>.<z>.mcc`) mitgelöscht. Teilweise betroffene Dateien
+  werden lückenlos neu geschrieben (Zwischendatei + rename), leere gelöscht.
+- Eine beschädigte Regionsdatei bleibt unverändert und wird im Protokoll
+  genannt.
+
 ## Erweiterungen
 
 Chunky und BlueMap installiert das Panel auf Knopfdruck von Modrinth – passend zu

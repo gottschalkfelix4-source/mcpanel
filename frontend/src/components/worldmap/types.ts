@@ -51,6 +51,8 @@ export interface MapInfo {
   bluemapAccepted: boolean;
   job: PregenJob | null;
   canPregen: boolean;
+  canTrim: boolean;
+  canBackup: boolean;
   remainingDiskBytes: number | null;
   bytesPerChunk: number;
 }
@@ -66,6 +68,8 @@ export interface ChunkMapData {
   dimension: Dimension;
   regions: RegionBits[];
   chunks: number;
+  /** Größe der Regionsdateien dieser Dimension */
+  bytes: number;
   truncated: boolean;
 }
 
@@ -90,4 +94,25 @@ export interface Area {
   centerX: number;
   centerZ: number;
   radius: number;
+  /** Gesetzt: Bereich zum Zurücksetzen – rot, mit Markierung dessen, was wegfällt. */
+  trim?: TrimMode;
+}
+
+export type TrimMode = 'outside' | 'inside';
+
+export interface TrimSummary {
+  chunks: number;
+  removed: number;
+  bytes: number;
+  filesDeleted: number;
+  filesRewritten: number;
+  skipped: string[];
+}
+
+export interface WorldSize {
+  level: string;
+  bytes: number;
+  files: number;
+  partial: boolean;
+  folders: { name: string; bytes: number }[];
 }

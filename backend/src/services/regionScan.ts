@@ -35,6 +35,8 @@ export interface ChunkMap {
   dimension: Dimension;
   regions: RegionBits[];
   chunks: number;
+  /** Größe der Regionsdateien dieser Dimension in Bytes */
+  bytes: number;
   /** Mehr Regionen als ausgeliefert (sehr große Welt) */
   truncated: boolean;
 }
@@ -77,9 +79,9 @@ export function headerBits(header: Buffer): { bits: Buffer; count: number } {
 }
 
 /** Kopfdaten je Datei – neu gelesen nur, wenn sich Größe oder Zeitstempel ändern. */
-const cache = new Map<string, { key: string; bits: string; count: number }>();
+const cache = new Map<string, { key: string; bits: string; count: number; size: number }>();
 
-async function readRegion(file: string): Promise<{ bits: string; count: number } | null> {
+async function readRegion(file: string): Promise<{ bits: string; count: number; size: number } | null> {
   const stat = await fs.lstat(file).catch(() => null);
   if (!stat?.isFile() || stat.size < 8192) return null;
   const key = `${stat.size}:${stat.mtimeMs}`;
@@ -90,7 +92,7 @@ async function readRegion(file: string): Promise<{ bits: string; count: number }
     const header = Buffer.alloc(4096);
     await handle.read(header, 0, 4096, 0);
     const { bits, count } = headerBits(header);
-    const entry = { key, bits: bits.toString('base64'), count };
+    const entry = { key, bits: bits.toString('base64'), count, size: stat.size };
     cache.set(file, entry);
     if (cache.size > 50_000) cache.delete(cache.keys().next().value!);
     return entry;
@@ -113,10 +115,15 @@ export function scanChunks(serverId: string, dimension: Dimension): Promise<Chun
   return value;
 }
 
+/** Nach dem Zurücksetzen von Chunks sofort neu einlesen. */
+export function forgetChunkScan(serverId: string): void {
+  for (const key of scanCache.keys()) if (key.startsWith(`${serverId}:`)) scanCache.delete(key);
+}
+
 export async function scanChunksNow(serverId: string, dimension: Dimension): Promise<ChunkMap> {
   const root = serverDir(serverId);
   const level = await levelName(serverId);
-  const result: ChunkMap = { dimension, regions: [], chunks: 0, truncated: false };
+  const result: ChunkMap = { dimension, regions: [], chunks: 0, bytes: 0, truncated: false };
 
   for (const relative of regionDirs(level, dimension)) {
     let names: string[];
@@ -138,6 +145,7 @@ export async function scanChunksNow(serverId: string, dimension: Dimension): Pro
       if (!region || region.count === 0) continue;
       result.regions.push({ x: Number(match[1]), z: Number(match[2]), bits: region.bits, count: region.count });
       result.chunks += region.count;
+      result.bytes += region.size;
     }
     if (result.regions.length > 0) break; // erste vorhandene Variante gewinnt
   }

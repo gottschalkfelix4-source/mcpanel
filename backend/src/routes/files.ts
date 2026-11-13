@@ -12,6 +12,8 @@ import { assertDiskAvailable, remainingDiskBytes } from '../services/quota.js';
 import { guardMutations } from './mutationGuard.js';
 import { getSftpInfo } from '../services/sftp.js';
 import { getSftpHost } from '../services/settings.js';
+import { forgetTreeStats, treeStats, type TreeStats } from '../services/treeStats.js';
+import { serverDir } from '../config.js';
 
 const pathQuery = z.object({ path: z.string().default('/') });
 
@@ -27,6 +29,30 @@ export default async function fileRoutes(app: FastifyInstance) {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
     const { path: rel } = pathQuery.parse(req.query);
     return { path: rel, entries: await files.listDir(access.server.id, rel) };
+  });
+
+  // Ordnergrößen getrennt von der Liste: die bleibt so sofort da, auch wenn
+  // ein Ordner wie die Welt oder BlueMap-Kacheln Hunderttausende Dateien hat.
+  app.get('/sizes', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.FILES_READ);
+    const { path: rel } = pathQuery.parse(req.query);
+    const dirs = (await files.listDir(access.server.id, rel)).filter((entry) => entry.isDir);
+    const sizes: Record<string, TreeStats> = {};
+    for (let i = 0; i < dirs.length; i += 4) {
+      await Promise.all(dirs.slice(i, i + 4).map(async (entry) => {
+        sizes[entry.name] = await treeStats(files.resolveSafe(access.server.id, entry.path));
+      }));
+    }
+    return { path: rel, sizes };
+  });
+
+  // Nach jeder Änderung über den Dateimanager stimmen die Ordnergrößen nicht mehr.
+  app.addHook('onResponse', async (req) => {
+    if (req.method === 'GET' || req.method === 'HEAD') return;
+    const id = (req.params as { id?: string } | undefined)?.id;
+    if (id) {
+      try { forgetTreeStats(serverDir(id)); } catch { /* unbekannter Server – nichts zu vergessen */ }
+    }
   });
 
   // Datei lesen

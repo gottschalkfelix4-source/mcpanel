@@ -1,8 +1,8 @@
+import fs from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
-import { badRequest } from '../lib/errors.js';
 import { createMapToken } from '../lib/mapToken.js';
 import { sendServerCommand } from '../services/consoleCommand.js';
 import { contentKindFor, serverLoader } from '../services/content.js';
@@ -15,7 +15,14 @@ import {
   resumePregen, saveMapSettings, startPregen,
 } from '../services/pregen.js';
 import { remainingDiskBytes } from '../services/quota.js';
-import { scanChunks } from '../services/regionScan.js';
+import { forgetChunkScan, levelName, scanChunks } from '../services/regionScan.js';
+import { assertStopped, trimChunks, trimInputSchema } from '../services/chunkTrim.js';
+import { createBackup } from '../services/backups.js';
+import { invalidateDiskUsage } from '../services/diskUsage.js';
+import { treeStats } from '../services/treeStats.js';
+import { serverDir } from '../config.js';
+import { safePath } from '../lib/safePath.js';
+import { badRequest, conflict, forbidden } from '../lib/errors.js';
 import { runTask } from '../services/tasks.js';
 
 /** Reiter „Karte“: Chunk-Übersicht, Spielerpositionen, Vorgenerierung, BlueMap (`/api/servers/:id/map`). */
@@ -36,6 +43,9 @@ export default async function worldMapRoutes(app: FastifyInstance) {
       bluemapAccepted: settings.bluemapAccepted,
       job: settings.job,
       canPregen: access.can(PERMISSIONS.WORLD_PREGEN),
+      // Chunks entfernen löscht Weltdaten – dafür auch Dateien bearbeiten.
+      canTrim: access.can(PERMISSIONS.WORLD_PREGEN) && access.can(PERMISSIONS.FILES_WRITE),
+      canBackup: access.can(PERMISSIONS.BACKUP_CREATE),
       remainingDiskBytes: Number.isFinite(remaining) ? remaining : null,
       bytesPerChunk: BYTES_PER_CHUNK,
     };
@@ -45,6 +55,26 @@ export default async function worldMapRoutes(app: FastifyInstance) {
     const access = await requireServer(req, PERMISSIONS.CONSOLE_READ);
     const { dimension } = z.object({ dimension: z.enum(['overworld', 'nether', 'end']).default('overworld') }).parse(req.query);
     return scanChunks(access.server.id, dimension);
+  });
+
+  /** Größe der Welt auf der Platte – alle Weltordner (Bukkit legt Nether/End daneben). */
+  app.get('/size', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.CONSOLE_READ);
+    const root = serverDir(access.server.id);
+    const level = await levelName(access.server.id);
+    const parts = await Promise.all([level, `${level}_nether`, `${level}_the_end`].map(async (name) => {
+      const absolute = safePath(root, name);
+      const exists = await fs.lstat(absolute).then((stat) => stat.isDirectory(), () => false);
+      return exists ? { name, ...(await treeStats(absolute)) } : null;
+    }));
+    const folders = parts.filter((part): part is NonNullable<typeof part> => part !== null);
+    return {
+      level,
+      bytes: folders.reduce((sum, part) => sum + part.bytes, 0),
+      files: folders.reduce((sum, part) => sum + part.files, 0),
+      partial: folders.some((part) => part.partial),
+      folders: folders.map(({ name, bytes }) => ({ name, bytes })),
+    };
   });
 
   app.get('/players', async (req) => {
@@ -156,6 +186,60 @@ export default async function worldMapRoutes(app: FastifyInstance) {
     const job = await cancelPregen(access.server);
     await audit(req.user!.id, access.server.id, 'pregen.cancel');
     return job;
+  });
+
+  // --- Chunks zurücksetzen ---------------------------------------------
+
+  /** Was das Zurücksetzen entfernen würde – liest nur die Tabellen der Regionsdateien. */
+  app.post('/trim/estimate', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.CONSOLE_READ);
+    const input = trimInputSchema.parse(req.body);
+    return trimChunks(access.server, input, { apply: false });
+  });
+
+  app.post('/trim', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.WORLD_PREGEN);
+    if (!access.can(PERMISSIONS.FILES_WRITE)) throw forbidden('Zum Zurücksetzen von Chunks braucht es zusätzlich das Recht „Dateien bearbeiten“.');
+    const body = trimInputSchema.extend({ backupFirst: z.boolean().default(true) }).parse(req.body);
+    if (body.backupFirst && !access.can(PERMISSIONS.BACKUP_CREATE)) {
+      throw forbidden('Für das Backup vorab fehlt dir das Recht „Backups erstellen“.');
+    }
+    const server = access.server;
+    assertStopped((await dockerSvc.getState(server)).state);
+    const settings = await getMapSettings(server.id);
+    const job = settings.job;
+    if (job && (job.status === 'running' || job.status === 'paused') && job.dimension === body.dimension) {
+      throw conflict('Für diese Dimension läuft eine Vorgenerierung. Bitte erst abbrechen – Chunky würde die Chunks sonst neu anlegen.');
+    }
+    const area = `${body.mode === 'outside' ? 'außerhalb' : 'innerhalb'} ${body.shape === 'circle' ? 'Kreis' : 'Quadrat'} r=${body.radius} um ${body.centerX}/${body.centerZ}`;
+    const taskId = await runTask(server.id, 'map.trim', (task) => withServerOperation(server.id, 'Das Zurücksetzen von Chunks', async () => {
+      // Unter der Sperre erneut: zwischen Prüfung und Start kann jemand den Server gestartet haben.
+      assertStopped((await dockerSvc.getState(server)).state);
+      if (body.backupFirst) {
+        await task.update(5, 'Backup vor dem Zurücksetzen …');
+        await createBackup(server, { name: 'Vor dem Zurücksetzen von Chunks', note: area, createdById: req.user!.id, origin: 'SAFETY' });
+        await task.log('Backup angelegt.');
+      }
+      const start = body.backupFirst ? 50 : 5;
+      await task.update(start, 'Regionsdateien werden bearbeitet …');
+      try {
+        const result = await trimChunks(server, body, {
+          apply: true,
+          onProgress: (done, total) => task.update(start + Math.round((done / Math.max(1, total)) * (99 - start)), `Regionsdateien … ${done} / ${total}`),
+        });
+        for (const line of result.skipped) await task.log(`Übersprungen: ${line}`);
+        const freed = (result.bytes / 1024 ** 2).toLocaleString('de-DE', { maximumFractionDigits: 1 });
+        await task.log(`${result.removed.toLocaleString('de-DE')} von ${result.chunks.toLocaleString('de-DE')} Chunks entfernt, ${result.filesDeleted} Regionsdateien gelöscht, ${result.filesRewritten} neu geschrieben, ${freed} MB frei.`);
+        await task.update(100, result.skipped.length > 0
+          ? `Fertig – ${result.skipped.length} Datei(en) beschädigt und unverändert gelassen.`
+          : `Fertig – ${result.removed.toLocaleString('de-DE')} Chunks entfernt, ${freed} MB frei.`);
+      } finally {
+        forgetChunkScan(server.id);
+        invalidateDiskUsage(server.id);
+      }
+    }));
+    await audit(req.user!.id, server.id, 'map.trim', `${body.dimension}, ${area}${body.backupFirst ? ', mit Backup' : ''}`);
+    return { taskId };
   });
 
   app.delete('/pregen', async (req) => {

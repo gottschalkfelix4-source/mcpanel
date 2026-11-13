@@ -27,6 +27,7 @@ const TYPE_LABELS: Record<string, string> = {
   'assistant.action': 'KI-Reparatur wird ausgeführt',
   'server.migrate': 'Server zieht auf eine andere Node um',
   'map.addons': 'Karten-Erweiterungen werden eingerichtet',
+  'map.trim': 'Chunks werden zurückgesetzt',
 };
 
 /**
