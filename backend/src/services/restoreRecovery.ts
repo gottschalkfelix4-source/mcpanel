@@ -22,7 +22,37 @@ export async function hasInterruptedRestore(id: string): Promise<boolean> {
   const { dir, old, stage, journal } = restorePaths(id);
   const record = await readJournal(journal);
   if (record?.committed) return false;
-  return Boolean(record) || await exists(old) || await exists(stage) || await exists(path.join(dir, '.restore-old'));
+  return Boolean(record) || await exists(old) || await exists(stage) || (await legacyStash(dir)) !== null;
+}
+
+/**
+ * Ausweichordner alter Versionen *im* Serverordner. Alles dort können
+ * Mitglieder und der Minecraft-Prozess selbst anlegen, deshalb gilt er nur,
+ * wenn er ein echtes Verzeichnis ist: einer Verknüpfung zu folgen, hieße,
+ * fremde Ordner (etwa das Datenverzeichnis mit dem JWT-Geheimnis oder einen
+ * anderen Server) in diesen Serverordner zu verschieben. Liegt schon eine
+ * Bergungskopie daneben, wird nicht erneut geborgen – sonst ließe sich mit
+ * einem leeren Ordner dieses Namens bei jedem Start eine Vollkopie erzwingen.
+ */
+async function legacyStash(dir: string): Promise<string | null> {
+  const legacy = path.join(dir, '.restore-old');
+  const stat = await fs.lstat(legacy).catch(err => {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
+    throw err;
+  });
+  if (!stat) return null;
+  if (!stat.isDirectory()) {
+    console.warn(`[restore] ${legacy} ist kein Verzeichnis und wird nicht als alter Stand behandelt.`);
+    return null;
+  }
+  const parent = path.dirname(dir);
+  const prefix = path.basename(dir) + '.recovery-';
+  const salvaged = (await fs.readdir(parent).catch(() => [])).some(name => name.startsWith(prefix));
+  if (salvaged) {
+    console.warn(`[restore] ${legacy} bleibt unangetastet: daneben liegt bereits eine Bergungskopie (${prefix}*). Bitte von Hand prüfen.`);
+    return null;
+  }
+  return legacy;
 }
 
 async function writeJournal(id: string, value: unknown): Promise<void> {
@@ -108,8 +138,8 @@ export async function recoverInterruptedRestore(id: string): Promise<void> {
   await fs.rm(stage, { recursive: true, force: true });
   // Legacy versions moved entries individually. Preserve everything outside
   // the stash before recovering it: it might still be original data.
-  const legacy = path.join(dir, '.restore-old');
-  if (await exists(legacy)) {
+  const legacy = await legacyStash(dir);
+  if (legacy) {
     const salvage = await fs.mkdtemp(dir + '.recovery-');
     for (const name of await fs.readdir(dir)) {
       if (name !== '.restore-old') await fs.rename(path.join(dir, name), path.join(salvage, name));

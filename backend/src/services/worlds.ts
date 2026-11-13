@@ -9,6 +9,7 @@ import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import * as dockerSvc from './docker.js';
 import { rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
+import { restoreAutosave } from './autosave.js';
 import { dirSize } from './files.js';
 import { readProperties, saveProperties } from './properties.js';
 import { withServerOperation } from './operations.js';
@@ -264,7 +265,7 @@ export function exportWorld(server: Server, rawName: string, task?: TaskHandle):
       await fs.rm(file, { force: true });
       throw err;
     } finally {
-      if (paused) await rconCommand(server, 'save-on').catch(() => {});
+      if (paused) await restoreAutosave(server, 'welt-export');
     }
     return {
       file,

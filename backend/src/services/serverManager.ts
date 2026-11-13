@@ -1,3 +1,4 @@
+import { resumeInterruptedRestore } from './restoreResume.js';
 import { withServerOperation, withQueuedOperation } from './operations.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -218,7 +219,12 @@ async function updateServerSettingsUnlocked(
 export async function serializeServer(server: Server, extra?: { withStats?: boolean }) {
   // Unabhängige Abfragen gleichzeitig – die Serverliste ruft das je Server auf.
   const [{ state, health, startedAt }, host, hostnames, proxy] = await Promise.all([
-    dockerSvc.getState(server),
+    // Ein einzelner Server mit kaputter Container-Zuordnung (doppeltes Label,
+    // Docker-Fehler einer Node) darf nicht die ganze Liste scheitern lassen.
+    dockerSvc.getState(server).catch((err): Awaited<ReturnType<typeof dockerSvc.getState>> => {
+      console.error(`Zustand von ${server.name} nicht lesbar:`, err instanceof Error ? err.message : err);
+      return { state: 'error', health: null, startedAt: null };
+    }),
     getPublicHost(),
     prisma.serverHostname.findMany({ where: { serverId: server.id }, orderBy: { position: 'asc' } }),
     getProxyConfig(),
@@ -275,6 +281,8 @@ export async function runAutostart(): Promise<void> {
   const servers = await prisma.server.findMany({ where: { autoStart: true, nodeId: null } });
   for (const server of servers) {
     try {
+      // Nie auf einem halb eingespielten Stand starten (siehe restoreResume).
+      await resumeInterruptedRestore(server);
       await dockerSvc.start(server);
     } catch (err) {
       console.error(`Autostart für ${server.name} fehlgeschlagen:`, err);

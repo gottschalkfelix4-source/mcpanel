@@ -296,10 +296,10 @@ export default async function settingsRoutes(app: FastifyInstance) {
   });
 
   app.get('/audit', { preHandler: requireAdmin }, async (req) => {
-    const limit = Number((req.query as { limit?: string }).limit ?? 100);
+    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }).parse(req.query);
     return prisma.auditLog.findMany({
       orderBy: { createdAt: 'desc' },
-      take: Math.min(500, limit),
+      take: limit,
       include: {
         user: { select: { id: true, username: true } },
         server: { select: { id: true, name: true } },

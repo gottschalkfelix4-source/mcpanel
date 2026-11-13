@@ -101,11 +101,18 @@ export async function readDocument(upstream: UpstreamResponse): Promise<string> 
   }
   const raw = Buffer.concat(chunks);
   const encoding = (upstream.headers['content-encoding'] ?? '').trim().toLowerCase();
-  const body = encoding === 'gzip' ? zlib.gunzipSync(raw)
-    : encoding === 'deflate' ? zlib.inflateSync(raw)
-    : encoding === 'br' ? zlib.brotliDecompressSync(raw)
-    : raw;
-  return body.toString('utf8');
+  // Die Grenze gilt auch entpackt: der Container gehört den Mitgliedern, und
+  // eine kleine Antwort, die sich auf Gigabytes aufbläht, risse das Panel mit.
+  const limit = { maxOutputLength: MAX_DOCUMENT_BYTES };
+  try {
+    const body = encoding === 'gzip' ? zlib.gunzipSync(raw, limit)
+      : encoding === 'deflate' ? zlib.inflateSync(raw, limit)
+      : encoding === 'br' ? zlib.brotliDecompressSync(raw, limit)
+      : raw;
+    return body.toString('utf8');
+  } catch {
+    throw new Error('Die Kartenseite ließ sich nicht entpacken oder ist zu groß');
+  }
 }
 
 /** Pfad hinter dem Token, samt Abfrage. Keine Ausbrüche aus dem Webroot. */

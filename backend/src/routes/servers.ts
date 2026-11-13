@@ -97,9 +97,10 @@ function assertProtectedEnvUnchanged(server: Server, next: Record<string, string
   // Unabhängig von Groß-/Kleinschreibung vergleichen – sicher ist sicher.
   const value = (env: Record<string, string>, key: string) =>
     Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1] ?? '';
-  const changed = dockerSvc.PROTECTED_ENV_KEYS.filter((key) => value(next, key) !== value(current, key));
+  const names = new Set([...Object.keys(next), ...Object.keys(current)].map((name) => name.toUpperCase()));
+  const changed = [...names].filter((key) => dockerSvc.isProtectedEnvKey(key) && value(next, key) !== value(current, key));
   // TYPE=CUSTOM startet ein beliebiges Jar – das ist Administratorsache.
-  if (value(next, 'TYPE').toUpperCase() === 'CUSTOM' && value(current, 'TYPE').toUpperCase() !== 'CUSTOM') changed.push('TYPE=CUSTOM' as never);
+  if (value(next, 'TYPE').toUpperCase() === 'CUSTOM' && value(current, 'TYPE').toUpperCase() !== 'CUSTOM') changed.push('TYPE=CUSTOM');
   if (changed.length > 0) {
     throw forbidden(`Nur ein Administrator kann ${changed.join(', ')} ändern`);
   }

@@ -13,11 +13,12 @@ import { checkForUpdate, installModpack, listVersions, previewModpack } from '..
 import { withServerOperation } from '../services/operations.js';
 import { runTask } from '../services/tasks.js';
 import { serverLoader } from '../services/content.js';
+import { providerId } from '../lib/providerId.js';
 
 const installSchema = z.object({
   provider: z.enum(['modrinth', 'curseforge']),
-  projectId: z.string().min(1),
-  versionId: z.string().min(1),
+  projectId: providerId,
+  versionId: providerId,
   backupFirst: z.boolean().optional(),
   keepConfig: z.boolean().optional(),
   startAfter: z.boolean().optional(),

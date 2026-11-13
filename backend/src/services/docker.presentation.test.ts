@@ -316,3 +316,16 @@ it('weicht beim Start einem auf dem Host belegten Zusatzport aus und startet ern
   expect(busyHostPort('listen tcp4 0.0.0.0:19132: bind: address already in use')).toBe(19132);
   expect(busyHostPort('irgendwas anderes')).toBeNull();
 });
+
+// Wer nur „Servereinstellungen“ hat, darf über Variablen weder fremde Jars
+// nachladen lassen noch sich zum Operator machen.
+it('schützt Variablen, über die das Abbild fremde Dateien lädt oder Operatoren setzt', async () => {
+  const { isProtectedEnvKey } = await import('./docker.js');
+  for (const key of ['MC_IMAGE', 'jvm_opts', 'PLUGINS', 'MODS', 'MODPACK', 'GENERIC_PACK', 'GENERIC_PACKS', 'PACKWIZ_URL',
+    'PAPER_DOWNLOAD_URL', 'FORGE_INSTALLER_URL', 'FABRIC_LAUNCHER_URL', 'CF_API_KEY', 'MODRINTH_PROJECTS', 'OPS', 'WORLD', 'LD_PRELOAD', 'PATH']) {
+    expect(isProtectedEnvKey(key), key).toBe(true);
+  }
+  for (const key of ['MOTD', 'DIFFICULTY', 'TYPE', 'VERSION', 'MAX_PLAYERS', 'VIEW_DISTANCE', 'TZ', 'ENABLE_WHITELIST', 'LEVEL', 'SEED', 'PVP']) {
+    expect(isProtectedEnvKey(key), key).toBe(false);
+  }
+});

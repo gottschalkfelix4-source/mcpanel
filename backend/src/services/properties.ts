@@ -105,6 +105,26 @@ export function mergeProperties(raw: string, changes: Record<string, string>): s
   return merged.join('\n').replace(/\n+$/, '\n');
 }
 
+/**
+ * Erst in eine Nachbardatei schreiben, dann umbenennen. Eine halb geschriebene
+ * server.properties (volle Platte, Abbruch) verlöre die RCON-Zeilen – das Panel
+ * erreichte den Server dann nicht mehr.
+ */
+async function writeAtomic(serverId: string, content: string): Promise<void> {
+  const target = propsPath(serverId);
+  const temporary = `${target}.mcpanel-${process.pid}-${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(temporary, content, { encoding: 'utf8', flag: 'wx' });
+    const mode = await fs.stat(target).then((st) => st.mode & 0o777).catch(() => null);
+    if (mode !== null) await fs.chmod(temporary, mode).catch(() => {});
+    // Nach dem Warten erneut auflösen: der Pfad darf inzwischen kein Link sein.
+    await fs.rename(temporary, propsPath(serverId));
+  } catch (err) {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
 export async function readProperties(serverId: string) {
   let raw = '';
   try {
@@ -138,7 +158,7 @@ async function savePropertiesUnlocked(serverId: string, changes: Record<string, 
   }
   const merged = mergeProperties(raw, filtered);
   if (Buffer.byteLength(merged) - Buffer.byteLength(raw) > maxGrowth) throw badRequest('Speicherkontingent reicht für diese Änderung nicht aus');
-  await fs.writeFile(propsPath(serverId), merged, 'utf8');
+  await writeAtomic(serverId, merged);
 }
 
 /** Liest eine JSON-Liste wie ops.json / whitelist.json / banned-players.json. */

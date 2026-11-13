@@ -109,7 +109,11 @@ export async function runAutomation(
     };
     await authorize();
     const { state } = await dockerSvc.getState(server);
-    let running = state === 'running';
+    // „starting“ zählt als laufend: ein großes Modpack braucht Minuten bis zum
+    // ersten grünen Healthcheck, und ein geplanter Stopp in dieser Zeit meldete
+    // sonst „war bereits gestoppt“, während der Server weiterläuft.
+    const active = (value: string) => value === 'running' || value === 'starting';
+    let running = active(state);
 
     if (automation.onlyWhenRunning && !running) {
       return finish(automation, 'UEBERSPRUNGEN', 'Server läuft nicht – Aktion ausgelassen');
@@ -118,7 +122,7 @@ export async function runAutomation(
     const warn = Math.min(Math.max(Math.floor(config.warnSeconds ?? 0), 0), 600);
     if (running && warn > 0 && (automation.action === 'RESTART' || automation.action === 'STOP')) {
       await warnPlayers(server, automation.action, warn);
-      running = (await dockerSvc.getState(server)).state === 'running';
+      running = active((await dockerSvc.getState(server)).state);
     }
 
     const message = await withServerOperation(server.id, 'Automatisierung', async () => {
@@ -428,6 +432,9 @@ async function tick(log: (msg: string) => void): Promise<void> {
       lastTickAt = Number.isFinite(saved) && saved > 0 && saved <= now.getTime() ? saved : null;
     }
     const minutes = minutesSince(lastTickAt, now);
+    // Erst lesen, dann den Stand fortschreiben: scheitert die Abfrage (Datenbank
+    // kurz weg), bleiben die Minuten fürs Nachholen beim nächsten Durchlauf stehen.
+    const automations = await prisma.automation.findMany({ where: { enabled: true }, orderBy: { createdAt: 'asc' } });
     lastTickAt = now.getTime();
     // Einmal je Minute festhalten – das genügt zum Nachholen nach einem Neustart.
     if (lastTickSaved !== key) {
@@ -435,7 +442,6 @@ async function tick(log: (msg: string) => void): Promise<void> {
       void setSetting(LAST_TICK_KEY, String(now.getTime())).catch(() => {});
     }
 
-    const automations = await prisma.automation.findMany({ where: { enabled: true } });
     if (automations.length === 0) return;
 
     // Absturzerkennung: Zustand je betroffenem Server einmal abfragen, parallel.
@@ -471,13 +477,20 @@ async function tick(log: (msg: string) => void): Promise<void> {
       }
     }));
 
+    // Fällige Regeln in der Reihenfolge ihrer Termine einreihen. Nach einem
+    // Ausfall werden mehrere Minuten nachgeholt – „03:00 stoppen“ muss dann vor
+    // „03:30 starten“ laufen, sonst bleibt der Server bis zum nächsten Tag aus.
+    const faellig: { automation: Automation; at: number }[] = [];
     for (const automation of automations) {
       let due = false;
+      let at = now.getTime();
 
       if (automation.trigger === 'SCHEDULE' && automation.cron) {
         try {
           const fields = parseCron(automation.cron);
-          due = minutes.some((minute) => matchesCron(fields, minute));
+          const first = minutes.find((minute) => matchesCron(fields, minute));
+          due = first !== undefined;
+          if (first) at = first.getTime();
         } catch {
           due = false;
         }
@@ -493,8 +506,10 @@ async function tick(log: (msg: string) => void): Promise<void> {
       if (!due) continue;
 
       lastMinuteRun.set(automation.id, key);
-      enqueue(automation, automation.trigger === 'SCHEDULE' ? 'zeitplan' : 'ereignis', log);
+      faellig.push({ automation, at });
     }
+    faellig.sort((a, b) => a.at - b.at);
+    for (const { automation } of faellig) enqueue(automation, automation.trigger === 'SCHEDULE' ? 'zeitplan' : 'ereignis', log);
   } finally {
     ticking = false;
   }

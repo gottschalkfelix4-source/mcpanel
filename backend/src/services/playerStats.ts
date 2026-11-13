@@ -84,7 +84,16 @@ export async function startPlayerStats(log: (msg: string) => void): Promise<void
   // Aufenthalte aus dem letzten Lauf enden dort, wo der Spieler zuletzt
   // gesehen wurde – nicht beim Neustart des Panels Stunden später.
   await prisma.$executeRaw`UPDATE "PlayerSession" SET "leftAt" = "lastSeenAt" WHERE "leftAt" IS NULL`;
-  const run = () => void pollAll(log).catch((err) => log(`Spielerstatistik: ${err instanceof Error ? err.message : err}`));
+  // Nie zwei Durchläufe zugleich: beide legten für denselben Spieler einen
+  // Aufenthalt an, und der erste bliebe für immer offen („dauerhaft online“).
+  let polling = false;
+  const run = () => {
+    if (polling) return;
+    polling = true;
+    void pollAll(log)
+      .catch((err) => log(`Spielerstatistik: ${err instanceof Error ? err.message : err}`))
+      .finally(() => { polling = false; });
+  };
   run();
   timer = setInterval(run, POLL_MS);
   timer.unref();

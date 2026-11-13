@@ -69,7 +69,16 @@ export DATABASE_URL="postgresql://$PGUSER@localhost/$DB_NAME?host=/run/postgresq
 # --- Aufraeumen beim Beenden ----------------------------------------------
 stop() {
   log "Fahre herunter ..."
-  [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null || true
+  if [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null; then
+    # Dem Backend Zeit zum Aufraeumen lassen, bevor die Datenbank geht -
+    # sonst verliert es sie mitten in einem Schreibvorgang. Hoechstens 6 s:
+    # Docker beendet nach 10 s hart, und Postgres braucht den Rest.
+    n=0
+    while kill -0 "$NODE_PID" 2>/dev/null && [ $n -lt 12 ]; do
+      sleep 0.5
+      n=$((n + 1))
+    done
+  fi
   nginx -s quit 2>/dev/null || true
   su-exec postgres pg_ctl -D "$PGDATA" -m fast -w -t 30 stop 2>/dev/null || true
   exit "${1:-0}"
@@ -82,6 +91,9 @@ log "Schema wird abgeglichen ..."
 npx prisma db push --skip-generate >/dev/null
 
 log "Backend startet ..."
+# Nur der nginx in diesem Container spricht mit dem Backend - nicht auf der
+# Container-IP lauschen (eigene LAN-IP unter Unraid, Host-Netz).
+export MCPANEL_HOST="${MCPANEL_HOST:-127.0.0.1}"
 node dist/index.js &
 NODE_PID=$!
 

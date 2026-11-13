@@ -223,3 +223,21 @@ describe('reassignBusyPort', () => {
     expect(await reassignBusyPort(server('a'), 25565)).toBe(false);
   });
 });
+
+describe('Spiel- und RCON-Port als Zusatzport', () => {
+  it('veröffentlicht RCON nicht, wenn ein Plugin 25575 als seinen Port angibt', async () => {
+    await put('a', 'plugins/votifier.jar');
+    await put('a', 'plugins/Votifier/config.yml', 'port: 25575\n');
+    const { ports } = await syncServerPorts(server('a'));
+    expect(ports.some((port) => port.containerPort === 25575 || port.hostPort === 25575)).toBe(false);
+  });
+
+  it('trägt dem Sprachchat einen anderen Port ein, statt 25575 zu übernehmen', async () => {
+    await put('a', 'mods/voicechat-fabric.jar');
+    await put('a', 'config/voicechat/voicechat-server.properties', 'port=25575\n');
+    const [port] = (await syncServerPorts(server('a'))).ports;
+    expect([25565, 25575]).not.toContain(port.hostPort);
+    expect(port.containerPort).toBe(port.hostPort);
+    expect(await fs.readFile(path.join(m.root, 'a/config/voicechat/voicechat-server.properties'), 'utf8')).toBe(`port=${port.hostPort}\n`);
+  });
+});

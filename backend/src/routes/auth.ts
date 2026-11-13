@@ -193,7 +193,8 @@ export default async function authRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/password', { preHandler: authenticate }, async (req) => {
+  // Mit Bremse: sonst ließe sich mit einer gestohlenen Sitzung das Passwort durchprobieren.
+  app.post('/password', { preHandler: authenticate, config: loginLimit }, async (req) => {
     const { currentPassword, newPassword } = passwordSchema.parse(req.body);
     const user = req.user!;
     if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {

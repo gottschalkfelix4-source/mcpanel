@@ -97,7 +97,14 @@ export default async function backupRoutes(app: FastifyInstance) {
     const access = await requireServer(req, PERMISSIONS.BACKUP_DOWNLOAD);
     const { backupId } = req.params as { backupId: string };
     const file = await backupFilePath(access.server, backupId);
-    const stat = fs.statSync(file.path);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(file.path);
+    } catch (err) {
+      // Eine aus dem Speicherziel geholte Temp-Datei nicht liegen lassen.
+      await file.cleanup();
+      throw err;
+    }
 
     // Kam die Datei aus einer S3-Zweitablage, liegt sie temporaer auf der
     // Platte – nach dem Streamen (auch bei Abbruch) wieder loeschen.

@@ -58,6 +58,10 @@ function resolveJwtSecret(): string {
 
 export const config = {
   port: Number(process.env.PORT ?? 3000),
+  // Im Alles-in-einem-Abbild setzt der Entrypoint 127.0.0.1: dort spricht nur
+  // der nginx im selben Container mit dem Backend. Offen auf der Container-IP
+  // ließe sich die Anmeldebremse mit gefälschtem X-Forwarded-For umgehen.
+  host: process.env.MCPANEL_HOST?.trim() || '0.0.0.0',
   sftp: {
     enabled: process.env.SFTP_ENABLED !== 'false',
     port: Number(process.env.SFTP_PORT ?? 2222),

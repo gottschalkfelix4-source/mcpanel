@@ -414,7 +414,13 @@ let timer: NodeJS.Timeout | null = null;
 /** Alle 5 s die Server mit Auftrag bzw. offener BlueMap-Zustimmung durchgehen. */
 export function startPregenMonitor(log: (msg: string) => void): void {
   if (timer) return;
+  // Ein Durchlauf nach dem anderen: antwortet ein Server nicht, dauert einer
+  // länger als das Intervall. Ohne diese Bremse stauten sich die Durchläufe in
+  // der Warteschlange, und „Pausieren“ käme erst nach allen an die Reihe.
+  let sweeping = false;
   timer = setInterval(() => {
+    if (sweeping) return;
+    sweeping = true;
     void (async () => {
       const rows = await prisma.setting.findMany({ where: { key: { startsWith: 'pregen.' } } });
       for (const row of rows) {
@@ -426,7 +432,8 @@ export function startPregenMonitor(log: (msg: string) => void): void {
         }
         await monitorServer(server);
       }
-    })().catch((err) => log(`Vorgenerierung: ${err instanceof Error ? err.message : err}`));
+    })().catch((err) => log(`Vorgenerierung: ${err instanceof Error ? err.message : err}`))
+      .finally(() => { sweeping = false; });
   }, 5000);
   timer.unref();
 }

@@ -165,9 +165,13 @@ async function saveUploadUnlocked(
 
 /** Präfix der Zwischenordner von Uploads – Backups lassen sie aus. */
 export const UPLOAD_TEMP_PREFIX = '.upload-';
-/** Gehört der Pfad zu einem halbfertigen Upload (Panel oder SFTP)? */
+/**
+ * Gehört der Pfad zu einem halbfertigen Upload (Panel oder SFTP) oder zu einem
+ * Zwischenordner von Downloads bzw. Welt-Importen? Nach einem Absturz bleiben
+ * solche Reste liegen und haben in einer Sicherung nichts verloren.
+ */
 export function isUploadTemp(relative: string): boolean {
-  return relative.split(/[\\/]/).some((segment) => /^\.(sftp-)?upload-/.test(segment));
+  return relative.split(/[\\/]/).some((segment) => /^\.((sftp-)?upload|download|world-import)-/.test(segment));
 }
 
 export function downloadPath(serverId: string, relative: string): string {

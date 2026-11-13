@@ -61,9 +61,14 @@ export function wasPlannedStop(id: string): boolean {
  * beendeter Server (Exitcode 137) bleibt „gestoppt“ statt nach drei Minuten
  * als Fehler zu erscheinen.
  */
-function endedByPanel(id: string, finishedAt: string | undefined): boolean {
+function endedByPanel(id: string, finishedAt: string | undefined, startedAt?: string): boolean {
   const planned = plannedStops.get(id);
   if (!planned) return false;
+  // Der Stopp gehört zu einem früheren Lauf: der Server wurde danach außerhalb
+  // des Panels gestartet (Unraid, docker start) – ein Absturz dieses Laufs ist
+  // einer und darf nicht als „gestoppt“ durchgehen.
+  const started = Date.parse(startedAt ?? '');
+  if (Number.isFinite(started) && started > planned + 5000) return false;
   const finished = Date.parse(finishedAt ?? '');
   return !Number.isFinite(finished) || finished >= planned - 5000;
 }
@@ -173,6 +178,28 @@ export const PROTECTED_ENV_KEYS = [
   'RCON_CMDS_FIRST_CONNECT',
   'RCON_CMDS_LAST_DISCONNECT',
 ] as const;
+
+/**
+ * Variablen, über die das Abbild von sich aus fremde Dateien nachlädt (Mods,
+ * Plugins, Pakete, Installer, Welten) oder die bestimmen, was der Prozess
+ * lädt und wer Operator ist. Wer nur „Servereinstellungen“ hat, darf darüber
+ * weder ein fremdes Jar einschleusen noch sich selbst zum Operator machen –
+ * dafür gibt es eigene Rechte (Dateien, Inhalte, Modpack, Konfiguration).
+ */
+const PROTECTED_ENV_PATTERN = new RegExp('^(' + [
+  'MODS', 'PLUGINS', 'MODS_FILE', 'PLUGINS_FILE', 'MODPACK', 'MODPACK_URL', 'MRPACK_FILE',
+  'GENERIC_PACKS?(_PREFIX|_SUFFIX)?', 'PACKWIZ_URL', 'WORLD', 'DATAPACKS(_FILE)?',
+  'VANILLATWEAKS_.*', 'SPIGET_RESOURCES', 'MODRINTH_.*', 'CF_.*', 'CURSEFORGE_.*', 'FTB_.*',
+  '.*_(DOWNLOAD_URL|INSTALLER|INSTALLER_URL|LAUNCHER|LAUNCHER_URL|CUSTOM_URL)',
+  'USE_MODPACK_START_SCRIPT', 'APPLY_EXTRA_FILES', 'COPY_.*', 'SYNC_.*',
+  'OPS(_FILE)?', 'ENABLE_SSH', 'PROXY', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'PATH', 'JAVA_HOME',
+].join('|') + ')$');
+
+/** Darf diese Variable nur ein Administrator ändern? Groß-/Kleinschreibung egal. */
+export function isProtectedEnvKey(name: string): boolean {
+  const key = name.toUpperCase();
+  return (PROTECTED_ENV_KEYS as readonly string[]).includes(key) || PROTECTED_ENV_PATTERN.test(key);
+}
 
 /** Image eines Servers: explizite Vorgabe schlägt automatische Wahl. */
 export function imageForServer(server: Server): string {
@@ -525,7 +552,7 @@ export async function getState(server: Server): Promise<{
       // Modpacks antwortet der Status-Ping erst spät oder gar nicht, obwohl
       // Spieler längst verbinden können. Der Zustand wird separat gemeldet.
       state = health === 'starting' ? 'starting' : 'running';
-    } else if (info.State.Dead || (info.State.ExitCode > 0 && !endedByPanel(server.id, info.State.FinishedAt))) {
+    } else if (info.State.Dead || (info.State.ExitCode > 0 && !endedByPanel(server.id, info.State.FinishedAt, info.State.StartedAt))) {
       state = 'error';
     } else if (!wasPlannedStop(server.id) && Date.parse(info.State.StartedAt) > 0) {
       // Fabric kann nach einem fatalen Startfehler trotzdem Exitcode 0 liefern.
@@ -707,7 +734,7 @@ export async function followLogs(
 /** Befehl über stdin schicken (Fallback, wenn RCON nicht erreichbar ist). */
 export async function writeStdin(server: Server, line: string): Promise<void> {
   const c = await findContainer(server);
-  if (!c) throw new Error('Container läuft nicht');
+  if (!c) throw conflict('Der Server läuft nicht');
   const stream = await c.attach({
     stream: true,
     stdin: true,

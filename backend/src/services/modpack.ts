@@ -392,7 +392,7 @@ async function loadPackPlan(server: Server, request: InstallRequest, task: TaskH
   const archivePath = path.join(
     cacheDir(),
     'modpacks',
-    `${request.provider}-${request.projectId}-${archiveSource.id}-${sanitize(archiveSource.filename)}`,
+    `${request.provider}-${sanitize(request.projectId)}-${sanitize(String(archiveSource.id))}-${sanitize(archiveSource.filename)}`,
   );
 
   let url = archiveSource.downloadUrl;
@@ -1274,7 +1274,9 @@ export async function untouchedDirs(original: string, plan: Pick<PackPlan, 'down
 export function isProtectedPackPath(relative: string, worldName: string, keepConfig: boolean): boolean {
   const name = relative.replace(/\\/g, '/');
   const first = name.split('/')[0];
-  return PROTECTED.includes(name) || ['world', 'world_nether', 'world_the_end', worldName, `${worldName}_nether`, `${worldName}_the_end`].includes(first)
+  // Ein Paket darf keinen Ausweichordner der Wiederherstellung mitbringen –
+  // der würde beim nächsten Start als alter Stand zurückgespielt.
+  return PROTECTED.includes(name) || ['.restore-old', '.restore-stage', 'world', 'world_nether', 'world_the_end', worldName, `${worldName}_nether`, `${worldName}_the_end`].includes(first)
     || name === worldName || name.startsWith(worldName + '/')
     || (keepConfig && (name === 'config' || name.startsWith('config/')));
 }

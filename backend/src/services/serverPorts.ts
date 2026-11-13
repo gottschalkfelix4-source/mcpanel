@@ -26,7 +26,9 @@ const QUEUE = 'panel-ports';
 export const MANUAL_SOURCE = 'manual';
 
 /** Ports, die Spielern nicht vergeben werden – Panel, SSH, Samba & Co. */
-const RESERVED = new Set([22, 53, 80, 443, 445, 2375, 2376, 3000, 5432, 7480, 7481, 8080, 8443, 51820]);
+const RESERVED = new Set([22, 53, 80, 443, 445, 2222, 2375, 2376, 3000, 5432, 7480, 7481, 8080, 8443, 51820]);
+/** Spiel- und RCON-Port im Container – nie als Zusatzport einer Erweiterung. */
+const INTERNE_CONTAINERPORTS = new Set([25565, 25575]);
 
 /** Stand der Datenbank in die synchrone Registry übernehmen (Bootstrap). */
 export async function loadServerPorts(): Promise<void> {
@@ -99,7 +101,12 @@ async function syncUnlocked(server: Server): Promise<PortSyncResult> {
   const onNode = nodeIdOf(server.id) !== null;
   const allDetected = await detectModPorts(root);
   // Nur-Panel-Erweiterungen (BlueMap) bekommen lokal keinen veröffentlichten Port.
-  const detected = allDetected.filter((found) => !found.spec.internal || onNode);
+  // Spiel- und RCON-Port stehen einer Erweiterung nicht zu: die Nummer kommt
+  // aus einer Datei, die Mitglieder schreiben, und RCON darf über diesen Weg
+  // nie auf dem Host (oder im Router) landen. Erweiterungen mit `samePort`
+  // bekommen unten einen freien Port eingetragen, alle anderen entfallen.
+  const detected = allDetected.filter((found) =>
+    (!found.spec.internal || onNode) && (found.spec.samePort || !INTERNE_CONTAINERPORTS.has(found.containerPort)));
   const existing = await prisma.serverPort.findMany({ where: { serverId: server.id } });
   const taken = await takenPorts(server.id);
   // Manuelle Ports dieses Servers gelten ebenfalls als belegt.
@@ -115,13 +122,14 @@ async function syncUnlocked(server: Server): Promise<PortSyncResult> {
   for (const found of detected) {
     const row = existing.find((entry) => entry.source === found.spec.key);
     let hostPort: number;
-    if (found.spec.samePort && found.containerPort >= 1024 && !taken.has(found.containerPort)) {
+    const interner = INTERNE_CONTAINERPORTS.has(found.containerPort);
+    if (found.spec.samePort && found.containerPort >= 1024 && !interner && !taken.has(found.containerPort)) {
       // Von Hand in der Konfiguration geänderter Port gewinnt, solange er frei ist.
       hostPort = found.containerPort;
-    } else if (row && !taken.has(row.hostPort)) {
+    } else if (row && !taken.has(row.hostPort) && !INTERNE_CONTAINERPORTS.has(row.hostPort)) {
       hostPort = row.hostPort;
     } else {
-      hostPort = nextFreePort(Math.max(1024, found.containerPort), taken);
+      hostPort = nextFreePort(Math.max(1024, found.containerPort), interner ? new Set([...taken, ...INTERNE_CONTAINERPORTS]) : taken);
     }
     let containerPort = found.containerPort;
 

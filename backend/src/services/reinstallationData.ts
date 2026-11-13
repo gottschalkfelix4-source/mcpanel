@@ -7,6 +7,7 @@ import { serverDir } from '../config.js';
 import { badRequest } from '../lib/errors.js';
 import { safePath } from '../lib/safePath.js';
 import { parseProperties } from './properties.js';
+import { providerId } from '../lib/providerId.js';
 
 export const reinstallSchema = z.object({
   name: z.string().trim().min(2).max(48),
@@ -16,7 +17,7 @@ export const reinstallSchema = z.object({
   memoryMb: z.number().int().min(512).max(65536),
   keepWorld: z.boolean().default(true),
   startAfter: z.boolean().default(false),
-  modpack: z.object({ provider: z.enum(['modrinth', 'curseforge']), projectId: z.string().min(1), versionId: z.string().min(1) }).strict().optional(),
+  modpack: z.object({ provider: z.enum(['modrinth', 'curseforge']), projectId: providerId, versionId: providerId }).strict().optional(),
 }).strict().superRefine((value, context) => {
   if ((value.type === 'MODPACK') !== Boolean(value.modpack)) context.addIssue({ code: 'custom', path: ['modpack'], message: 'Für einen Modpack-Server muss ein Modpack ausgewählt sein.' });
 });

@@ -111,7 +111,8 @@ export default async function worldMapRoutes(app: FastifyInstance) {
     const access = await requireServer(req, PERMISSIONS.WORLD_PREGEN);
     const settings = await getMapSettings(access.server.id);
     await saveMapSettings(access.server.id, { ...settings, bluemapAccepted: true });
-    const result = await acceptBlueMapDownload(access.server);
+    // Schreibt im Serverordner – nicht neben Restore oder Modpack-Installation.
+    const result = await withServerOperation(access.server.id, 'Die Einrichtung der Karte', () => acceptBlueMapDownload(access.server));
     const { state } = await dockerSvc.getState(access.server);
     if (result === 'changed' && state === 'running') await sendServerCommand(access.server, 'bluemap reload').catch(() => null);
     await audit(req.user!.id, access.server.id, 'map.bluemapAccept');

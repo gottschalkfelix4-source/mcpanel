@@ -11,6 +11,7 @@ import { createServer, deleteServer } from './serverManager.js';
 import { getState, recreateContainer } from './docker.js';
 import { dirSize } from './files.js';
 import { rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
+import { restoreAutosave } from './autosave.js';
 import { withServerOperation } from './operations.js';
 import type { TaskHandle } from './tasks.js';
 
@@ -87,7 +88,7 @@ export async function cloneServer(source: Server, options: { name: string; inclu
       if (target) await deleteServer(target, true);
       throw err;
     } finally {
-      if (savingDisabled) await rconCommand(source, 'save-on');
+      if (savingDisabled) await restoreAutosave(source, 'klon');
     }
   });
 }

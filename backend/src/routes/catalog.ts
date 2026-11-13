@@ -5,6 +5,7 @@ import { fetchJson } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
 import * as curseforge from '../providers/curseforge.js';
 import type { ProjectSummary, SearchQuery } from '../providers/types.js';
+import { providerId } from '../lib/providerId.js';
 
 /** Notfall-Liste, falls die Modrinth-API nicht erreichbar ist. */
 const FALLBACK_VERSIONS = [
@@ -24,6 +25,8 @@ const searchSchema = z.object({
   // Die Oberfläche zeigt standardmäßig alle Packs ohne Seitenfilter.
   serverOnly: z.enum(['true', 'false']).default('false'),
 });
+
+const projectParams = z.object({ provider: z.enum(['modrinth', 'curseforge']), projectId: providerId });
 
 export default async function catalogRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -118,14 +121,14 @@ export default async function catalogRoutes(app: FastifyInstance) {
   });
 
   app.get('/:provider/:projectId', async (req) => {
-    const { provider, projectId } = req.params as { provider: string; projectId: string };
+    const { provider, projectId } = projectParams.parse(req.params);
     return provider === 'modrinth'
       ? modrinth.getProject(projectId)
       : curseforge.getProject(projectId);
   });
 
   app.get('/:provider/:projectId/versions', async (req) => {
-    const { provider, projectId } = req.params as { provider: string; projectId: string };
+    const { provider, projectId } = projectParams.parse(req.params);
     const versions =
       provider === 'modrinth'
         ? await modrinth.getVersions(projectId)

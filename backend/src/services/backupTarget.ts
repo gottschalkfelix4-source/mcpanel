@@ -198,6 +198,14 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
+/** Gleicher SMB-Server? Nur dorthin darf das gespeicherte Kennwort gehen. */
+const S3_IDLE_TIMEOUT_MS = 120_000;
+
+function sameSmbHost(a: Pick<SmbConfig, 'host'>, b: Pick<SmbConfig, 'host'>): boolean {
+  const norm = (value: string | undefined) => (value ?? '').trim().toLowerCase();
+  return norm(a.host) === norm(b.host);
+}
+
 /**
  * Übernimmt gespeicherte Geheimnisse für leer gelassene Felder. Das
  * WebDAV-Kennwort gilt nur für den Server, für den es eingetragen wurde –
@@ -208,7 +216,14 @@ export function keepStoredSecrets(input: TargetInput, current: TargetConfig): Ta
   return {
     kind: input.kind,
     keepLocal: input.keepLocal ?? false,
-    smb: { ...input.smb, password: input.smb.password?.length ? input.smb.password : current.smb.password },
+    // Wie bei WebDAV: das gespeicherte Kennwort gilt nur für denselben Server.
+    // Sonst meldete sich das Panel damit an einem neu eingetragenen Server an.
+    smb: {
+      ...input.smb,
+      password: input.smb.password?.length
+        ? input.smb.password
+        : sameSmbHost(input.smb, current.smb) ? current.smb.password : '',
+    },
     s3: {
       ...input.s3,
       secretAccessKey: input.s3.secretAccessKey?.length ? input.s3.secretAccessKey : current.s3.secretAccessKey,
@@ -535,9 +550,25 @@ async function fetchBackupUnlocked(
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcpanel-backup-'));
     const tmp = path.join(dir, 'archive.tar.gz');
     try {
-      const res = await client.send(new GetObjectCommand({ Bucket: config.s3.bucket, Key: s3Key(config, serverId, filename) }), { abortSignal: AbortSignal.timeout(120_000) });
-      if (!res.Body) throw new Error('S3 lieferte keinen Dateiinhalt');
-      await pipeline(res.Body as NodeJS.ReadableStream, fs.createWriteStream(tmp), { signal: AbortSignal.timeout(120_000) });
+      // Leerlauf- statt Gesamtfrist: eine feste Obergrenze von zwei Minuten
+      // ließe sich bei großen Archiven nie einhalten – die Sicherung wäre dann
+      // nicht mehr zurückzuholen. Abgebrochen wird nur, wenn nichts mehr kommt.
+      const idle = new AbortController();
+      let timer = setTimeout(() => idle.abort(new Error('S3 antwortet nicht mehr (Zeitüberschreitung)')), S3_IDLE_TIMEOUT_MS);
+      const alive = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => idle.abort(new Error('S3 antwortet nicht mehr (Zeitüberschreitung)')), S3_IDLE_TIMEOUT_MS);
+      };
+      try {
+        const res = await client.send(new GetObjectCommand({ Bucket: config.s3.bucket, Key: s3Key(config, serverId, filename) }), { abortSignal: idle.signal });
+        if (!res.Body) throw new Error('S3 lieferte keinen Dateiinhalt');
+        alive();
+        const body = res.Body as NodeJS.ReadableStream;
+        body.on('data', alive);
+        await pipeline(body, fs.createWriteStream(tmp), { signal: idle.signal });
+      } finally {
+        clearTimeout(timer);
+      }
       return { path: tmp, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
     } catch (err) {
       await fsp.rm(dir, { recursive: true, force: true });

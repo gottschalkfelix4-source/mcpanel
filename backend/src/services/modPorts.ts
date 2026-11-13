@@ -103,16 +103,18 @@ export const MOD_PORTS: ModPortSpec[] = [
     samePort: true,
     jar: /^voicechat[-_].*\.jar$/i,
     configs: fixed('config/voicechat/voicechat-server.properties', 'plugins/voicechat/voicechat-server.properties'),
+    // [ \t] statt \s: \s frisst Zeilenumbrüche, mit dem m-Schalter wird das bei
+    // einer Datei voller Leerzeilen quadratisch und blockiert das ganze Panel.
     read: (text) => {
-      const match = /^\s*port\s*=\s*(-?\d+)\s*$/m.exec(text);
+      const match = /^[ \t]*port[ \t]*=[ \t]*(-?\d+)[ \t]*\r?$/m.exec(text);
       if (!match) return null;
       const port = Number(match[1]);
       // -1 = Spielport mitbenutzen (der ist per UDP ohnehin freigegeben)
       if (port === -1) return 'game';
       return PORT_RANGE(port) ? port : null;
     },
-    write: (text, port) => /^\s*port\s*=.*$/m.test(text)
-      ? text.replace(/^\s*port\s*=.*$/m, `port=${port}`)
+    write: (text, port) => /^[ \t]*port[ \t]*=.*$/m.test(text)
+      ? text.replace(/^[ \t]*port[ \t]*=.*$/m, `port=${port}`)
       : `${text}${text && !text.endsWith('\n') ? '\n' : ''}port=${port}\n`,
   },
   {
@@ -134,7 +136,7 @@ export const MOD_PORTS: ModPortSpec[] = [
     internal: true,
     jar: /^bluemap[-_].*\.jar$/i,
     configs: fixed('config/bluemap/webserver.conf', 'plugins/BlueMap/webserver.conf'),
-    read: (text) => matchPort(text, /^\s*port\s*[:=]\s*(\d+)/m),
+    read: (text) => matchPort(text, /^[ \t]*port[ \t]*[:=][ \t]*(\d+)/m),
   },
   {
     key: 'dynmap',

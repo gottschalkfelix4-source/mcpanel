@@ -4,6 +4,7 @@ import { prisma } from '../db.js';
 
 import { authenticateToken, enforceTotpPolicy, getServerAccess } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
+import { HttpError, badRequest, forbidden } from '../lib/errors.js';
 import * as dockerSvc from '../services/docker.js';
 import { listPlayers } from '../services/rcon.js';
 import { sendServerCommand } from '../services/consoleCommand.js';
@@ -12,50 +13,88 @@ import { clientAddress, isServerNetworkAddress } from '../lib/network.js';
 
 interface StreamEntry {
   stop: () => void;
-  refs: number;
+  /**
+   * Sockets, die zuschauen. Ein Set statt eines Zählers: jeder Socket zählt
+   * genau einmal und kann nur abziehen, was er selbst beigetragen hat – ein
+   * fehlgeschlagenes Abo oder zwei gleichzeitige „reattach“ bringen die Zahl
+   * nicht mehr durcheinander (sonst endet der Stream für alle anderen mit).
+   */
+  viewers: Set<string>;
+  /** Zählt Neuaufbauten; nur der jüngste darf seinen Stream behalten. */
+  generation: number;
+  restartedAt: number;
 }
 
 const streams = new Map<string, StreamEntry>();
 const statusTimers = new Map<string, NodeJS.Timeout>();
 
-/** Startet (oder teilt) den Live-Log-Stream eines Servers. */
-async function attachStream(io: IOServer, server: Server) {
-  const existing = streams.get(server.id);
-  if (existing) {
-    existing.refs++;
-    return;
-  }
-
-  const entry: StreamEntry = { refs: 1, stop: () => {} };
-  streams.set(server.id, entry);
-
-  const room = roomForServer(server.id);
+/** Öffnet den Docker-Log-Stream und verteilt ganze Zeilen an die Zuschauer. */
+function openLogStream(server: Server): Promise<() => void> {
   let buffer = '';
-
-  try {
-  const stop = await dockerSvc.followLogs(server, (chunk) => {
+  return dockerSvc.followLogs(server, (chunk) => {
     buffer += chunk;
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
     if (lines.length > 0) emitToServer(server.id, 'console', { serverId: server.id, lines });
   });
+}
 
-  if (streams.get(server.id) !== entry || entry.refs <= 0) stop();
+/** Stream (neu) aufbauen; übernimmt ihn nur, wenn inzwischen nichts Neueres lief. */
+async function connectStream(server: Server, entry: StreamEntry): Promise<void> {
+  const generation = ++entry.generation;
+  entry.stop();
+  entry.stop = () => {};
+  const stop = await openLogStream(server);
+  if (streams.get(server.id) !== entry || entry.viewers.size === 0 || entry.generation !== generation) stop();
   else entry.stop = stop;
+}
+
+/** Startet (oder teilt) den Live-Log-Stream eines Servers. */
+async function attachStream(server: Server, socketId: string) {
+  const existing = streams.get(server.id);
+  if (existing) {
+    existing.viewers.add(socketId);
+    return;
+  }
+
+  const entry: StreamEntry = { viewers: new Set([socketId]), stop: () => {}, generation: 0, restartedAt: Date.now() };
+  streams.set(server.id, entry);
+  try {
+    await connectStream(server, entry);
   } catch (err) {
-    if (streams.get(server.id) === entry) streams.delete(server.id);
+    // Wer währenddessen dazukam, behält seinen Platz; der Stream kommt mit dem
+    // nächsten „reattach“. Dieser Socket selbst gilt als nicht angeschlossen.
+    detachStream(server.id, socketId);
     throw err;
   }
 }
 
-function detachStream(serverId: string) {
+function detachStream(serverId: string, socketId: string) {
   const entry = streams.get(serverId);
   if (!entry) return;
-  entry.refs--;
-  if (entry.refs <= 0) {
+  entry.viewers.delete(socketId);
+  if (entry.viewers.size === 0) {
     entry.stop();
     streams.delete(serverId);
   }
+}
+
+/**
+ * Container wurde neu gestartet: Stream neu aufsetzen, Zuschauer behalten.
+ * Alle Zuschauer melden das gleichzeitig – ein Neuaufbau genügt.
+ */
+async function restartStream(server: Server, socketId: string) {
+  const entry = streams.get(server.id);
+  if (!entry) return attachStream(server, socketId);
+  entry.viewers.add(socketId);
+  if (entry.generation > 0 && Date.now() - entry.restartedAt < 1000) return;
+  entry.restartedAt = Date.now();
+  await connectStream(server, entry);
+}
+
+/** Nur eigene, für Nutzer gedachte Meldungen weitergeben – nie Interna aus Datenbank oder Docker. */
+function fehlertext(err: unknown): string {
+  return err instanceof HttpError ? err.message : 'Interner Fehler';
 }
 
 /** Pollt Status/Stats/Spieler und schickt sie an alle Zuschauer. */
@@ -131,7 +170,10 @@ export function setupConsoleGateway(io: IOServer) {
     const subscribed = new Set<string>();
 
     socket.on('subscribe', async (payload: { serverId: string }, ack?: (r: unknown) => void) => {
+      let serverId: string | null = null;
+      let bereitsAbonniert = true;
       try {
+        if (typeof payload?.serverId !== 'string') throw badRequest('Ungültige Anfrage');
         const access = await getServerAccess(await authenticateToken(socket.data.token), payload.serverId);
         if (!access.can(PERMISSIONS.CONSOLE_READ)) {
           ack?.({ ok: false, error: 'Keine Berechtigung für die Konsole' });
@@ -140,24 +182,36 @@ export function setupConsoleGateway(io: IOServer) {
 
         socket.join(roomForServer(access.server.id));
         // Derselbe Socket abonniert zweimal: einmal aus dem Server-Layout, einmal
-        // aus der Konsole. Nur das erste Abo darf den Zähler erhöhen – sonst
-        // haelt jedes weitere den Log-Stream fest, den "unsubscribe" nur einmal
-        // wieder freigibt.
-        const bereitsAbonniert = subscribed.has(access.server.id);
+        // aus der Konsole.
+        serverId = access.server.id;
+        bereitsAbonniert = subscribed.has(access.server.id);
         subscribed.add(access.server.id);
 
         const history = await dockerSvc.tailLogs(access.server, 400);
         if (!socket.connected || !subscribed.has(access.server.id)) return;
         const currentAccess = await getServerAccess(await authenticateToken(socket.data.token), access.server.id);
-        if (!currentAccess.can(PERMISSIONS.CONSOLE_READ)) throw new Error('Konsolenrecht wurde entzogen');
+        if (!currentAccess.can(PERMISSIONS.CONSOLE_READ)) throw forbidden('Konsolenrecht wurde entzogen');
         socket.emit('console:history', { serverId: access.server.id, lines: history.split('\n') });
 
-        if (!bereitsAbonniert) await attachStream(io, access.server);
+        await attachStream(access.server, socket.id);
+        // Während des Wartens getrennt oder abbestellt: nicht hängen bleiben.
+        if (!socket.connected || !subscribed.has(access.server.id)) {
+          detachStream(access.server.id, socket.id);
+          return;
+        }
         startStatusPolling(io, access.server.id);
 
         ack?.({ ok: true, permissions: access.permissions });
       } catch (err) {
-        ack?.({ ok: false, error: err instanceof Error ? err.message : 'Fehler' });
+        // Ein gescheitertes Erst-Abo zählt nicht: sonst überspränge der nächste
+        // Versuch das Anschließen und die Konsole bliebe bis zum Neuverbinden stumm.
+        if (serverId && !bereitsAbonniert) {
+          subscribed.delete(serverId);
+          socket.leave(roomForServer(serverId));
+          detachStream(serverId, socket.id);
+        }
+        if (!(err instanceof HttpError)) console.error('[konsole] Abo fehlgeschlagen:', err instanceof Error ? err.message : err);
+        ack?.({ ok: false, error: fehlertext(err) });
       }
     });
 
@@ -165,20 +219,21 @@ export function setupConsoleGateway(io: IOServer) {
       if (!payload || !subscribed.has(payload.serverId)) return;
       socket.leave(roomForServer(payload.serverId));
       subscribed.delete(payload.serverId);
-      detachStream(payload.serverId);
+      detachStream(payload.serverId, socket.id);
     });
 
     socket.on(
       'command',
       async (payload: { serverId: string; command: string }, ack?: (r: unknown) => void) => {
         try {
+          if (typeof payload?.serverId !== 'string') throw badRequest('Ungültige Anfrage');
           const access = await getServerAccess(await authenticateToken(socket.data.token), payload.serverId);
           if (!access.can(PERMISSIONS.CONSOLE_COMMAND)) {
             ack?.({ ok: false, error: 'Keine Berechtigung zum Senden von Befehlen' });
             return;
           }
 
-          if (typeof payload.command !== 'string' || payload.command.length > 1000 || /[\r\n]/.test(payload.command)) throw new Error('Ungültiger Befehl');
+          if (typeof payload.command !== 'string' || payload.command.length > 1000 || /[\r\n]/.test(payload.command)) throw badRequest('Ungültiger Befehl');
           const command = payload.command.trim().replace(/^\//, '');
           if (!command) return;
 
@@ -204,34 +259,24 @@ export function setupConsoleGateway(io: IOServer) {
             })
             .catch(() => {});
         } catch (err) {
-          ack?.({ ok: false, error: err instanceof Error ? err.message : 'Fehler' });
+          if (!(err instanceof HttpError)) console.error('[konsole] Befehl fehlgeschlagen:', err instanceof Error ? err.message : err);
+          ack?.({ ok: false, error: fehlertext(err) });
         }
       },
     );
 
     /** Container wurde neu gestartet – Log-Stream neu aufsetzen. */
     socket.on('reattach', async (payload: { serverId: string }) => {
-      if (!payload || !subscribed.has(payload.serverId)) return;
+      if (!payload || typeof payload.serverId !== 'string' || !subscribed.has(payload.serverId)) return;
       try {
       const access = await getServerAccess(await authenticateToken(socket.data.token), payload.serverId);
       if (!access.can(PERMISSIONS.CONSOLE_READ)) return;
-      const server = access.server;
-      const entry = streams.get(payload.serverId);
-      // Zuschauerzahl vor dem Abräumen sichern: der neue Stream muss sie
-      // übernehmen, sonst beendet ihn der erste Abgang für alle anderen mit.
-      const zuschauer = entry?.refs ?? 1;
-      if (entry) {
-        entry.stop();
-        streams.delete(payload.serverId);
-      }
-      await attachStream(io, server);
-      const replacement = streams.get(payload.serverId);
-      if (replacement) replacement.refs = Math.max(1, zuschauer);
+      await restartStream(access.server, socket.id);
       } catch { /* Disconnects and revoked access cannot reattach a stream. */ }
     });
 
     socket.on('disconnect', () => {
-      for (const serverId of subscribed) detachStream(serverId);
+      for (const serverId of subscribed) detachStream(serverId, socket.id);
       subscribed.clear();
     });
   });

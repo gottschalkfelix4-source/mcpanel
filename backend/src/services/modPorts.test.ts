@@ -96,3 +96,26 @@ describe('writeModPort', () => {
     expect((await fs.readdir(path.join(root, 'config/voicechat'))).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 });
+
+describe('Laufzeit der Port-Erkennung', () => {
+  // Die Dateien schreiben Mitglieder. Mit „\\s*“ und dem m-Schalter brauchte
+  // eine Datei voller Leerzeilen quadratisch lange und hielt das Panel an.
+  it('bleibt bei einer Konfiguration aus lauter Leerzeilen schnell', async () => {
+    await put('mods/voicechat-fabric.jar');
+    await put('mods/bluemap-5.jar');
+    const leer = '\n'.repeat(400_000);
+    await put('config/voicechat/voicechat-server.properties', leer);
+    await put('config/bluemap/webserver.conf', leer);
+    const start = Date.now();
+    const found = await detectModPorts(root);
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(found.map((entry) => entry.containerPort).sort()).toEqual([24454, 8100].sort());
+  });
+
+  it('liest den Port weiterhin mit Einrückung und Windows-Zeilenenden', async () => {
+    await put('mods/voicechat-fabric.jar');
+    await put('config/voicechat/voicechat-server.properties', '# Kommentar\r\n  port = 24500 \r\nbind_address=\r\n');
+    const [found] = await detectModPorts(root);
+    expect(found.containerPort).toBe(24500);
+  });
+});

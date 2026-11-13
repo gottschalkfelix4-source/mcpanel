@@ -276,7 +276,8 @@ function toSummary(m: CfMod): ProjectSummary {
     author: m.authors?.[0]?.name ?? '',
     categories: (m.categories ?? []).map((c) => c.name),
     gameVersions: [...new Set((m.latestFilesIndexes ?? []).map((f) => f.gameVersion))],
-    websiteUrl: m.links?.websiteUrl ?? null,
+    // Landet als Link in der Oberfläche – nur echte Webadressen durchlassen.
+    websiteUrl: /^https:\/\//i.test(m.links?.websiteUrl ?? '') ? m.links!.websiteUrl! : null,
     updatedAt: m.dateModified,
   };
 }

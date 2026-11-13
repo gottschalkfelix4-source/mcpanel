@@ -15,6 +15,7 @@ import * as dockerSvc from '../services/docker.js';
 import { guardMutations } from './mutationGuard.js';
 import { remainingDiskBytes } from '../services/quota.js';
 import { safePath } from '../lib/safePath.js';
+import { providerId } from '../lib/providerId.js';
 
 /**
  * Einzelne Mods bzw. Plugins eines Servers. Beides ist derselbe Vorgang - eine
@@ -75,8 +76,8 @@ export default async function contentRoutes(app: FastifyInstance) {
     const body = z
       .object({
         provider: z.enum(['modrinth', 'curseforge']),
-        projectId: z.string().min(1),
-        versionId: z.string().min(1),
+        projectId: providerId,
+        versionId: providerId,
       })
       .parse(req.body);
 

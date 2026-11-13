@@ -1,11 +1,12 @@
-import { hasInterruptedRestore, recoverInterruptedRestore } from './services/restoreRecovery.js';
+import { recoverInterruptedRestore } from './services/restoreRecovery.js';
+import { resumeInterruptedRestore } from './services/restoreResume.js';
 import { reconcileProxy } from './services/proxy.js';
 import bcrypt from 'bcryptjs';
 import path from 'node:path';
 import { config, setHostDataRoot } from './config.js';
 import { prisma } from './db.js';
 import { ensureDataDirs, runAutostart } from './services/serverManager.js';
-import { detectHostDataRoot, ensureNetwork, getState, onServerStart, stop, recreateContainer } from './services/docker.js';
+import { detectHostDataRoot, ensureNetwork, getState, onServerStart } from './services/docker.js';
 import { rconCommand } from './services/rcon.js';
 import { cleanupPartialBackups } from './services/backups.js';
 import { loadServerPorts, reassignBusyPort, syncServerPorts } from './services/serverPorts.js';
@@ -149,10 +150,7 @@ export async function bootstrap(log: (msg: string) => void): Promise<void> {
       await cleanupPartialBackups(server.id).then((count) => {
         if (count > 0) log(`${server.name}: ${count} unvollständige Sicherung(en) eines abgebrochenen Laufs entfernt`);
       }).catch(() => {});
-      const interrupted = await hasInterruptedRestore(server.id);
-      if (interrupted) await stop(server);
-      await recoverInterruptedRestore(server.id);
-      if (interrupted) await recreateContainer(await prisma.server.findUniqueOrThrow({ where: { id: server.id } }));
+      if (!(await resumeInterruptedRestore(server))) await recoverInterruptedRestore(server.id);
     } catch (err) {
       log(`Wiederherstellung für ${server.name} konnte nicht aufgeräumt werden: ${err instanceof Error ? err.message : err}`);
     }

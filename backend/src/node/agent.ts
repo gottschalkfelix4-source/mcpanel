@@ -448,6 +448,9 @@ function startRconProxy(profile: NodeProfile, allowed: (address: string | undefi
       }
       containerAddress(profile, request.container).then((ip) => {
         clearTimeout(timeout);
+        // Hat das Panel inzwischen aufgelegt, keine Verbindung zum Server
+        // öffnen – niemand würde sie je wieder schließen.
+        if (client.destroyed) return;
         const upstream = net.createConnection({ host: ip, port: 25575 });
         const close = () => { client.destroy(); upstream.destroy(); };
         upstream.on('error', (err) => {

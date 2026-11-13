@@ -7,7 +7,7 @@ const m = vi.hoisted(() => ({ root: '', update: vi.fn() }));
 vi.mock('../config.js', () => ({ serverDir: (id: string) => path.join(m.root, id) }));
 vi.mock('../db.js', () => ({ prisma: { server: { update: m.update } } }));
 
-const { recoverInterruptedRestore, restorePaths, STALE_RESTORE_MS } = await import('./restoreRecovery.js');
+const { hasInterruptedRestore, recoverInterruptedRestore, restorePaths, STALE_RESTORE_MS } = await import('./restoreRecovery.js');
 
 beforeEach(async () => { m.root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcpanel-restore-')); m.update.mockReset(); });
 afterEach(async () => { await fs.rm(m.root, { recursive: true, force: true }); });
@@ -103,4 +103,42 @@ it('tauscht nicht, wenn der neue Stand den Ordner schon enthält oder der Name e
   await expect(commitRestore('srv', ['world'])).rejects.toThrow('existiert im neuen Stand bereits');
   expect(await fs.readFile(path.join(dir, 'alt.txt'), 'utf8')).toBe('alt');
   expect(await fs.readFile(path.join(dir, 'world/level.dat'), 'utf8')).toBe('welt');
+});
+
+// Der Ausweichordner alter Versionen liegt im Serverordner – dort schreiben
+// Mitglieder und der Minecraft-Prozess. Eine Verknüpfung dieses Namens darf
+// nie dazu führen, dass fremde Ordner in den Serverordner verschoben werden.
+it('folgt keiner Verknüpfung namens .restore-old aus dem Serverordner heraus', async () => {
+  const { dir } = restorePaths('srv');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'welt.txt'), 'aktuell');
+  const fremd = path.join(m.root, 'geheim');
+  await fs.mkdir(fremd);
+  await fs.writeFile(path.join(fremd, '.jwt-secret'), 'geheimnis');
+  await fs.symlink(fremd, path.join(dir, '.restore-old'));
+
+  expect(await hasInterruptedRestore('srv')).toBe(false);
+  await recoverInterruptedRestore('srv');
+
+  expect(await fs.readFile(path.join(fremd, '.jwt-secret'), 'utf8')).toBe('geheimnis');
+  await expect(fs.lstat(path.join(dir, '.jwt-secret'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await fs.readFile(path.join(dir, 'welt.txt'), 'utf8')).toBe('aktuell');
+  expect((await fs.readdir(m.root)).some((name) => name.startsWith('srv.recovery-'))).toBe(false);
+});
+
+it('birgt einen Altstand nur einmal – ein erneut angelegter Ordner erzwingt keine weitere Vollkopie', async () => {
+  const { dir } = restorePaths('srv');
+  await fs.mkdir(path.join(dir, '.restore-old'), { recursive: true });
+  await fs.writeFile(path.join(dir, '.restore-old', 'welt.txt'), 'alt');
+  await fs.writeFile(path.join(dir, 'rest.txt'), 'bruchstück');
+  await recoverInterruptedRestore('srv');
+  expect(await fs.readFile(path.join(dir, 'welt.txt'), 'utf8')).toBe('alt');
+  const kopien = () => fs.readdir(m.root).then((names) => names.filter((name) => name.startsWith('srv.recovery-')).length);
+  expect(await kopien()).toBe(1);
+
+  await fs.mkdir(path.join(dir, '.restore-old'));
+  expect(await hasInterruptedRestore('srv')).toBe(false);
+  await recoverInterruptedRestore('srv');
+  expect(await kopien()).toBe(1);
+  expect(await fs.readFile(path.join(dir, 'welt.txt'), 'utf8')).toBe('alt');
 });

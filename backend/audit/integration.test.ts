@@ -16,7 +16,7 @@ vi.mock('../src/services/docker.js', () => ({
   ensureNetwork: vi.fn(), ensureImage: vi.fn(), imageForServer: () => 'fixture',
   createContainer: docker.create, removeContainer: docker.remove, recreateContainer: docker.recreate,
   getState: async () => ({ state: 'stopped' }), start: vi.fn(), stop: vi.fn(),
-  buildEnv: () => [], PROTECTED_ENV_KEYS: [], getStats: async () => null,
+  buildEnv: () => [], PROTECTED_ENV_KEYS: [], isProtectedEnvKey: () => false, getStats: async () => null,
   tailLogs: async () => 'fixture history', followLogs: async () => () => {}, writeStdin: vi.fn(),
 }));
 vi.mock('../src/services/rcon.js', () => ({ rconCommand: async () => 'fixture response', listPlayers: async () => ({ online: 0, max: 20, players: [] }) }));

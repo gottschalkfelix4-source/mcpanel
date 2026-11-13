@@ -16,6 +16,7 @@ import { serverBackupDir, serverDir } from '../config.js';
 import { prisma } from '../db.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import * as dockerSvc from './docker.js';
+import { restoreAutosave } from './autosave.js';
 import { rconCommand, SAVE_FLUSH_TIMEOUT_MS } from './rcon.js';
 import { invalidateDiskUsage } from './diskUsage.js';
 import { notify } from './notify.js';
@@ -67,23 +68,6 @@ const EXCLUDE = new Set(['cache', 'logs', 'crash-reports', '.cache', 'libraries'
 
 const PARTIAL_SUFFIX = '.part';
 
-/**
- * Automatisches Speichern wieder einschalten. Scheitert das, liefe der
- * Server ohne Autosave weiter – ein späterer Absturz kostete dann Stunden.
- * Deshalb mehrere Versuche und eine deutliche Meldung im Protokoll.
- */
-async function restoreAutosave(server: Server): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await rconCommand(server, 'save-on');
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
-    }
-  }
-  console.error(`[backup] ${server.name}: „save-on“ kam nicht an – automatisches Speichern ist womöglich aus. Bitte „save-on“ in der Konsole senden oder den Server neu starten.`);
-}
-
 /** Halbe Archive eines abgebrochenen Panel-Laufs entfernen. */
 export async function cleanupPartialBackups(serverId: string): Promise<number> {
   const dir = serverBackupDir(serverId);
@@ -113,6 +97,16 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
   await task?.update(5, 'Speicherplatz wird geprüft …');
   await assertDiskAvailable(server);
 
+  // Ist ein Speicherziel eingerichtet, entsteht das Archiv direkt dort – ohne
+  // lokale Kopie und ohne zweiten Durchgang zum Hochladen. Klappt das nicht
+  // (Ziel nicht erreichbar, Server nimmt keinen Upload unbekannter Länge an),
+  // wird wie früher lokal gepackt und danach hochgeladen.
+  const store = await getTarget();
+  const targetActive = isEnabled(store);
+  const targetId = targetActive ? await registerTarget(store) : null;
+  // (Vor „save-off“ ermittelt: ein Datenbankfehler hier darf den Server nicht
+  // ohne automatisches Speichern zurücklassen.)
+
   const { state } = await dockerSvc.getState(server);
   const running = state === 'running';
 
@@ -127,13 +121,6 @@ async function createBackupUnlocked(server: Server, options: CreateBackupOptions
     }
   }
 
-  // Ist ein Speicherziel eingerichtet, entsteht das Archiv direkt dort – ohne
-  // lokale Kopie und ohne zweiten Durchgang zum Hochladen. Klappt das nicht
-  // (Ziel nicht erreichbar, Server nimmt keinen Upload unbekannter Länge an),
-  // wird wie früher lokal gepackt und danach hochgeladen.
-  const store = await getTarget();
-  const targetActive = isEnabled(store);
-  const targetId = targetActive ? await registerTarget(store) : null;
   let direct: { size: number; entries: number } | null = null;
   let directError: string | null = null;
 

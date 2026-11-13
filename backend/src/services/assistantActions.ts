@@ -493,6 +493,8 @@ interface Offen {
   vorschlag: AktionsVorschlag;
   plan: Plan;
   ablauf: number;
+  /** Eine Freigabe läuft gerade – eine zweite, gleichzeitige wird abgewiesen. */
+  inArbeit?: boolean;
 }
 
 const offen = new Map<string, Offen>();
@@ -594,9 +596,28 @@ export async function executeAction(
 ): Promise<{ taskId: string; titel: string }> {
   aufraeumen();
   const eintrag = offen.get(id);
-  if (!eintrag || eintrag.userId !== user.id || eintrag.serverId !== serverId) {
+  if (!eintrag || eintrag.inArbeit || eintrag.userId !== user.id || eintrag.serverId !== serverId) {
     throw notFound('Dieser Vorschlag ist abgelaufen oder wurde schon ausgeführt. Frag den Assistenten bitte erneut.');
   }
+  // Sofort belegen, noch vor dem ersten `await`: zwei gleichzeitige Freigaben
+  // derselben ID kämen sonst beide durch. Scheitert die Freigabe an einer
+  // Prüfung oder an der Serversperre, bleibt der Vorschlag gültig.
+  eintrag.inArbeit = true;
+  try {
+    return await freigeben(user, serverId, id, freigabe, eintrag);
+  } catch (err) {
+    eintrag.inArbeit = false;
+    throw err;
+  }
+}
+
+async function freigeben(
+  user: User,
+  serverId: string,
+  id: string,
+  freigabe: Freigabe,
+  eintrag: Offen,
+): Promise<{ taskId: string; titel: string }> {
   if (!(await actionsEnabled())) {
     throw forbidden('Ein Administrator hat Reparaturen durch den KI-Assistenten abgeschaltet.');
   }
@@ -613,10 +634,6 @@ export async function executeAction(
   if (mitSicherung && !access.can(PERMISSIONS.BACKUP_CREATE)) {
     throw forbidden(`Für das Backup vorab fehlt dir das Recht "${PERMISSIONS.BACKUP_CREATE}"`);
   }
-
-  // Ab hier verbraucht – auch wenn die Ausführung scheitert, soll derselbe
-  // Vorschlag nicht ein zweites Mal laufen.
-  offen.delete(id);
 
   const taskId = await runTask(serverId, 'assistant.action', async (task) => {
     await task.update(5, vorschlag.titel);
@@ -638,6 +655,9 @@ export async function executeAction(
     await task.update(100, 'Erledigt');
   });
 
+  // Der Auftrag ist angenommen: ab hier verbraucht – auch wenn die Ausführung
+  // scheitert, soll derselbe Vorschlag nicht ein zweites Mal laufen.
+  offen.delete(id);
   await audit(user.id, serverId, 'assistant.action', vorschlag.titel.slice(0, 200));
   return { taskId, titel: vorschlag.titel };
 }

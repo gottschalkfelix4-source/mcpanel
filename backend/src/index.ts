@@ -147,23 +147,33 @@ const io = new IOServer(app.server, {
 });
 setupConsoleGateway(io);
 
-await bootstrap((msg) => app.log.info(msg));
-try { await startSftp((msg) => app.log.info(msg)); }
-catch (err) { app.log.error({ err }, 'SFTP-Dateizugriff konnte nicht gestartet werden'); }
-
-await app.listen({ port: config.port, host: '0.0.0.0' });
-app.log.info(`MCPanel-Backend läuft auf Port ${config.port}`);
-
 // Eine vergessene Fehlerbehandlung irgendwo im Hintergrund darf nicht das
 // ganze Panel beenden – im Alles-in-einem-Abbild risse das Datenbank und
-// nginx mit und bräche jede laufende Sicherung ab.
+// nginx mit und bräche jede laufende Sicherung ab. Vor `bootstrap` gesetzt:
+// der stößt bereits Hintergrundarbeit an (Autostart, Zeitpläne, Node-Wächter).
 process.on('unhandledRejection', (reason) => {
   app.log.error({ err: reason }, 'Unbehandelter Fehler im Hintergrund');
 });
 
+await bootstrap((msg) => app.log.info(msg));
+try { await startSftp((msg) => app.log.info(msg)); }
+catch (err) { app.log.error({ err }, 'SFTP-Dateizugriff konnte nicht gestartet werden'); }
+
+await app.listen({ port: config.port, host: config.host });
+app.log.info(`MCPanel-Backend läuft auf Port ${config.port}`);
+
+let shuttingDown = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
+    // Ein zweites Signal startet das Aufräumen nicht noch einmal.
+    if (shuttingDown) return;
+    shuttingDown = true;
     app.log.info('Fahre herunter …');
+    // Ein laufender Upload oder Download hielte `close()` beliebig lange offen,
+    // bis Docker hart beendet. Deshalb eine Frist und offene Verbindungen kappen.
+    setTimeout(() => process.exit(0), 5000).unref();
+    app.server.closeIdleConnections();
+    setTimeout(() => app.server.closeAllConnections(), 1500).unref();
     stopPanelBackupScheduler();
     stopScheduler();
     stopWatcher();

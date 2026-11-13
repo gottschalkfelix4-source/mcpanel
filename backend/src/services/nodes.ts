@@ -49,6 +49,7 @@ import {
 import * as dockerSvc from './docker.js';
 import { assertNodeReady, forgetNodeClient, isNodeReady, nodeNotReadyReason, rawNodeDocker, setNodeReady } from './nodeClients.js';
 import { setOperationGuard } from './operations.js';
+import { resumeInterruptedRestore } from './restoreResume.js';
 import { getPublicHost } from './settings.js';
 import {
   ensureTunnel,
@@ -315,6 +316,9 @@ async function autostartNode(node: Node): Promise<void> {
   const servers = await prisma.server.findMany({ where: { nodeId: node.id, autoStart: true } });
   for (const server of servers) {
     try {
+      // War die Node beim Panel-Start noch nicht da, hat dort niemand einen
+      // unterbrochenen Restore aufgeräumt – das muss vor dem Start geschehen.
+      await resumeInterruptedRestore(server);
       const { state } = await dockerSvc.getState(server);
       if (state !== 'running' && state !== 'starting') await dockerSvc.start(server);
     } catch (err) {
