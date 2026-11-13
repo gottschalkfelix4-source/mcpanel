@@ -29,15 +29,33 @@ function cleanLine(raw: string): string {
   return PROMPT_ONLY.test(line) ? '' : line;
 }
 
+/** Eine Zeile mit fester Nummer: Beim Weiterrollen bleiben die Schlüssel stabil. */
+interface Line {
+  id: number;
+  text: string;
+  cls: string;
+}
+
+let nextLineId = 0;
+function toLines(raw: string[]): Line[] {
+  const out: Line[] = [];
+  for (const entry of raw) {
+    const text = cleanLine(entry);
+    // Farbe einmal beim Eintreffen bestimmen, nicht bei jedem Neuzeichnen.
+    if (text.length > 0) out.push({ id: nextLineId++, text, cls: lineClass(text) });
+  }
+  return out;
+}
+
+const LineRow = memo(function LineRow({ line }: { line: Line }) {
+  return <div className={clsx('whitespace-pre-wrap break-words', line.cls)}>{line.text}</div>;
+});
+
 /** Eigene Komponente: Tippen im Befehlsfeld zeichnet die bis zu 3000 Zeilen nicht neu. */
-const ConsoleLines = memo(function ConsoleLines({ lines }: { lines: string[] }) {
+const ConsoleLines = memo(function ConsoleLines({ lines }: { lines: Line[] }) {
   return (
     <>
-      {lines.map((line, i) => (
-        <div key={i} className={clsx('whitespace-pre-wrap break-words', lineClass(line))}>
-          {line}
-        </div>
-      ))}
+      {lines.map((line) => <LineRow key={line.id} line={line} />)}
     </>
   );
 });
@@ -56,7 +74,7 @@ export default function ConsoleTab() {
   const { server, can, liveState } = useServer();
   const toast = useToast();
 
-  const [lines, setLines] = useState<string[]>([]);
+  const [lines, setLines] = useState<Line[]>([]);
   const [command, setCommand] = useState('');
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -69,19 +87,34 @@ export default function ConsoleTab() {
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Eingehende Zeilen sammeln und höchstens einmal pro Bild übernehmen – beim
+  // Start eines Modpacks kommen sie schneller, als sich neu zeichnen lohnt.
+  const pending = useRef<Line[]>([]);
+  const frame = useRef<number | null>(null);
   const append = useCallback((incoming: string[]) => {
-    setLines((prev) => {
-      const next = [...prev, ...incoming.map(cleanLine).filter((l) => l.length > 0)];
-      return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+    const add = toLines(incoming);
+    if (add.length === 0) return;
+    pending.current.push(...add);
+    if (frame.current !== null) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      const batch = pending.current;
+      pending.current = [];
+      setLines((prev) => {
+        const next = prev.concat(batch);
+        return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+      });
     });
   }, []);
+  useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current); }, []);
 
   useEffect(() => {
     const socket = getSocket();
 
     const onHistory = (payload: { serverId?: string; lines: string[] }) => {
       if (payload.serverId && payload.serverId !== server.id) return;
-      setLines(payload.lines.map(cleanLine).filter((l) => l.length > 0).slice(-MAX_LINES));
+      pending.current = [];
+      setLines(toLines(payload.lines).slice(-MAX_LINES));
     };
     const onConsole = (payload: { serverId?: string; lines: string[] }) => {
       if (!payload.serverId || payload.serverId === server.id) append(payload.lines);
@@ -117,7 +150,7 @@ export default function ConsoleTab() {
   const visible = useMemo(() => {
     if (!filter.trim()) return lines;
     const q = filter.toLowerCase();
-    return lines.filter((l) => l.toLowerCase().includes(q));
+    return lines.filter((l) => l.text.toLowerCase().includes(q));
   }, [lines, filter]);
 
   useEffect(() => {
@@ -169,7 +202,7 @@ export default function ConsoleTab() {
   }
 
   function downloadLog() {
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const blob = new Blob([lines.map((line) => line.text).join('\n')], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

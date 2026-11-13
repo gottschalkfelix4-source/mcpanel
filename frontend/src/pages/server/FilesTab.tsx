@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -28,7 +29,11 @@ export default function FilesTab() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const [path, setPath] = useState('/');
+  // Der Ordner steht in der Adresse: Zurück geht eine Ebene hoch, Neuladen
+  // bleibt im Ordner, und ein Ordner lässt sich verlinken.
+  const [params, setParams] = useSearchParams();
+  const path = params.get('path') || '/';
+  const setPath = (next: string) => setParams(next === '/' ? {} : { path: next });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<{ path: string; content: string; original: string } | null>(null);
   const [newFolder, setNewFolder] = useState(false);
@@ -160,6 +165,101 @@ export default function FilesTab() {
     }
   }
 
+
+  // Tippen im Editor oder im Umbenennen-Feld zeichnet sonst jedes Mal die ganze
+  // Tabelle neu – bei Ordnern mit Tausenden Einträgen spürbar.
+  const rows = useMemo(() => listing.data?.entries.map((entry) => (
+                  <tr
+                    key={entry.path}
+                    className={clsx(
+                      'group transition-colors hover:bg-stone-600/[0.28]',
+                      selected.has(entry.path) && 'bg-grass/10',
+                    )}
+                  >
+                    {can('files.write') && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(entry.path)}
+                          onChange={() =>
+                            setSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(entry.path)) next.delete(entry.path);
+                              else next.add(entry.path);
+                              return next;
+                            })
+                          }
+                          className="h-4 w-4 accent-[#5B8731]"
+                          aria-label={`${entry.name} auswählen`}
+                        />
+                      </td>
+                    )}
+
+                    <td className="w-full max-w-0 px-2 py-2">
+                      <button
+                        onClick={() => openFile(entry)}
+                        className="flex w-full items-center gap-2 text-left text-stone-100 transition hover:text-grass-light"
+                      >
+                        <span className="shrink-0">{iconFor(entry)}</span>
+                        <span className="min-w-0">
+                          <span className="block truncate">{entry.name}</span>
+                          {/* Auf dem Handy fehlt die Größenspalte – dort unter dem Namen */}
+                          {!entry.isDir && <span className="block font-mono text-[11px] text-stone-450 sm:hidden">{formatBytes(entry.size)}</span>}
+                        </span>
+                      </button>
+                    </td>
+                    <td className="hidden whitespace-nowrap px-2 py-2 text-right font-mono text-xs text-stone-450 sm:table-cell">
+                      {entry.isDir ? <FolderSize stats={sizes.data?.sizes[entry.name]} loading={sizes.isLoading} /> : formatBytes(entry.size)}
+                    </td>
+                    <td className="hidden px-2 py-2 font-mono text-xs text-stone-450 md:table-cell">
+                      {formatDate(entry.modified)}
+                    </td>
+                    <td className="px-4 py-2">
+                      {/* Nur mit Maus erst beim Überfahren sichtbar – auf Touch-Geräten (auch
+                          Tablets) und beim Ansteuern per Tastatur immer. */}
+                      <div className="flex justify-end gap-1 opacity-100 transition group-focus-within:opacity-100 [@media(hover:hover)]:sm:opacity-0 [@media(hover:hover)]:sm:group-hover:opacity-100">
+                        {!entry.isDir && (
+                          <button
+                            onClick={() => void download(entry)}
+                            className="p-1 text-stone-450 transition-colors hover:text-grass-light"
+                            title="Herunterladen"
+                            aria-label={`Herunterladen: ${entry.name}`}
+                          >
+                            <Download size={15} />
+                          </button>
+                        )}
+                        {can('files.write') && /\.zip$/i.test(entry.name) && (
+                          <button
+                            disabled={unzip.isPending}
+                            onClick={() => {
+                              if (window.confirm(`„${entry.name}“ in diesen Ordner entpacken? Gleichnamige Dateien werden überschrieben.`)) unzip.mutate(entry.path);
+                            }}
+                            className="p-1 text-stone-450 transition-colors hover:text-gold"
+                            title="Hier entpacken"
+                            aria-label={`Hier entpacken: ${entry.name}`}
+                          >
+                            <FileArchive size={15} />
+                          </button>
+                        )}
+                        {can('files.write') && (
+                          <button
+                            onClick={() => {
+                              setRenaming(entry);
+                              setRenameValue(entry.name);
+                            }}
+                            className="p-1 text-stone-450 transition-colors hover:text-diamond"
+                            title="Umbenennen"
+                            aria-label={`Umbenennen: ${entry.name}`}
+                          >
+                            <PencilLine size={15} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )), // eslint-disable-line react-hooks/exhaustive-deps
+    [listing.data, selected, sizes.data, sizes.isLoading, can, unzip.isPending, path]);
+
   const crumbs = path.split('/').filter(Boolean);
 
   return (
@@ -276,87 +376,7 @@ export default function FilesTab() {
                   </tr>
                 )}
 
-                {listing.data!.entries.map((entry) => (
-                  <tr
-                    key={entry.path}
-                    className={clsx(
-                      'group transition-colors hover:bg-stone-600/[0.28]',
-                      selected.has(entry.path) && 'bg-grass/10',
-                    )}
-                  >
-                    {can('files.write') && (
-                      <td className="px-4 py-2">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(entry.path)}
-                          onChange={() =>
-                            setSelected((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(entry.path)) next.delete(entry.path);
-                              else next.add(entry.path);
-                              return next;
-                            })
-                          }
-                          className="h-4 w-4 accent-[#5B8731]"
-                        />
-                      </td>
-                    )}
-
-                    <td className="w-full max-w-0 px-2 py-2">
-                      <button
-                        onClick={() => openFile(entry)}
-                        className="flex w-full items-center gap-2 text-left text-stone-100 transition hover:text-grass-light"
-                      >
-                        <span className="shrink-0">{iconFor(entry)}</span>
-                        <span className="truncate">{entry.name}</span>
-                      </button>
-                    </td>
-                    <td className="hidden whitespace-nowrap px-2 py-2 text-right font-mono text-xs text-stone-450 sm:table-cell">
-                      {entry.isDir ? <FolderSize stats={sizes.data?.sizes[entry.name]} loading={sizes.isLoading} /> : formatBytes(entry.size)}
-                    </td>
-                    <td className="hidden px-2 py-2 font-mono text-xs text-stone-450 md:table-cell">
-                      {formatDate(entry.modified)}
-                    </td>
-                    <td className="px-4 py-2">
-                      {/* Auf Touch-Geräten immer sichtbar – Hover gibt es dort nicht */}
-                      <div className="flex justify-end gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
-                        {!entry.isDir && (
-                          <button
-                            onClick={() => void download(entry)}
-                            className="p-1 text-stone-450 transition-colors hover:text-grass-light"
-                            title="Herunterladen"
-                          >
-                            <Download size={15} />
-                          </button>
-                        )}
-                        {can('files.write') && /\.zip$/i.test(entry.name) && (
-                          <button
-                            disabled={unzip.isPending}
-                            onClick={() => {
-                              if (window.confirm(`„${entry.name}“ in diesen Ordner entpacken? Gleichnamige Dateien werden überschrieben.`)) unzip.mutate(entry.path);
-                            }}
-                            className="p-1 text-stone-450 transition-colors hover:text-gold"
-                            title="Hier entpacken"
-                          >
-                            <FileArchive size={15} />
-                          </button>
-                        )}
-                        {can('files.write') && (
-                          <button
-                            onClick={() => {
-                              setRenaming(entry);
-                              setRenameValue(entry.name);
-                            }}
-                            className="p-1 text-stone-450 transition-colors hover:text-diamond"
-                            title="Umbenennen"
-                          >
-                            <PencilLine size={15} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {rows}
               </tbody>
             </table>
           </div>

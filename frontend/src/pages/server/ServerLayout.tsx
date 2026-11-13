@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { copyText } from '../../lib/clipboard';
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -329,7 +329,10 @@ export default function ServerLayout() {
       </div>
 
       <LiveStatsContext.Provider value={liveState !== null ? liveStats : server.stats}>
-        <Outlet context={context} />
+        {/* Reiter werden bei Bedarf nachgeladen – Kopf und Navigation bleiben stehen. */}
+        <Suspense fallback={<LoadingBlock label="Reiter wird geladen …" />}>
+          <Outlet context={context} />
+        </Suspense>
       </LiveStatsContext.Provider>
 
       <CrashDialog

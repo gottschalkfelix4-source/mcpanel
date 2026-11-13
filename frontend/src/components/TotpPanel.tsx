@@ -1,39 +1,13 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { copyText } from '../lib/clipboard';
 import { useMutation } from '@tanstack/react-query';
 import { Copy, Download, KeyRound, ShieldCheck, ShieldOff } from 'lucide-react';
-import qrcode from 'qrcode-generator';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Badge, Button, ErrorNote, Field, InfoNote, Panel, useToast } from './ui';
 
-/** QR-Code als SVG – ohne innerHTML und ohne Anfrage an einen fremden Dienst. */
-function QrCode({ value }: { value: string }) {
-  const { size, path } = useMemo(() => {
-    const qr = qrcode(0, 'M');
-    qr.addData(value);
-    qr.make();
-    const count = qr.getModuleCount();
-    let d = '';
-    for (let row = 0; row < count; row++) {
-      for (let col = 0; col < count; col++) {
-        if (qr.isDark(row, col)) d += `M${col + 4} ${row + 4}h1v1h-1z`;
-      }
-    }
-    return { size: count + 8, path: d };
-  }, [value]);
-  return (
-    <svg
-      viewBox={`0 0 ${size} ${size}`}
-      className="h-48 w-48 border border-stone-950 bg-white"
-      shapeRendering="crispEdges"
-      role="img"
-      aria-label="QR-Code für die Authenticator-App"
-    >
-      <path d={path} fill="#000" />
-    </svg>
-  );
-}
+// Der QR-Erzeuger wird erst beim Einrichten gebraucht – nicht im Hauptpaket.
+const QrCode = lazy(() => import('./TotpQrCode'));
 
 const cleanCode = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 6);
 
@@ -177,7 +151,7 @@ export default function TotpPanel() {
             onSubmit={(e) => { e.preventDefault(); enable.mutate(); }}
           >
             <div className="flex flex-col items-start gap-4 sm:flex-row">
-              <QrCode value={setup.url} />
+              <Suspense fallback={<div className="h-48 w-48 border border-stone-950 bg-stone-well" />}><QrCode value={setup.url} /></Suspense>
               <div className="min-w-0 space-y-2 text-sm text-stone-350">
                 <p>1. Den Code mit der Authenticator-App scannen.</p>
                 <p>

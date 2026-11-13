@@ -35,5 +35,22 @@ export default defineConfig({
       '/socket.io': { target: process.env.VITE_API_PROXY ?? 'http://localhost:8080', ws: true },
     },
   },
-  build: { outDir: 'dist', sourcemap: false },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Bibliotheken ändern sich selten: in eigenen Paketen bleiben sie nach
+        // einem Panel-Update im Browser-Cache, nur der eigene Code lädt neu.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (/[\\/]node_modules[\\/](socket\.io-client|engine\.io-client|socket\.io-parser|engine\.io-parser|@socket\.io)[\\/]/.test(id)) return 'socket';
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom|@remix-run|@tanstack)[\\/]/.test(id)) return 'vendor';
+          return undefined;
+        },
+        // Viele winzige Icon-Pakete wären mehr Anfragen als Nutzen.
+        experimentalMinChunkSize: 8_000,
+      },
+    },
+  },
 });

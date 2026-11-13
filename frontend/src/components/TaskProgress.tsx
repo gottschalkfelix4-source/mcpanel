@@ -65,9 +65,9 @@ export function TaskProgress({
     if (!existing.data) return;
     const selected = existing.data.find(t => t.id === (taskId ?? task?.id));
     if (selected) {
-      setTask(previous => previous?.id === selected.id && previous.status === selected.status && previous.progress === selected.progress && previous.message === selected.message && previous.error === (selected.error ?? undefined) && previous.log.join('\n') === selected.log.trimEnd() ? previous : {
+      setTask(previous => previous?.id === selected.id && previous.status === selected.status && previous.progress === selected.progress && previous.message === selected.message && previous.error === (selected.error ?? undefined) && previous.log.join('\n') === selected.log.split('\n').filter(Boolean).slice(-200).join('\n') ? previous : {
         id: selected.id, type: selected.type, status: selected.status === 'PENDING' ? 'RUNNING' : selected.status, progress: selected.progress,
-        message: selected.message, error: selected.error ?? undefined, log: selected.log ? selected.log.split('\n').filter(Boolean) : [],
+        message: selected.message, error: selected.error ?? undefined, log: selected.log ? selected.log.split('\n').filter(Boolean).slice(-200) : [],
       });
       return;
     }
@@ -82,7 +82,7 @@ export function TaskProgress({
         status: 'RUNNING',
         progress: running.progress,
         message: running.message,
-        log: running.log ? running.log.split('\n').filter(Boolean) : [],
+        log: running.log ? running.log.split('\n').filter(Boolean).slice(-200) : [],
       });
       setExpanded(true);
     }

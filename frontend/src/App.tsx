@@ -14,24 +14,24 @@ const CreateServerPage = lazy(() => import('./pages/CreateServer'));
 const ImportServerPage = lazy(() => import('./pages/ImportServer'));
 import ServerLayout from './pages/server/ServerLayout';
 import OverviewTab from './pages/server/OverviewTab';
-import ConsoleTab from './pages/server/ConsoleTab';
-import ModpackTab from './pages/server/ModpackTab';
-import ContentTab from './pages/server/ContentTab';
-import FilesTab from './pages/server/FilesTab';
-import ConfigTab from './pages/server/ConfigTab';
-import BackupsTab from './pages/server/BackupsTab';
-import WorldsTab from './pages/server/WorldsTab';
-import PlayersTab from './pages/server/PlayersTab';
-import AccessTab from './pages/server/AccessTab';
+const ConsoleTab = lazy(() => import('./pages/server/ConsoleTab'));
+const ModpackTab = lazy(() => import('./pages/server/ModpackTab'));
+const ContentTab = lazy(() => import('./pages/server/ContentTab'));
+const FilesTab = lazy(() => import('./pages/server/FilesTab'));
+const ConfigTab = lazy(() => import('./pages/server/ConfigTab'));
+const BackupsTab = lazy(() => import('./pages/server/BackupsTab'));
+const WorldsTab = lazy(() => import('./pages/server/WorldsTab'));
+const PlayersTab = lazy(() => import('./pages/server/PlayersTab'));
+const AccessTab = lazy(() => import('./pages/server/AccessTab'));
 const AutomationTab = lazy(() => import('./pages/server/AutomationTab'));
-import SettingsTab from './pages/server/SettingsTab';
+const SettingsTab = lazy(() => import('./pages/server/SettingsTab'));
 const ReinstallTab = lazy(() => import('./pages/server/ReinstallTab'));
 const MapTab = lazy(() => import('./pages/server/MapTab'));
 const UsersPage = lazy(() => import('./pages/admin/Users'));
 const PanelSettingsPage = lazy(() => import('./pages/admin/PanelSettings'));
 const ProxyPage = lazy(() => import('./pages/admin/Proxy'));
 const NodesPage = lazy(() => import('./pages/admin/Nodes'));
-import ProfilePage from './pages/Profile';
+const ProfilePage = lazy(() => import('./pages/Profile'));
 
 /**
  * Der Administrator hat den zweiten Faktor vorgeschrieben: Bis er

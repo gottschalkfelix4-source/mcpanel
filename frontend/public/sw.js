@@ -29,6 +29,36 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+/**
+ * Pakete älterer Panel-Versionen entfernen: Die Namen enthalten einen Hash,
+ * jede Version bringt neue mit – ohne Aufräumen wüchse der Cache mit jedem
+ * Update. Behalten wird, was die aktuelle Seite (oder ein von ihr geladenes
+ * Paket) noch nennt; alles andere fliegt.
+ */
+async function pruneAssets() {
+  const cache = await caches.open(CACHE);
+  const page = await fetch('/', { cache: 'no-store' }).then((res) => (res.ok ? res.text() : null)).catch(() => null);
+  if (!page) return;
+  const keep = new Set();
+  const queue = [...page.matchAll(/\/assets\/[^"'\s)]+/g)].map((m) => m[0]);
+  // Einstiegspakete nennen ihre Nachlade-Pakete – eine Ebene tief reicht.
+  for (const asset of [...queue]) {
+    keep.add(asset);
+    if (!asset.endsWith('.js')) continue;
+    const hit = await cache.match(asset);
+    const text = hit ? await hit.text() : '';
+    for (const m of text.matchAll(/(?:\/assets\/|\.\/)([A-Za-z0-9_.-]+\.(?:js|css))/g)) keep.add(`/assets/${m[1]}`);
+  }
+  for (const request of await cache.keys()) {
+    const path = new URL(request.url).pathname;
+    if (path.startsWith('/assets/') && !keep.has(path)) await cache.delete(request);
+  }
+}
+
+self.addEventListener('message', (event) => {
+  if (event.data === 'prune-assets') event.waitUntil(pruneAssets().catch(() => {}));
+});
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
