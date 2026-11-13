@@ -123,12 +123,13 @@ export default async function serverRoutes(app: FastifyInstance) {
     const user = req.user!;
     const servers =
       user.role === 'ADMIN'
-        ? await prisma.server.findMany({ orderBy: { createdAt: 'asc' } })
+        ? await prisma.server.findMany({ orderBy: { createdAt: 'asc' }, include: { hostnames: { orderBy: { position: 'asc' } } } })
         : await prisma.server.findMany({
             where: {
               OR: [{ ownerId: user.id }, { members: { some: { userId: user.id } } }],
             },
             orderBy: { createdAt: 'asc' },
+            include: { hostnames: { orderBy: { position: 'asc' } } },
           });
 
     return Promise.all(servers.map((s) => serializeServer(s, { withStats: true })));

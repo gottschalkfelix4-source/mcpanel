@@ -10,8 +10,7 @@ import { ModpackBrowser } from '../../components/ModpackBrowser';
 import { TaskProgress } from '../../components/TaskProgress';
 import {
   Badge, Button, ConfirmDialog, EmptyState, ErrorNote, InfoNote, LoadingBlock, Modal, Panel,
-  Toggle, useToast,
-} from '../../components/ui';
+  Toggle, useToast, LoadErrorBlock } from '../../components/ui';
 import { useServer } from './ServerLayout';
 import ModpackPreview from '../../components/ModpackPreview';
 
@@ -112,6 +111,8 @@ export default function ModpackTab() {
 
       {state.isLoading ? (
         <LoadingBlock />
+      ) : !state.data ? (
+        <LoadErrorBlock error={state.error} onRetry={() => void state.refetch()} />
       ) : installing && !installed ? (
         /*
          * Während der Installation gibt es noch keinen Datensatz – ohne diesen

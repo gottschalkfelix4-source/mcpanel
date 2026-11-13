@@ -6,8 +6,7 @@ import { formatBytes, formatDate, formatRelative } from '../../lib/format';
 import type { Backup } from '../../lib/types';
 import { TaskProgress } from '../../components/TaskProgress';
 import {
-  Button, ConfirmDialog, EmptyState, InfoNote, LoadingBlock, Modal, Panel, Toggle, useToast,
-} from '../../components/ui';
+  Button, ConfirmDialog, EmptyState, InfoNote, LoadingBlock, Modal, Panel, Toggle, useToast, LoadErrorBlock } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
 const TASK_TYPES = ['backup.create', 'backup.restore', 'backup.verify'];
@@ -134,6 +133,8 @@ export default function BackupsTab() {
       >
         {backups.isLoading ? (
           <LoadingBlock />
+        ) : !backups.data ? (
+          <LoadErrorBlock error={backups.error} onRetry={() => void backups.refetch()} />
         ) : (backups.data?.length ?? 0) === 0 ? (
           <EmptyState
             icon={<HardDriveDownload size={40} />}

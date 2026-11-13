@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { copyText } from '../../lib/clipboard';
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -21,7 +21,6 @@ export interface ServerContext {
   can: (permission: string) => boolean;
   liveState: PowerState;
   liveHealth: string | null;
-  liveStats: ContainerStats | null;
   players: { online: number; max: number; players: string[] } | null;
   refresh: () => void;
 }
@@ -29,6 +28,21 @@ export interface ServerContext {
 export function useServer(): ServerContext {
   return useOutletContext<ServerContext>();
 }
+
+/**
+ * CPU und Arbeitsspeicher kommen alle paar Sekunden neu. Sie stecken in einem
+ * eigenen Context, damit nur die Übersicht neu zeichnet – nicht jeder Reiter
+ * samt Dateiliste oder Konsole.
+ */
+const LiveStatsContext = createContext<ContainerStats | null>(null);
+export function useLiveStats(): ContainerStats | null {
+  return useContext(LiveStatsContext);
+}
+
+type PlayerList = { online: number; max: number; players: string[] };
+const samePlayers = (a: PlayerList | null, b: PlayerList | null) =>
+  a === b || (a !== null && b !== null && a.online === b.online && a.max === b.max && a.players.join('\n') === b.players.join('\n'));
+const sameStats = (a: ContainerStats | null, b: ContainerStats | null) => a === b || JSON.stringify(a) === JSON.stringify(b);
 
 const TABS = [
   { to: '', label: 'Übersicht', icon: LayoutDashboard, permission: null, end: true },
@@ -55,6 +69,9 @@ export default function ServerLayout() {
   const [liveState, setLiveState] = useState<PowerState | null>(null);
   const [liveHealth, setLiveHealth] = useState<string | null>(null);
   const [liveStats, setLiveStats] = useState<ContainerStats | null>(null);
+  /** Spieler aus dem Live-Status; `undefined` = noch kein Status über den Socket. */
+  const [socketPlayers, setSocketPlayers] = useState<PlayerList | null | undefined>(undefined);
+  const socketLive = socketPlayers !== undefined;
   const [copied, setCopied] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
 
@@ -62,25 +79,27 @@ export default function ServerLayout() {
     queryKey: ['server', id],
     queryFn: () => api.get<ServerDetail>(`/servers/${id}`),
     enabled: Boolean(id),
-    refetchInterval: 15_000,
+    // Mit Live-Verbindung genügt ein seltener Abgleich.
+    refetchInterval: socketLive ? 60_000 : 15_000,
   });
 
-  // Player visibility must not depend on console permission or Socket.IO.
+  // Spieler kommen mit dem Live-Status. Ohne Konsolenrecht oder Socket gibt es
+  // den nicht – dann fragt die Seite selbst nach.
   const playerQuery = useQuery({
     queryKey: ['online-players', id],
     queryFn: () => api.get<{ online: number; max: number; players: string[]; available: boolean }>(`/servers/${id}/players`),
-    enabled: Boolean(id) && (liveState ?? server?.state) === 'running',
+    enabled: Boolean(id) && !socketLive && (liveState ?? server?.state) === 'running',
     refetchInterval: 5000,
     retry: false,
   });
-  const players = (liveState ?? server?.state) === 'running' && !playerQuery.isError && playerQuery.data?.available
-    ? playerQuery.data : null;
+  const polledPlayers = !playerQuery.isError && playerQuery.data?.available ? playerQuery.data : null;
+  const players = (liveState ?? server?.state) === 'running' ? (socketLive ? socketPlayers ?? null : polledPlayers) : null;
 
   // Live-Status über Socket.IO
   useEffect(() => {
     if (!id) return;
     const socket = getSocket();
-    const clearLive = () => { setLiveState(null); setLiveHealth(null); setLiveStats(null); };
+    const clearLive = () => { setLiveState(null); setLiveHealth(null); setLiveStats(null); setSocketPlayers(undefined); };
     clearLive();
     const subscribe = () => socket.emit('subscribe', { serverId: id }, () => {});
 
@@ -92,9 +111,13 @@ export default function ServerLayout() {
       players: { online: number; max: number; players: string[] } | null;
     }) => {
       if (payload.serverId !== id) return;
+      // Nur Änderungen setzen: gleiche Werte im neuen Objekt zeichneten sonst
+      // alle drei Sekunden die ganze Seite neu.
       setLiveState(payload.state);
       setLiveHealth(payload.health);
-      setLiveStats(payload.stats);
+      setLiveStats((current) => (sameStats(current, payload.stats) ? current : payload.stats));
+      const next = payload.players ?? null;
+      setSocketPlayers((current) => (current !== undefined && samePlayers(current, next) ? current : next));
     };
 
     socket.on('status', onStatus);
@@ -115,8 +138,22 @@ export default function ServerLayout() {
     if (!server) return;
     setLiveState(server.state);
     setLiveHealth(server.health ?? null);
-    setLiveStats(server.stats);
+    setLiveStats((current) => (sameStats(current, server.stats) ? current : server.stats));
   }, [server]);
+
+  const effectiveState = liveState ?? server?.state ?? null;
+  const effectiveHealth = liveState !== null ? liveHealth : server?.health ?? null;
+  const stablePlayers = useRef<PlayerList | null>(null);
+  if (!samePlayers(stablePlayers.current, players)) stablePlayers.current = players;
+  const playersStable = stablePlayers.current;
+  const context = useMemo<ServerContext | null>(() => (server && effectiveState ? {
+    server,
+    can: (permission: string) => server.permissions.includes(permission),
+    liveState: effectiveState,
+    liveHealth: effectiveHealth,
+    players: playersStable,
+    refresh: () => void refetch(),
+  } : null), [server, effectiveState, effectiveHealth, playersStable, refetch]);
 
   const power = useMutation({
     mutationFn: (action: 'start' | 'stop' | 'restart' | 'kill') =>
@@ -141,25 +178,16 @@ export default function ServerLayout() {
   if (isLoading) return <LoadingBlock label="Server wird geladen …" />;
   // Nur ohne Daten die Fehlerseite: ein kurzer Aussetzer beim Nachladen (z. B.
   // Neustart des Panels) soll Konsole und ungespeicherte Eingaben nicht wegwerfen.
-  if (!server) return <LoadErrorBlock error={error} onRetry={() => void refetch()} />;
+  if (!server || !context) return <LoadErrorBlock error={error} onRetry={() => void refetch()} />;
 
   const state = liveState ?? server.state;
   const running = state === 'running' || state === 'starting';
-  const can = (permission: string) => server.permissions.includes(permission);
+  const { can } = context;
   const look = TYPE_LOOK[server.type] ?? TYPE_LOOK.PAPER;
   // Paper & Co. verwalten plugins/, die Loader mods/ – Vanilla gar nichts,
   // dort faellt der Reiter weg.
   const contentKind = CONTENT_KIND_BY_TYPE[server.type];
 
-  const context: ServerContext = {
-    server,
-    can,
-    liveState: state,
-    liveHealth: liveState !== null ? liveHealth : server.health ?? null,
-    liveStats: liveState !== null ? liveStats : server.stats,
-    players,
-    refresh: () => void refetch(),
-  };
 
   const copyAddress = async () => {
     if (!(await copyText(server.address))) {
@@ -300,7 +328,9 @@ export default function ServerLayout() {
         </div>
       </div>
 
-      <Outlet context={context} />
+      <LiveStatsContext.Provider value={liveState !== null ? liveStats : server.stats}>
+        <Outlet context={context} />
+      </LiveStatsContext.Provider>
 
       <CrashDialog
         serverId={server.id}

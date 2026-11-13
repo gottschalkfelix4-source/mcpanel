@@ -7,8 +7,7 @@ import { formatDate } from '../../lib/format';
 import { useAuth } from '../../lib/auth';
 import type { PanelUser } from '../../lib/types';
 import {
-  Badge, Button, ConfirmDialog, ErrorNote, Field, LoadingBlock, Modal, Panel, Toggle, useToast,
-} from '../../components/ui';
+  Badge, Button, ConfirmDialog, ErrorNote, Field, LoadingBlock, Modal, Panel, Toggle, useToast, LoadErrorBlock } from '../../components/ui';
 
 export default function UsersPage() {
   const { user: me } = useAuth();
@@ -84,6 +83,8 @@ export default function UsersPage() {
       <Panel title="Alle Konten" icon={<UsersIcon size={16} />} bodyClassName="!p-0">
         {users.isLoading ? (
           <LoadingBlock />
+        ) : !users.data ? (
+          <LoadErrorBlock error={users.error} onRetry={() => void users.refetch()} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

@@ -116,7 +116,7 @@ function startStatusPolling(io: IOServer, serverId: string) {
     const server = await prisma.server.findUnique({ where: { id: serverId } });
     if (!server) return;
 
-    const { state, health, startedAt } = await dockerSvc.getState(server);
+    const { state, health, startedAt } = await dockerSvc.getStateCached(server);
     const stats = state === 'running' ? await dockerSvc.getStats(server) : null;
 
     let players: { online: number; max: number; players: string[] } | null = null;

@@ -329,3 +329,55 @@ it('schützt Variablen, über die das Abbild fremde Dateien lädt oder Operatore
     expect(isProtectedEnvKey(key), key).toBe(false);
   }
 });
+
+// Der sichtbare Name folgt dem Servernamen – ohne gemerkte Id lief jede Suche
+// erst ins Leere und dann über listContainers.
+it('merkt sich die Container-Id und braucht danach nur noch einen Aufruf', async () => {
+  const merk = { ...server, id: 'merk-1' } as Server;
+  m.list.mockResolvedValue([{ Id: 'echte-id' }]);
+  await findContainer(merk);
+  expect(m.list).toHaveBeenCalledTimes(1);
+  m.list.mockClear();
+  m.get.mockClear();
+  m.inspect.mockResolvedValue({ Id: 'echte-id', Config: { Labels: { 'mcpanel.server': 'merk-1' } } });
+  expect(await findContainer(merk)).toBe(container);
+  expect(m.get).toHaveBeenCalledTimes(1);
+  expect(m.get).toHaveBeenCalledWith('echte-id');
+  expect(m.list).not.toHaveBeenCalled();
+});
+
+it('sucht neu, wenn die gemerkte Id inzwischen einem anderen gehört oder fehlt', async () => {
+  const merk = { ...server, id: 'merk-2' } as Server;
+  m.list.mockResolvedValue([{ Id: 'alte-id' }]);
+  await findContainer(merk);
+  m.inspect.mockResolvedValue({ Config: { Labels: { 'mcpanel.server': 'jemand-anders' } } });
+  m.list.mockResolvedValue([]);
+  expect(await findContainer(merk)).toBeNull();
+});
+
+it('liefert eine ältere Messung sofort und misst im Hintergrund neu', async () => {
+  const mess = { ...server, id: 'mess-1' } as Server;
+  m.list.mockResolvedValue([{ Id: 'mess-id' }]);
+  m.inspect.mockResolvedValue({ Id: 'mess-id', Config: { Labels: { 'mcpanel.server': 'mess-1' } } });
+  const sample = (cpu: number) => ({
+    cpu_stats: { cpu_usage: { total_usage: cpu }, system_cpu_usage: 1000, online_cpus: 1 },
+    precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
+    memory_stats: { usage: 100, limit: 1000 },
+  });
+  m.stats.mockResolvedValueOnce(sample(100));
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    expect((await getStats(mess))?.cpuPercent).toBe(10);
+    vi.setSystemTime(Date.now() + 9000);
+    let release!: (value: unknown) => void;
+    m.stats.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    // Die neue Messung hängt noch – trotzdem kommt sofort die vorige.
+    expect((await getStats(mess))?.cpuPercent).toBe(10);
+    release(sample(500));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect((await getStats(mess))?.cpuPercent).toBe(50);
+  } finally {
+    vi.useRealTimers();
+  }
+});

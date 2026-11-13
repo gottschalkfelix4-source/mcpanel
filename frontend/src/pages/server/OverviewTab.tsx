@@ -7,15 +7,16 @@ import clsx from 'clsx';
 import { api } from '../../lib/api';
 import { formatBytes, formatDate, formatMemory, formatUptime } from '../../lib/format';
 import type { TaskInfo } from '../../lib/types';
-import { Badge, Panel } from '../../components/ui';
+import { Badge, Panel, LoadErrorBlock } from '../../components/ui';
 import { BarChart, PixelBar, PixelHead, useCountUp, useHistory } from '../../components/pixel';
-import { useServer } from './ServerLayout';
+import { useLiveStats, useServer } from './ServerLayout';
 import { serverStatus } from '../../lib/serverStatus';
 import TickMetrics from '../../components/TickMetrics';
 import { TaskProgress } from '../../components/TaskProgress';
 
 export default function OverviewTab() {
-  const { server, liveState, liveHealth, liveStats, players, can } = useServer();
+  const { server, liveState, liveHealth, players, can } = useServer();
+  const liveStats = useLiveStats();
 
   const tasks = useQuery({
     queryKey: ['server-tasks', server.id],
@@ -201,7 +202,9 @@ export default function OverviewTab() {
 
           {/* Aktivität */}
           <Panel title="Letzte Aktionen" icon={<Clock size={16} />} bodyClassName="!p-0">
-            {(tasks.data?.length ?? 0) === 0 ? (
+            {tasks.isError && !tasks.data ? (
+              <LoadErrorBlock error={tasks.error} onRetry={() => void tasks.refetch()} />
+            ) : (tasks.data?.length ?? 0) === 0 ? (
               <p className="p-5 text-center text-sm text-stone-450">Noch keine Aktionen.</p>
             ) : (
               <ul className="m-0 list-none p-0">

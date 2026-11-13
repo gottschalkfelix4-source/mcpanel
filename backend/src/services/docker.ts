@@ -262,13 +262,36 @@ export function ensureServerImage(server: Server, onProgress?: (msg: string) => 
   return ensureImage(imageForServer(server), onProgress, dockerFor(server));
 }
 
+/**
+ * Zuletzt gefundene Container-Id je Server. Der sichtbare Containername folgt
+ * dem Servernamen, der gespeicherte Name ist nur der Netz-Alias – ohne diese
+ * Abkürzung lief jede Suche erst ins Leere und dann über `listContainers`
+ * (drei Docker-Aufrufe statt einem, bei jeder Statusabfrage).
+ */
+const containerIds = new Map<string, string>();
+
 /** Sucht den Container; liefert die Inspect-Daten mit, wenn sie schon angefallen sind. */
 async function locateContainer(server: Server): Promise<{ container: Container; info?: Docker.ContainerInspectInfo } | null> {
   const docker = dockerFor(server);
+  const known = containerIds.get(server.id);
+  if (known) {
+    try {
+      const c = docker.getContainer(known);
+      const info = await c.inspect();
+      // Gehört er noch zu diesem Server? Sonst über die Suche neu ermitteln.
+      if (info.Config.Labels?.[LABEL_SERVER] === server.id) return { container: c, info };
+    } catch (err) {
+      if ((err as { statusCode?: number }).statusCode !== 404) throw err;
+    }
+    containerIds.delete(server.id);
+  }
   try {
     const c = docker.getContainer(server.containerName);
     const info = await c.inspect();
-    if (info.Config.Labels?.[LABEL_SERVER] === server.id) return { container: c, info };
+    if (info.Config.Labels?.[LABEL_SERVER] === server.id) {
+      if (info.Id) containerIds.set(server.id, info.Id);
+      return { container: c, info };
+    }
   } catch (err) {
     if ((err as { statusCode?: number }).statusCode !== 404) throw err;
   }
@@ -276,7 +299,9 @@ async function locateContainer(server: Server): Promise<{ container: Container; 
   // Docker's visible name can change; ownership is always identified by label.
   const matches = await docker.listContainers({ all: true, filters: { label: [`${LABEL_SERVER}=${server.id}`] } });
   if (matches.length > 1) throw conflict('Mehrere Container gehören zu diesem Server');
-  return matches.length ? { container: docker.getContainer(matches[0].Id) } : null;
+  if (matches.length === 0) return null;
+  containerIds.set(server.id, matches[0].Id);
+  return { container: docker.getContainer(matches[0].Id) };
 }
 
 export async function findContainer(server: Server): Promise<Container | null> {
@@ -612,6 +637,30 @@ async function startUnlocked(server: Server): Promise<void> {
   startHooks.after?.(server);
 }
 
+const stateCache = new Map<string, { at: number; value: ReturnType<typeof getState> }>();
+const STATE_TTL_MS = 2000;
+
+/**
+ * Wie `getState`, aber mehrere Abfragen innerhalb von zwei Sekunden teilen
+ * sich ein Ergebnis – für Serverliste, Live-Status und Hintergrunddienste.
+ * Start, Stopp und Neuanlage verwerfen den Eintrag sofort.
+ */
+export function getStateCached(server: Server): ReturnType<typeof getState> {
+  const now = Date.now();
+  const hit = stateCache.get(server.id);
+  if (hit && now - hit.at < STATE_TTL_MS) return hit.value;
+  const value = getState(server);
+  stateCache.set(server.id, { at: now, value });
+  value.catch(() => { if (stateCache.get(server.id)?.value === value) stateCache.delete(server.id); });
+  if (stateCache.size > 2000) stateCache.delete(stateCache.keys().next().value!);
+  return value;
+}
+
+export function forgetContainerState(serverId: string): void {
+  stateCache.delete(serverId);
+  statsCache.delete(serverId);
+}
+
 /** Hostport aus Dockers Fehlermeldung („Bind for 0.0.0.0:8123 failed …“). */
 export function busyHostPort(message: string): number | null {
   const match = /:(\d{1,5})(?:\s+failed|:\s*bind)/i.exec(message);
@@ -656,12 +705,32 @@ type ContainerStats = { cpuPercent: number; memoryUsed: number; memoryLimit: num
 const statsCache = new Map<string, { at: number; value: Promise<ContainerStats> }>();
 const STATS_TTL_MS = 8000;
 
+const statsRefreshing = new Set<string>();
+/** Älter als das wird nicht mehr als „gerade eben“ ausgegeben. */
+const STATS_STALE_MAX_MS = 60_000;
+
+/**
+ * Liefert eine vorhandene Messung sofort, auch wenn sie ein paar Sekunden alt
+ * ist, und misst im Hintergrund neu. Sonst wartete jede zweite Abfrage der
+ * Serverliste gut eine Sekunde auf Docker.
+ */
 export function getStats(server: Server): Promise<ContainerStats> {
   const now = Date.now();
   const cached = statsCache.get(server.id);
   if (cached && now - cached.at < STATS_TTL_MS) return cached.value;
-  for (const [id, entry] of statsCache) if (now - entry.at >= STATS_TTL_MS) statsCache.delete(id);
+  for (const [id, entry] of statsCache) if (now - entry.at >= STATS_STALE_MAX_MS) statsCache.delete(id);
   const value = readStats(server);
+  const fresh = statsCache.get(server.id);
+  if (fresh && now - fresh.at < STATS_STALE_MAX_MS) {
+    if (!statsRefreshing.has(server.id)) {
+      statsRefreshing.add(server.id);
+      value.then((stats) => { statsCache.set(server.id, { at: Date.now(), value: Promise.resolve(stats) }); }, () => {})
+        .finally(() => statsRefreshing.delete(server.id));
+    } else {
+      value.catch(() => {});
+    }
+    return fresh.value;
+  }
   statsCache.set(server.id, { at: now, value });
   return value;
 }
@@ -681,8 +750,9 @@ async function readStats(server: Server): Promise<ContainerStats> {
     };
     const cpuDelta = s.cpu_stats.cpu_usage.total_usage - s.precpu_stats.cpu_usage.total_usage;
     const sysDelta = s.cpu_stats.system_cpu_usage - s.precpu_stats.system_cpu_usage;
-    const cpus = s.cpu_stats.online_cpus ?? 1;
-    const cpuPercent = sysDelta > 0 && cpuDelta > 0 ? (cpuDelta / sysDelta) * cpus * 100 : 0;
+    // Anteil an allen Kernen (0–100 %), wie die Oberfläche es beschriftet –
+    // nicht wie `docker stats` bis Kernzahl × 100 %.
+    const cpuPercent = sysDelta > 0 && cpuDelta > 0 ? Math.min(100, (cpuDelta / sysDelta) * 100) : 0;
     return {
       cpuPercent: Math.round(cpuPercent * 10) / 10,
       memoryUsed: memoryWorkingSet(s.memory_stats),
@@ -818,19 +888,25 @@ export async function detectHostDataRoot(containerPath: string): Promise<string 
   }
 }
 
-export const start = (...args: Parameters<typeof startUnlocked>) => withServerOperation(args[0].id, "start", () => startUnlocked(...args));
+/** Nach einer Zustandsänderung nichts Zwischengespeichertes mehr ausgeben. */
+const changesState = <T>(serverId: string, job: Promise<T>): Promise<T> => {
+  forgetContainerState(serverId);
+  return job.finally(() => forgetContainerState(serverId));
+};
 
-export const stop = (...args: Parameters<typeof stopUnlocked>) => withServerOperation(args[0].id, "stop", () => stopUnlocked(...args));
+export const start = (...args: Parameters<typeof startUnlocked>) => changesState(args[0].id, withServerOperation(args[0].id, "start", () => startUnlocked(...args)));
+
+export const stop = (...args: Parameters<typeof stopUnlocked>) => changesState(args[0].id, withServerOperation(args[0].id, "stop", () => stopUnlocked(...args)));
 
 /**
  * Kill bewusst ohne Serversperre: er ist der Notausgang, wenn ein Stopp,
  * Backup oder Upload hängt. Ein laufender Vorgang bemerkt den beendeten
  * Container selbst; Dateien werden hier nicht angefasst.
  */
-export const kill = (...args: Parameters<typeof killUnlocked>) => killUnlocked(...args);
+export const kill = (...args: Parameters<typeof killUnlocked>) => changesState(args[0].id, killUnlocked(...args));
 
 export const restart = (...args: Parameters<typeof restartUnlocked>) => withServerOperation(args[0].id, "restart", () => restartUnlocked(...args));
 
-export const removeContainer = (...args: Parameters<typeof removeContainerUnlocked>) => withServerOperation(args[0].id, "removeContainer", () => removeContainerUnlocked(...args));
+export const removeContainer = (...args: Parameters<typeof removeContainerUnlocked>) => changesState(args[0].id, withServerOperation(args[0].id, "removeContainer", () => removeContainerUnlocked(...args)));
 
-export const recreateContainer = (...args: Parameters<typeof recreateContainerUnlocked>) => withServerOperation(args[0].id, "recreateContainer", () => recreateContainerUnlocked(...args));
+export const recreateContainer = (...args: Parameters<typeof recreateContainerUnlocked>) => changesState(args[0].id, withServerOperation(args[0].id, "recreateContainer", () => recreateContainerUnlocked(...args)));

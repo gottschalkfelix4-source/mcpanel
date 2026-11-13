@@ -7,8 +7,7 @@ import { formatRelative } from '../lib/format';
 import type { NotifyChannel, NotifyChannelType, NotifyListResponse } from '../lib/types';
 import {
   Badge, Button, ConfirmDialog, EmptyState, ErrorNote, Field, InfoNote, LoadingBlock,
-  Modal, Panel, Toggle, useToast,
-} from './ui';
+  Modal, Panel, Toggle, useToast, LoadErrorBlock } from './ui';
 
 interface FormState {
   name: string;
@@ -169,6 +168,8 @@ export default function NotificationChannels({
       >
         {list.isLoading ? (
           <LoadingBlock />
+        ) : !list.data ? (
+          <LoadErrorBlock error={list.error} onRetry={() => void list.refetch()} />
         ) : channels.length === 0 ? (
           <EmptyState
             icon={<Bell size={44} />}

@@ -10,8 +10,7 @@ import { formatDate, formatRelative } from '../../lib/format';
 import type { Automation, AutomationAction, AutomationTrigger } from '../../lib/types';
 import {
   Badge, Button, ConfirmDialog, EmptyState, ErrorNote, Field, InfoNote, LoadingBlock,
-  Modal, Panel, Toggle, useToast,
-} from '../../components/ui';
+  Modal, Panel, Toggle, useToast, LoadErrorBlock } from '../../components/ui';
 import NotificationChannels from '../../components/NotificationChannels';
 import { useServer } from './ServerLayout';
 
@@ -225,6 +224,8 @@ export default function AutomationTab() {
       >
         {list.isLoading ? (
           <LoadingBlock />
+        ) : !list.data ? (
+          <LoadErrorBlock error={list.error} onRetry={() => void list.refetch()} />
         ) : (list.data?.automations.length ?? 0) === 0 ? (
           <EmptyState
             icon={<AlarmClock size={44} />}

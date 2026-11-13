@@ -7,8 +7,7 @@ import { formatBytes, formatDate } from '../../lib/format';
 import { CONTENT_KIND_BY_TYPE, type ContentKind, type ContentListing } from '../../lib/types';
 import { ModpackBrowser } from '../../components/ModpackBrowser';
 import {
-  Badge, Button, ConfirmDialog, EmptyState, LoadingBlock, Modal, Panel, Toggle, useToast,
-} from '../../components/ui';
+  Badge, Button, ConfirmDialog, EmptyState, LoadingBlock, Modal, Panel, Toggle, useToast, LoadErrorBlock } from '../../components/ui';
 import { useServer } from './ServerLayout';
 
 /** Beschriftungen je Inhaltsart – spart Ternaeroperatoren an jeder Textstelle. */
@@ -159,6 +158,8 @@ export default function ContentTab() {
       >
         {content.isLoading ? (
           <LoadingBlock />
+        ) : !content.data ? (
+          <LoadErrorBlock error={content.error} onRetry={() => void content.refetch()} />
         ) : list.length === 0 ? (
           <EmptyState
             icon={<Puzzle size={40} />}

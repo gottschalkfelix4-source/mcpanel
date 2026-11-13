@@ -221,12 +221,14 @@ export async function serializeServer(server: Server, extra?: { withStats?: bool
   const [{ state, health, startedAt }, host, hostnames, proxy] = await Promise.all([
     // Ein einzelner Server mit kaputter Container-Zuordnung (doppeltes Label,
     // Docker-Fehler einer Node) darf nicht die ganze Liste scheitern lassen.
-    dockerSvc.getState(server).catch((err): Awaited<ReturnType<typeof dockerSvc.getState>> => {
+    dockerSvc.getStateCached(server).catch((err): Awaited<ReturnType<typeof dockerSvc.getState>> => {
       console.error(`Zustand von ${server.name} nicht lesbar:`, err instanceof Error ? err.message : err);
       return { state: 'error', health: null, startedAt: null };
     }),
     getPublicHost(),
-    prisma.serverHostname.findMany({ where: { serverId: server.id }, orderBy: { position: 'asc' } }),
+    // Die Serverliste lädt die Hostnamen gleich mit – eine Abfrage statt einer je Server.
+    (server as Server & { hostnames?: { hostname: string; position: number }[] }).hostnames
+      ?? prisma.serverHostname.findMany({ where: { serverId: server.id }, orderBy: { position: 'asc' } }),
     getProxyConfig(),
   ]);
   const running = state === 'running';
