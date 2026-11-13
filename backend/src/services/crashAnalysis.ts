@@ -162,19 +162,39 @@ function fabricEinstiegspunkt(log: string): string | null {
  * verkraftet etwa Kommentare, aber aus einer leeren Datei wird `null`, und
  * genau daran stirbt der Start.
  */
+/**
+ * Ergebnis je mods-Ordner merken: Das Durchsuchen öffnet jedes Jar und hielt
+ * das Panel bei jedem Aufruf der Diagnose an. Neu gesucht wird erst, wenn sich
+ * der Ordner geändert hat (Mod hinzugefügt, entfernt, ersetzt).
+ */
+const sprachdateiCache = new Map<string, { schluessel: string; ergebnis: { file: string; eintrag: string } | null }>();
+
 function modMitLeererSprachdatei(modsDir: string): { file: string; eintrag: string } | null {
   let dateien: string[];
+  let schluessel: string;
   try {
     dateien = fs.readdirSync(modsDir);
+    schluessel = `${fs.statSync(modsDir).mtimeMs}:${dateien.length}`;
   } catch {
     return null;
   }
+  const bekannt = sprachdateiCache.get(modsDir);
+  if (bekannt?.schluessel === schluessel) return bekannt.ergebnis;
+  const ergebnis = sucheLeereSprachdatei(modsDir, dateien);
+  sprachdateiCache.set(modsDir, { schluessel, ergebnis });
+  if (sprachdateiCache.size > 100) sprachdateiCache.delete(sprachdateiCache.keys().next().value!);
+  return ergebnis;
+}
+
+function sucheLeereSprachdatei(modsDir: string, dateien: string[]): { file: string; eintrag: string } | null {
 
   for (const file of dateien) {
     if (!/\.jar$/i.test(file)) continue;
     try {
       for (const eintrag of new AdmZip(path.join(modsDir, file)).getEntries()) {
         if (!/^assets\/[^/]+\/lang\/[^/]+\.json$/i.test(eintrag.entryName)) continue;
+        // Nur winzige Einträge entpacken – eine echte Sprachdatei ist nie leer.
+        if (eintrag.header.size > 64) continue;
         if (eintrag.getData().toString('utf8').trim() === '') {
           return { file, eintrag: eintrag.entryName };
         }

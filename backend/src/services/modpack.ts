@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
+import { mapLimit, readJarEntry } from '../lib/jarEntry.js';
 import { z } from 'zod';
 import type { Server } from '@prisma/client';
 import { cacheDir, serverDir, serverBackupDir } from '../config.js';
@@ -578,7 +579,8 @@ export function allowedMrpackUrl(value: string): boolean {
 }
 
 async function planFromMrpack(archivePath: string): Promise<PackPlan> {
-  const zip = new AdmZip(archivePath);
+  // Asynchron einlesen: synchron stand bei einem Gigabyte-Paket das Panel still.
+  const zip = new AdmZip(await fs.readFile(archivePath));
   const entry = zip.getEntry('modrinth.index.json');
   if (!entry) throw new Error('Ungültiges .mrpack – modrinth.index.json fehlt');
   const index = JSON.parse(entry.getData().toString('utf8')) as MrIndex;
@@ -641,7 +643,7 @@ async function planFromCurseforge(
   task: TaskHandle,
   hint: CfHint,
 ): Promise<PackPlan> {
-  const zip = new AdmZip(archivePath);
+  const zip = new AdmZip(await fs.readFile(archivePath));
   const root = detectArchiveRoot(zip);
   const entry = zip.getEntry(root + 'manifest.json');
 
@@ -878,18 +880,16 @@ interface ForgeModInfo {
 }
 
 /** Grobe Auswertung von META-INF/(neoforge.)mods.toml – reicht für Mod-IDs. */
-function readForgeModInfo(jarPath: string): ForgeModInfo | null {
+async function readForgeModInfo(jarPath: string): Promise<ForgeModInfo | null> {
   try {
-    const zip = new AdmZip(jarPath);
-    const entry =
-      zip.getEntry('META-INF/neoforge.mods.toml') ?? zip.getEntry('META-INF/mods.toml');
-    if (!entry) return null;
+    const data = await readJarEntry(jarPath, ['META-INF/neoforge.mods.toml', 'META-INF/mods.toml']);
+    if (!data) return null;
 
     const provides: string[] = [];
     const requires: string[] = [];
     let section: 'mods' | 'dependencies' | null = null;
 
-    for (const raw of entry.getData().toString('utf8').split(/\r?\n/)) {
+    for (const raw of data.toString('utf8').split(/\r?\n/)) {
       const line = raw.trim();
       if (line.startsWith('[[mods]]')) {
         section = 'mods';
@@ -941,12 +941,12 @@ const CONTROL_CHARS = new RegExp(
   'g',
 );
 
-function readFabricModInfo(modsDir: string, file: string): FabricModInfo | null {
+async function readFabricModInfo(modsDir: string, file: string): Promise<FabricModInfo | null> {
   try {
-    const entry = new AdmZip(path.join(modsDir, file)).getEntry('fabric.mod.json');
-    if (!entry) return null;
+    const data = await readJarEntry(path.join(modsDir, file), ['fabric.mod.json']);
+    if (!data) return null;
     const parsed = JSON.parse(
-      entry.getData().toString('utf8').replace(CONTROL_CHARS, ''),
+      data.toString('utf8').replace(CONTROL_CHARS, ''),
     ) as { id?: string; environment?: string; depends?: Record<string, unknown> };
     if (!parsed.id) return null;
     return {
@@ -982,8 +982,8 @@ async function disableFabricClientDependents(serverPath: string): Promise<Client
     /\.jar$/i.test(f),
   );
 
-  const mods = files
-    .map((file) => readFabricModInfo(modsDir, file))
+  // Höchstens acht Jars gleichzeitig – asynchron, das Panel bleibt bedienbar.
+  const mods = (await mapLimit(files, 8, (file) => readFabricModInfo(modsDir, file)))
     .filter((m): m is FabricModInfo => m !== null);
 
   const clientIds = new Set(mods.filter((m) => m.environment === 'client').map((m) => m.id));
@@ -1056,7 +1056,8 @@ async function disableClientOnlyMods(serverPath: string): Promise<ClientModFilte
     /\.jar$/i.test(f),
   );
 
-  const infoByFile = new Map(files.map((file) => [file, readForgeModInfo(path.join(modsDir, file))]));
+  const infos = await mapLimit(files, 8, (file) => readForgeModInfo(path.join(modsDir, file)));
+  const infoByFile = new Map(files.map((file, index) => [file, infos[index]]));
   const candidates = files.filter((file) =>
     CLIENT_ONLY_PREFIXES.some((prefix) => normalizeModName(file).startsWith(prefix)) ||
     infoByFile.get(file)?.provides.some((id) => Boolean(CLIENT_ONLY_MOD_IDS[id])),
