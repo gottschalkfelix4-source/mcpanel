@@ -29,14 +29,33 @@ const streams = new Map<string, StreamEntry>();
 const statusTimers = new Map<string, NodeJS.Timeout>();
 
 /** Öffnet den Docker-Log-Stream und verteilt ganze Zeilen an die Zuschauer. */
-function openLogStream(server: Server): Promise<() => void> {
+async function openLogStream(server: Server): Promise<() => void> {
   let buffer = '';
-  return dockerSvc.followLogs(server, (chunk) => {
+  // Beim Start eines Modpacks kommen Tausende Zeilen in Sekunden. Je Docker-
+  // Datenblock ein eigenes Paket an jeden Zuschauer (samt Rechteprüfung und
+  // Neuzeichnen im Browser) wäre teuer – höchstens alle 80 ms ein Paket.
+  let pending: string[] = [];
+  let timer: NodeJS.Timeout | null = null;
+  const flush = () => {
+    timer = null;
+    if (pending.length === 0) return;
+    const lines = pending;
+    pending = [];
+    emitToServer(server.id, 'console', { serverId: server.id, lines });
+  };
+  const stop = await dockerSvc.followLogs(server, (chunk) => {
     buffer += chunk;
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
-    if (lines.length > 0) emitToServer(server.id, 'console', { serverId: server.id, lines });
+    if (lines.length === 0) return;
+    for (const line of lines) pending.push(line);
+    timer ??= setTimeout(flush, 80);
   });
+  return () => {
+    if (timer) clearTimeout(timer);
+    flush();
+    stop();
+  };
 }
 
 /** Stream (neu) aufbauen; übernimmt ihn nur, wenn inzwischen nichts Neueres lief. */

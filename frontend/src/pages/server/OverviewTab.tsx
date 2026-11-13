@@ -21,7 +21,9 @@ export default function OverviewTab() {
   const tasks = useQuery({
     queryKey: ['server-tasks', server.id],
     queryFn: () => api.get<TaskInfo[]>(`/servers/${server.id}/tasks`),
-    refetchInterval: 10_000,
+    // Laufende Aufgaben melden sich über den Socket und frischen die Liste
+    // beim Abschluss auf – hier genügt ein seltener Abgleich.
+    refetchInterval: 30_000,
   });
 
   const running = liveState === 'running';

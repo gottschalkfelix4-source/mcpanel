@@ -20,5 +20,7 @@ RUN npx tsc -p tsconfig.json
 RUN JWT_SECRET=mcpanel-laufzeitpruefung-ohne-produktivzugriff node --input-type=module -e "await import('./dist/services/sftp.js'); console.log('SFTP-Modul geladen');"
 
 ENV NODE_ENV=production
+# Mehr Hintergrund-Threads für Packen, Kopieren, Dateizählen und DNS (Standard: 4).
+ENV UV_THREADPOOL_SIZE=16
 EXPOSE 3000 2222
 CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]

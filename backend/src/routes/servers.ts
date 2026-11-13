@@ -114,6 +114,14 @@ const commandSchema = z.object({
   command: z.string().min(1).max(1000).regex(/^[^\r\n\0]+$/, 'Ungültiger Befehl'),
 });
 
+/** Letzte Zeilen eines Aufgabenprotokolls, an einer Zeilengrenze abgeschnitten. */
+export function logTail(log: string | null, maxChars = 12_000): string {
+  if (!log || log.length <= maxChars) return log ?? '';
+  const tail = log.slice(-maxChars);
+  const newline = tail.indexOf('\n');
+  return newline >= 0 ? tail.slice(newline + 1) : tail;
+}
+
 export default async function serverRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   await app.register(serverImportRoutes);
@@ -416,11 +424,15 @@ export default async function serverRoutes(app: FastifyInstance) {
 
   app.get('/:id/tasks', async (req) => {
     const access = await requireServer(req);
-    return prisma.task.findMany({
+    const tasks = await prisma.task.findMany({
       where: { serverId: access.server.id },
       orderBy: { createdAt: 'desc' },
       take: 20,
     });
+    // Nur das Ende der Protokolle: die Oberfläche zeigt höchstens die letzten
+    // 200 Zeilen, ein volles Protokoll hat bis zu 60 000 Zeichen – bei zwanzig
+    // Aufgaben und Abfragen alle paar Sekunden wären das Megabytes.
+    return tasks.map((task) => ({ ...task, log: logTail(task.log) }));
   });
 
   // --- Untergeordnete Bereiche ------------------------------------------

@@ -41,6 +41,11 @@ export function invalidateSocketAccess(): void {
   generation++;
 }
 
+/** Stand der Rechte – ändert sich bei jeder Änderung an Konten oder Mitgliedschaften. */
+export function accessGeneration(): number {
+  return generation;
+}
+
 function accessFor(socket: Socket, serverId: string): Promise<{ consoleRead: boolean }> {
   const state = stateOf(socket);
   const cached = state.access.get(serverId);

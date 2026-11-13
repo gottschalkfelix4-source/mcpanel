@@ -90,7 +90,10 @@ LABEL org.opencontainers.image.licenses="MIT"
 # beim Start aus seinen eigenen Mounts. Ein fester Wert hier würde die
 # Erkennung aushebeln – die Minecraft-Container würden dann versuchen, einen
 # Pfad einzuhängen, den es auf dem Host gar nicht gibt.
+# Mehr Hintergrund-Threads: Packen (Backups), Kopieren, Dateizählen und DNS
+# teilen sich sonst vier – während eines Backups warteten Dateimanager & Co.
 ENV NODE_ENV=production \
+    UV_THREADPOOL_SIZE=16 \
     DATA_ROOT=/data \
     PGDATA=/data/postgres \
     PORT=3000 \

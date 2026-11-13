@@ -27,9 +27,19 @@ const MAX_CACHE = 500;
 const cache = new Map<string, { at: number; value: TreeStats }>();
 const inflight = new Map<string, Promise<TreeStats>>();
 
-async function compute(root: string): Promise<TreeStats> {
+export interface WalkOptions {
+  /** Übersprungene Pfade (absolut) – samt Inhalt */
+  skip?: (absolute: string) => boolean;
+  /** Ohne Grenze zählt der Durchlauf alles (Kontingent, Kopierfortschritt). */
+  limited?: boolean;
+}
+
+/** Zählt parallel; Grundlage für Ordnergrößen, Kontingent und Kopierfortschritt. */
+export async function walkTree(root: string, options: WalkOptions = {}): Promise<TreeStats> {
   const stats: TreeStats = { bytes: 0, files: 0, partial: false };
-  const deadline = Date.now() + DEADLINE_MS;
+  const limited = options.limited ?? false;
+  const deadline = limited ? Date.now() + DEADLINE_MS : Infinity;
+  const maxEntries = limited ? MAX_ENTRIES : Infinity;
   let seen = 0;
   const queue: string[] = [root];
   let active = 0;
@@ -38,12 +48,13 @@ async function compute(root: string): Promise<TreeStats> {
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
     const files: string[] = [];
     for (const entry of entries) {
-      if (++seen > MAX_ENTRIES || Date.now() > deadline) {
+      if (++seen > maxEntries || Date.now() > deadline) {
         stats.partial = true;
         return;
       }
       if (entry.isSymbolicLink()) continue;
       const absolute = path.join(dir, entry.name);
+      if (options.skip?.(absolute)) continue;
       if (entry.isDirectory()) queue.push(absolute);
       else if (entry.isFile()) files.push(absolute);
     }
@@ -80,7 +91,7 @@ export function treeStats(absolute: string): Promise<TreeStats> {
   if (hit && Date.now() - hit.at < TTL_MS) return Promise.resolve(hit.value);
   const running = inflight.get(absolute);
   if (running) return running;
-  const job = compute(absolute)
+  const job = walkTree(absolute, { limited: true })
     .then((value) => {
       cache.set(absolute, { at: Date.now(), value });
       if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value!);

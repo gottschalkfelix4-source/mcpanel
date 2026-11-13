@@ -127,25 +127,37 @@ export async function scanChunksNow(serverId: string, dimension: Dimension): Pro
 
   for (const relative of regionDirs(level, dimension)) {
     let names: string[];
+    let directory: string;
     try {
-      names = await fs.readdir(safePath(root, relative));
+      // Der Ordner wird einmal geprüft (keine Verknüpfung in seinem Pfad); die
+      // Dateien selbst liest `readRegion` per lstat und nimmt nur echte Dateien.
+      // Je Datei erneut alle Pfadteile synchron zu prüfen, hielt bei großen
+      // Welten – und über die Freigabe einer Node – das ganze Panel an.
+      directory = safePath(root, relative);
+      names = await fs.readdir(directory);
     } catch {
       continue;
     }
+    const matches: { name: string; x: number; z: number }[] = [];
     for (const name of names) {
       const match = REGION_NAME.exec(name);
       if (!match) continue;
-      if (result.regions.length >= MAX_REGIONS) {
+      if (matches.length >= MAX_REGIONS) {
         result.truncated = true;
         break;
       }
-      // Symlinks in jeder Pfadkomponente ablehnen – safePath je Datei.
-      const file = safePath(root, path.posix.join(relative, name));
-      const region = await readRegion(file).catch(() => null);
-      if (!region || region.count === 0) continue;
-      result.regions.push({ x: Number(match[1]), z: Number(match[2]), bits: region.bits, count: region.count });
-      result.chunks += region.count;
-      result.bytes += region.size;
+      matches.push({ name, x: Number(match[1]), z: Number(match[2]) });
+    }
+    for (let i = 0; i < matches.length; i += 32) {
+      const batch = matches.slice(i, i + 32);
+      const read = await Promise.all(batch.map((entry) => readRegion(path.join(directory, entry.name)).catch(() => null)));
+      batch.forEach((entry, index) => {
+        const region = read[index];
+        if (!region || region.count === 0) return;
+        result.regions.push({ x: entry.x, z: entry.z, bits: region.bits, count: region.count });
+        result.chunks += region.count;
+        result.bytes += region.size;
+      });
     }
     if (result.regions.length > 0) break; // erste vorhandene Variante gewinnt
   }

@@ -11,6 +11,7 @@ import * as files from './files.js';
 import { waitForServerOperation, withServerOperation } from './operations.js';
 import { remainingDiskBytes } from './quota.js';
 import { reserveDisk, type DiskReservation } from './diskReservation.js';
+import { accessGeneration } from '../ws/io.js';
 import { adjustDiskUsage, invalidateDiskUsage } from './diskUsage.js';
 
 type Location = { serverId: string; relative: string };
@@ -45,6 +46,28 @@ export class SftpFiles {
     const user = await prisma.user.findUnique({ where: { id: this.identity.id } });
     if (!user?.active || user.sessionVersion !== this.identity.sessionVersion) throw unauthorized('SFTP-Sitzung widerrufen');
     return user;
+  }
+
+  /**
+   * Rechte für den Datenstrom einer offenen Datei: je Paket (32 KiB) frisch aus
+   * der Datenbank zu lesen, begrenzte den Durchsatz auf wenige MB/s. Wie bei den
+   * Sockets gilt ein Ergebnis 5 s; Änderungen an Konten und Mitgliedschaften
+   * (`invalidateSocketAccess`) verwerfen es sofort. Der Pfad muss hier nicht
+   * erneut geprüft werden – gelesen und geschrieben wird über die schon offene Datei.
+   */
+  private streamAccess = new Map<string, { expires: number; generation: number; value: Promise<Awaited<ReturnType<typeof getServerAccess>>> }>();
+
+  private async allowedForStream(location: Location, permission: Permission): Promise<void> {
+    const now = Date.now();
+    let entry = this.streamAccess.get(location.serverId);
+    if (!entry || entry.expires <= now || entry.generation !== accessGeneration()) {
+      const value = this.user().then((user) => getServerAccess(user, location.serverId));
+      entry = { expires: now + 5000, generation: accessGeneration(), value };
+      this.streamAccess.set(location.serverId, entry);
+      value.catch(() => { if (this.streamAccess.get(location.serverId)?.value === value) this.streamAccess.delete(location.serverId); });
+    }
+    const access = await entry.value;
+    if (!access.can(permission)) throw forbidden('Keine Berechtigung für diese Dateioperation');
   }
 
   async access(location: Location, permission: Permission) {
@@ -158,7 +181,7 @@ export class SftpFiles {
   async read(id: string, offset: number, length: number): Promise<Buffer> {
     return this.use(id, async (handle) => {
       if (!handle.readable) throw forbidden('Datei ist nicht zum Lesen geöffnet');
-      await this.access(handle, PERMISSIONS.FILES_READ);
+      await this.allowedForStream(handle, PERMISSIONS.FILES_READ);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(length) || length < 1) throw badRequest('Ungültiger Lesebereich');
       const buffer = Buffer.alloc(Math.min(length, 256 * 1024));
       const result = await handle.file.read(buffer, 0, buffer.length, offset);
@@ -170,7 +193,7 @@ export class SftpFiles {
     return this.use(id, async (handle) => {
       try {
         if (!handle.writable || handle.failed) throw forbidden('Upload ist nicht schreibbar');
-        await this.access(handle, PERMISSIONS.FILES_WRITE);
+        await this.allowedForStream(handle, PERMISSIONS.FILES_WRITE);
         if (handle.append) offset = (await handle.file.stat()).size;
         if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(offset + data.length)) throw badRequest('Ungültiger Schreibbereich');
         if (offset + data.length > handle.maxSize) throw badRequest('Speicherkontingent reicht für den Upload nicht aus');

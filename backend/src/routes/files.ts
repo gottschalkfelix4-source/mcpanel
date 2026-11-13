@@ -37,7 +37,7 @@ export default async function fileRoutes(app: FastifyInstance) {
   app.get('/sizes', async (req) => {
     const access = await requireServer(req, PERMISSIONS.FILES_READ);
     const { path: rel } = pathQuery.parse(req.query);
-    const dirs = (await files.listDir(access.server.id, rel)).filter((entry) => entry.isDir);
+    const dirs = await files.listSubdirs(access.server.id, rel);
     const sizes: Record<string, TreeStats> = {};
     for (let i = 0; i < dirs.length; i += 4) {
       await Promise.all(dirs.slice(i, i + 4).map(async (entry) => {

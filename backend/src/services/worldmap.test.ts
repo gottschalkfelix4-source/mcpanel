@@ -53,6 +53,19 @@ describe('Regionsscan', () => {
     expect(regionDirs('world', 'end')).toEqual(['world/DIM1/region', 'world_the_end/DIM1/region']);
   });
 
+  // Die Pfadprüfung läuft je Ordner, nicht je Datei – eine verlinkte Datei
+  // oder ein verlinkter Ordner darf trotzdem nicht mitgelesen werden.
+  it('liest keine verlinkten Regionsdateien oder -ordner', async () => {
+    await put('srv/server.properties', 'level-name=world\n');
+    await put('fremd/r.9.9.mca', region([1, 2, 3, 4]));
+    await put('srv/world/region/r.0.0.mca', region([0]));
+    await fs.symlink(path.join(m.root, 'fremd', 'r.9.9.mca'), path.join(m.root, 'srv/world/region/r.1.1.mca'));
+    expect((await scanChunks('srv', 'overworld')).chunks).toBe(1);
+    await fs.mkdir(path.join(m.root, 'srv/world/DIM-1'), { recursive: true });
+    await fs.symlink(path.join(m.root, 'fremd'), path.join(m.root, 'srv/world/DIM-1/region'));
+    expect((await scanChunks('srv', 'nether')).chunks).toBe(0);
+  });
+
   it('lehnt einen Weltnamen mit Pfadanteilen ab', async () => {
     await put('srv/server.properties', 'level-name=../../etc\n');
     await expect(scanChunks('srv', 'overworld')).rejects.toMatchObject({ statusCode: 400 });

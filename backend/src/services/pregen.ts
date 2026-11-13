@@ -277,12 +277,19 @@ const lastResume = new Map<string, number>();
 const busy = new Set<string>();
 const acceptApplied = new Set<string>();
 
+function needsMonitor(settings: ServerMapSettings, serverId: string): boolean {
+  return settings.job?.status === 'running' || (settings.bluemapAccepted && !acceptApplied.has(serverId));
+}
+
 /** Ein Durchlauf für einen Server: Fortschritt lesen, automatische Pausen, Fortsetzen nach Neustart. */
 async function monitorServerUnlocked(server: Server): Promise<void> {
   if (busy.has(server.id)) return;
   busy.add(server.id);
   try {
     const settings = await getMapSettings(server.id);
+    // Ohne laufenden Auftrag und ohne offene BlueMap-Zustimmung gibt es nichts
+    // zu tun – dann auch keine Docker-Abfrage alle fünf Sekunden.
+    if (!needsMonitor(settings, server.id)) return;
     const { state } = await dockerSvc.getState(server);
 
     // Zustimmung eintragen, sobald BlueMap seine Konfiguration angelegt hat –
@@ -425,6 +432,10 @@ export function startPregenMonitor(log: (msg: string) => void): void {
       const rows = await prisma.setting.findMany({ where: { key: { startsWith: 'pregen.' } } });
       for (const row of rows) {
         const serverId = row.key.slice('pregen.'.length);
+        // Ruhende Einträge gar nicht erst anfassen.
+        let parsed: ServerMapSettings;
+        try { parsed = { ...EMPTY, ...(JSON.parse(row.value) as Partial<ServerMapSettings>) }; } catch { continue; }
+        if (!needsMonitor(parsed, serverId)) continue;
         const server = await prisma.server.findUnique({ where: { id: serverId } });
         if (!server) {
           await deleteSetting(row.key).catch(() => {});

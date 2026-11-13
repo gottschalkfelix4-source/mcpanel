@@ -1,3 +1,4 @@
+import { walkTree } from './treeStats.js';
 import { dirSize } from './files.js';
 import { archivePath as archiveEntryPath, safePath } from '../lib/safePath.js';
 import { commitRestore, finishRestore, recoverInterruptedRestore, restorePaths, saveRestoreMetadata } from './restoreRecovery.js';
@@ -171,8 +172,14 @@ async function installModpackImpl(
       return carriedSet.has(relative.split('/')[0]) || (isUpdate && replaced.has(relative));
     };
     const total = await copySize(original, skip);
+    // Ein Zähldurchlauf nach dem anderen – über langsame Freigaben dauert einer
+    // länger als das Intervall und bremste sonst das Kopieren selbst aus.
+    let measuring = false;
     const progress = setInterval(() => {
-      void dirSize(dir).then((done) => task.update(23, `Vorhandene Daten werden vorbereitet … ${formatGb(done)} von ${formatGb(total)} kopiert`)).catch(() => {});
+      if (measuring) return;
+      measuring = true;
+      void dirSize(dir).then((done) => task.update(23, `Vorhandene Daten werden vorbereitet … ${formatGb(done)} von ${formatGb(total)} kopiert`))
+        .catch(() => {}).finally(() => { measuring = false; });
     }, 2500);
     try {
       await fs.cp(original, dir, { recursive: true, mode: fsConstants.COPYFILE_FICLONE, filter: source => !skip(source) });
@@ -1227,19 +1234,7 @@ const formatGb = (bytes: number) => (bytes >= 1024 ** 3
 
 /** Größe dessen, was tatsächlich kopiert wird – für die Fortschrittsanzeige. */
 async function copySize(root: string, skip: (source: string) => boolean): Promise<number> {
-  let total = 0;
-  const stack = [root];
-  while (stack.length) {
-    const current = stack.pop()!;
-    const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      const abs = path.join(current, entry.name);
-      if (skip(abs)) continue;
-      if (entry.isDirectory()) stack.push(abs);
-      else if (entry.isFile()) total += (await fs.stat(abs).catch(() => null))?.size ?? 0;
-    }
-  }
-  return total;
+  return (await walkTree(root, { skip })).bytes;
 }
 
 /**

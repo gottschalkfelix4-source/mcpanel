@@ -12,6 +12,7 @@ import { archivePath, safePath } from '../lib/safePath.js';
 import { pipeline } from 'node:stream/promises';
 import { byteLimit } from '../lib/byteLimit.js';
 import { reservationMeter, type DiskReservation } from './diskReservation.js';
+import { walkTree } from './treeStats.js';
 
 export interface FileEntry {
   name: string;
@@ -51,6 +52,18 @@ export function isEditable(name: string, size: number): boolean {
   return ext === '' && size < 256 * 1024;
 }
 
+/** Einmal angelegt – `localeCompare` mit Optionen baut ihn sonst bei jedem Vergleich neu. */
+const NAME_ORDER = new Intl.Collator('de', { numeric: true });
+
+/** Unterordner eines Ordners, ohne jeden Eintrag einzeln abzufragen. */
+export async function listSubdirs(serverId: string, relative: string): Promise<{ name: string; path: string }[]> {
+  const dir = resolveSafe(serverId, relative);
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => {
+    throw notFound('Ordner nicht gefunden');
+  });
+  return entries.filter((e) => e.isDirectory()).map((e) => ({ name: e.name, path: toRelative(serverId, path.join(dir, e.name)) }));
+}
+
 export async function listDir(serverId: string, relative: string): Promise<FileEntry[]> {
   const dir = resolveSafe(serverId, relative);
   let entries;
@@ -60,29 +73,31 @@ export async function listDir(serverId: string, relative: string): Promise<FileE
     throw notFound('Ordner nicht gefunden');
   }
 
+  // Mehrere Abfragen gleichzeitig: Ordner wie region/ oder BlueMap-Kacheln
+  // haben Tausende Einträge, über die Freigabe einer Node je eine Rundreise.
   const out: FileEntry[] = [];
-  for (const e of entries) {
-    if (e.isSymbolicLink()) continue;
-    const abs = path.join(dir, e.name);
-    let stat;
-    try {
-      stat = await fs.stat(abs);
-    } catch {
-      continue;
-    }
-    out.push({
-      name: e.name,
-      path: toRelative(serverId, abs),
-      isDir: stat.isDirectory(),
-      size: stat.isDirectory() ? 0 : stat.size,
-      modified: stat.mtime.toISOString(),
-      editable: !stat.isDirectory() && isEditable(e.name, stat.size),
+  const candidates = entries.filter((e) => !e.isSymbolicLink());
+  for (let i = 0; i < candidates.length; i += 64) {
+    const batch = candidates.slice(i, i + 64);
+    const stats = await Promise.all(batch.map((e) => fs.stat(path.join(dir, e.name)).catch(() => null)));
+    batch.forEach((e, index) => {
+      const stat = stats[index];
+      if (!stat) return;
+      const abs = path.join(dir, e.name);
+      out.push({
+        name: e.name,
+        path: toRelative(serverId, abs),
+        isDir: stat.isDirectory(),
+        size: stat.isDirectory() ? 0 : stat.size,
+        modified: stat.mtime.toISOString(),
+        editable: !stat.isDirectory() && isEditable(e.name, stat.size),
+      });
     });
   }
 
   out.sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-    return a.name.localeCompare(b.name, 'de', { numeric: true });
+    return NAME_ORDER.compare(a.name, b.name);
   });
   return out;
 }
@@ -274,27 +289,9 @@ async function unzipUnlocked(serverId: string, relative: string, targetDir: stri
 }
 
 /** Gesamtgröße eines Verzeichnisses (rekursiv). */
+/** Gesamtgröße eines Ordners – parallel gezählt, Verknüpfungen zählen nicht mit. */
 export async function dirSize(dir: string): Promise<number> {
-  let total = 0;
-  const stack = [dir];
-  while (stack.length) {
-    const current = stack.pop()!;
-    let entries;
-    try {
-      entries = await fs.readdir(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      const abs = path.join(current, e.name);
-      if (e.isDirectory()) stack.push(abs);
-      else {
-        const st = await fs.stat(abs).catch(() => null);
-        if (st) total += st.size;
-      }
-    }
-  }
-  return total;
+  return (await walkTree(dir)).bytes;
 }
 
 export const writeFile = (...args: Parameters<typeof writeFileUnlocked>) => withServerOperation(args[0], "writeFile", () => writeFileUnlocked(...args));
