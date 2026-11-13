@@ -128,3 +128,48 @@ describe('shouldStore', () => {
     expect(shouldStore('config/x.json')).toBe(false);
   });
 });
+
+describe('große Dateien mit unbekannter Endung', () => {
+  // Distant Horizons, CoreProtect & Co. legen Gigabyte-Datenbanken an. Sind
+  // sie nicht packbar, darf die Kompression nicht die Laufzeit bestimmen.
+  it('legt eine nicht packbare Datenbank ab, statt sie zu packen', async () => {
+    const daten = crypto.randomBytes(10 * 1024 * 1024);
+    await schreibe('world/data/DistantHorizons.sqlite', daten);
+    const sources = await collectSources(path.join(root, 'src'), ['world']);
+    const target = path.join(root, 'dh.zip');
+    const result = await writeZip(target, sources);
+    const eintrag = (await lies(target)).get('world/data/DistantHorizons.sqlite')!;
+    expect(eintrag.entry.compressionMethod).toBe(0);
+    expect(eintrag.data.equals(daten)).toBe(true);
+    expect(result.size).toBeLessThan(daten.length + 4096);
+  });
+
+  it('packt eine packbare Datenbank blockweise und liest sie unverändert zurück', async () => {
+    // Kein sich wiederholendes Muster: jede Zeile ist anders, Blockgrenzen
+    // fallen mitten in Zeilen – ein Fehler beim Aneinanderhängen fiele auf.
+    const zeilen: string[] = [];
+    for (let i = 0; zeilen.length < 260_000; i++) zeilen.push(`${i};spieler_${i % 977};minecraft:stone;${(i * 7919) % 100_003};${i % 3 === 0 ? 'gesetzt' : 'abgebaut'}`);
+    const daten = Buffer.from(zeilen.join('\n'));
+    expect(daten.length).toBeGreaterThan(9 * 1024 * 1024);
+    await schreibe('plugins/CoreProtect/database.db', daten);
+    const sources = await collectSources(path.join(root, 'src'), ['plugins']);
+    const target = path.join(root, 'cp.zip');
+    const result = await writeZip(target, sources);
+    const eintrag = (await lies(target)).get('plugins/CoreProtect/database.db')!;
+    expect(eintrag.entry.compressionMethod).toBe(8);
+    expect(eintrag.data.equals(daten)).toBe(true);
+    expect(result.size).toBeLessThan(daten.length / 2);
+  });
+});
+
+describe('collectSources', () => {
+  it('liefert trotz gleichzeitiger Abfragen eine feste Reihenfolge: sortiert, Ordner vor Inhalt', async () => {
+    for (const name of ['b/2.txt', 'b/1.txt', 'a/x/tief.txt', 'a/z.txt', 'c.txt']) await schreibe(name, name);
+    for (let i = 0; i < 60; i++) await schreibe(`viele/${String(i).padStart(2, '0')}.txt`, 'x');
+    const base = path.join(root, 'src');
+    const namen = (await collectSources(base, await fs.readdir(base))).map((s) => s.name);
+    expect(namen.slice(0, 9)).toEqual(['a/', 'a/x/', 'a/x/tief.txt', 'a/z.txt', 'b/', 'b/1.txt', 'b/2.txt', 'c.txt', 'viele/']);
+    expect(namen.slice(9)).toEqual(Array.from({ length: 60 }, (_, i) => `viele/${String(i).padStart(2, '0')}.txt`));
+  });
+});
+

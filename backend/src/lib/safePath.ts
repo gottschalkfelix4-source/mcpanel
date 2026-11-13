@@ -23,11 +23,21 @@ export function safePath(root: string, relative: string): string {
   return target;
 }
 
-/** Archive paths must not use traversal, drive letters or absolute roots. */
-export function archivePath(root: string, entry: string): string {
+/**
+ * Reine Namensprüfung eines Archiveintrags, ohne Blick ins Dateisystem: kein
+ * Traversal, keine Laufwerksbuchstaben, keine absoluten Pfade. Genügt, um ein
+ * Inhaltsverzeichnis zu lesen; vor dem Entpacken prüft `archivePath` gegen das
+ * echte Ziel (dort zählen auch Verknüpfungen).
+ */
+export function archiveEntryName(entry: string): string {
   const normalized = entry.replace(/\\/g, '/');
-  if (normalized.startsWith('/') || /^[a-z]:/i.test(normalized) || normalized.split('/').includes('..')) {
+  if (normalized.includes('\0') || normalized.startsWith('/') || /^[a-z]:/i.test(normalized) || normalized.split('/').includes('..')) {
     throw badRequest('Archiv enthält einen ungültigen Pfad');
   }
-  return safePath(root, normalized);
+  return normalized;
+}
+
+/** Archive paths must not use traversal, drive letters or absolute roots. */
+export function archivePath(root: string, entry: string): string {
+  return safePath(root, archiveEntryName(entry));
 }

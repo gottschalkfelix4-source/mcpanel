@@ -7,7 +7,7 @@ import { crc32 } from 'node:zlib';
 import { openPromise, type Entry } from 'yauzl';
 import { z } from 'zod';
 import { badRequest, conflict } from '../lib/errors.js';
-import { archivePath, safePath } from '../lib/safePath.js';
+import { archiveEntryName, archivePath, safePath } from '../lib/safePath.js';
 import { byteLimit } from '../lib/byteLimit.js';
 import { serverDir } from '../config.js';
 import { prisma } from '../db.js';
@@ -73,7 +73,9 @@ export async function readZipEntries(file: string, limits: ZipLimits = {}): Prom
     for await (const entry of zip.eachEntry()) {
       if (entries.length >= maxEntries) throw badRequest(`Das ZIP enthält zu viele Dateien (höchstens ${maxEntries.toLocaleString('de-DE')}).`);
       const name = entry.fileName;
-      archivePath(path.dirname(file), name);
+      // Nur der Name: das Ziel steht hier noch nicht fest, und ein Blick ins
+      // Dateisystem je Eintrag (synchron!) hielte bei großen Archiven das Panel an.
+      archiveEntryName(name);
       const parts = name.replace(/\/$/, '').split('/');
       if (parts.some(p => !p || p === '.' || /[:\x00-\x1f]/.test(p))) throw badRequest('Das ZIP enthält einen ungültigen Dateipfad.');
       const kind = (entry.externalFileAttributes >>> 16) & 0o170000;

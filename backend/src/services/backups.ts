@@ -2,6 +2,7 @@ import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { crc32 } from 'node:zlib';
 import { openPromise } from 'yauzl';
+import { verifyZipEntries } from '../lib/zipVerify.js';
 import { collectSources, writeZip, writeZipStream } from '../lib/zipWriter.js';
 import { dirSize, isUploadTemp } from './files.js';
 import { extractServerZip, readZipEntries } from './serverImport.js';
@@ -318,23 +319,15 @@ async function inspectZip(archive: string, onProgress?: (percent: number) => unk
     let lastReport = 0;
     for (const entry of entries) {
       if (/(^|\/)level\.dat$/.test(entry.fileName)) check.hasWorld = true;
-      if (entry.fileName.endsWith('/')) continue;
-      let crc = 0;
-      const sink = new Writable({
-        write(chunk: Buffer, _encoding, callback) {
-          crc = crc32(chunk, crc);
-          read += chunk.length;
-          callback();
-        },
-      });
-      await pipeline(await zip.openReadStreamPromise(entry), sink);
-      if (crc !== entry.crc32) throw new Error(`Prüfsumme stimmt nicht: ${entry.fileName}`);
+    }
+    await verifyZipEntries(archive, zip, entries, (chunk) => {
+      read += chunk;
       const now = Date.now();
       if (onProgress && now - lastReport > 250) {
         lastReport = now;
-        await onProgress(bytes > 0 ? Math.round((read / bytes) * 100) : 100);
+        void Promise.resolve(onProgress(bytes > 0 ? Math.round((read / bytes) * 100) : 100)).catch(() => {});
       }
-    }
+    });
   } finally {
     zip.close();
   }

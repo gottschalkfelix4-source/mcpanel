@@ -1,10 +1,9 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Transform, Writable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import type { Writable } from 'node:stream';
 import { promisify } from 'node:util';
-import { crc32, createDeflateRaw, deflateRaw } from 'node:zlib';
+import { constants as zlibConstants, crc32, deflateRaw, deflateRawSync } from 'node:zlib';
 import { badRequest } from './errors.js';
 
 /**
@@ -15,6 +14,12 @@ import { badRequest } from './errors.js';
  * aber fast die ganze Laufzeit (ein Kern, ~40 MB/s). Hier werden bereits
  * komprimierte Dateien deshalb unverändert abgelegt ("stored"), nur der Rest
  * wird gepackt – kleine Dateien mehrere gleichzeitig im libuv-Threadpool.
+ *
+ * Große Dateien mit unbekannter Endung (Datenbanken von Distant Horizons,
+ * CoreProtect, LuckPerms …) werden vorher angetestet: ist der Inhalt praktisch
+ * nicht packbar, wird er ebenfalls nur abgelegt. Sonst lief eine einzige
+ * solche Datei mit rund 35 MB/s durch die Kompression und bestimmte die ganze
+ * Laufzeit. Was sich packen lässt, wird blockweise auf mehreren Kernen gepackt.
  *
  * Geschrieben wird mit festen Dateipositionen: der lokale Kopf einer großen
  * Datei wird nach dem Durchlauf mit Prüfsumme und Größen überschrieben, so
@@ -64,11 +69,45 @@ const IM_SPEICHER_MAX = 8 * 1024 ** 2;
 const FENSTER_BYTES = 64 * 1024 ** 2;
 const PARALLEL = Math.min(8, Math.max(2, os.availableParallelism?.() ?? os.cpus().length));
 /** Ab hier bekommt der lokale Kopf vorsorglich ein ZIP64-Feld – die Datei könnte noch wachsen. */
+/** So viele Dateisystem-Abfragen laufen beim Sammeln gleichzeitig. */
+const SAMMELN_PARALLEL = 16;
 const ZIP64_SCHWELLE = 0xf000_0000;
 const MAX32 = 0xffff_ffff;
 const ZIP64_EINTRAEGE = 0xffff;
 
-const deflateRawAsync = promisify(deflateRaw);
+/** Bis zu dieser Größe wird synchron gepackt. */
+const SYNCHRON_MAX = 16 * 1024;
+/** Blockgröße beim Durchreichen und beim parallelen Packen großer Dateien. */
+const BLOCK = 1024 * 1024;
+/** Proben je großer Datei (Anfang, Mitte, Ende) und ihre Größe. */
+const PROBE_BYTES = 128 * 1024;
+/** Spart das Packen weniger als das, wird die Datei nur abgelegt. */
+const PROBE_MIN_ERSPARNIS = 0.08;
+/** Leerer Schlussblock eines Deflate-Stroms (BFINAL, feste Huffman-Codes, Blockende). */
+const DEFLATE_ENDE = Buffer.from([0x03, 0x00]);
+
+const deflateRawAsync = promisify(deflateRaw) as (data: Buffer, options?: { level?: number; finishFlush?: number }) => Promise<Buffer>;
+
+/**
+ * Lohnt sich das Packen dieser großen Datei? Drei kurze Proben mit der
+ * schnellsten Stufe genügen: Datenbanken mit bereits komprimiertem Inhalt
+ * verraten sich überall gleich.
+ */
+async function lohntPacken(input: fs.FileHandle, size: number): Promise<boolean> {
+  if (size <= 0) return false;
+  const len = Math.min(PROBE_BYTES, size);
+  const stellen = size <= len * 3 ? [0] : [0, Math.floor((size - len) / 2), size - len];
+  let roh = 0;
+  let gepackt = 0;
+  for (const position of stellen) {
+    const probe = Buffer.allocUnsafe(len);
+    const { bytesRead } = await input.read(probe, 0, len, position);
+    if (bytesRead === 0) continue;
+    roh += bytesRead;
+    gepackt += (await deflateRawAsync(probe.subarray(0, bytesRead), { level: 1 })).length;
+  }
+  return roh > 0 && gepackt <= roh * (1 - PROBE_MIN_ERSPARNIS);
+}
 
 export function shouldStore(name: string): boolean {
   return SCHON_GEPACKT.has(path.extname(name).toLowerCase());
@@ -84,22 +123,44 @@ export async function collectSources(
   tops: string[],
   include: (relative: string) => boolean = () => true,
 ): Promise<ZipSource[]> {
-  const result: ZipSource[] = [];
-  const walk = async (relative: string) => {
-    if (!include(relative)) return;
-    const absolute = path.join(root, relative);
-    const stat = await fs.lstat(absolute).catch(() => null);
-    if (!stat) return;
-    const name = relative.split(path.sep).join('/');
-    if (stat.isDirectory()) {
-      result.push({ name: `${name}/`, path: absolute, size: 0, mtime: stat.mtime, mode: stat.mode & 0o777, directory: true });
-      const children = await fs.readdir(absolute).catch(() => [] as string[]);
-      for (const child of children.sort()) await walk(path.join(relative, child));
-    } else if (stat.isFile()) {
-      result.push({ name, path: absolute, size: stat.size, mtime: stat.mtime, mode: stat.mode & 0o777, directory: false });
+  // Mehrere Abfragen gleichzeitig: bei Hunderttausenden Kartenkacheln oder
+  // einer per Netz eingehängten Node kostet das Nacheinander sonst Minuten.
+  // Die Reihenfolge im Ergebnis bleibt dieselbe (sortiert, Ordner vor Inhalt).
+  let frei = SAMMELN_PARALLEL;
+  const wartend: (() => void)[] = [];
+  const begrenzt = async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (frei > 0) frei -= 1;
+    else await new Promise<void>((resolve) => wartend.push(resolve));
+    try {
+      return await fn();
+    } finally {
+      const naechster = wartend.shift();
+      if (naechster) naechster();
+      else frei += 1;
     }
   };
-  for (const top of [...tops].sort()) await walk(top);
+
+  const walk = async (relative: string): Promise<ZipSource[]> => {
+    if (!include(relative)) return [];
+    const absolute = path.join(root, relative);
+    const stat = await begrenzt(() => fs.lstat(absolute).catch(() => null));
+    if (!stat) return [];
+    const name = relative.split(path.sep).join('/');
+    if (stat.isDirectory()) {
+      const result: ZipSource[] = [{ name: `${name}/`, path: absolute, size: 0, mtime: stat.mtime, mode: stat.mode & 0o777, directory: true }];
+      const children = await begrenzt(() => fs.readdir(absolute).catch(() => [] as string[]));
+      const teile = await Promise.all(children.sort().map((child) => walk(path.join(relative, child))));
+      for (const teil of teile) for (const eintrag of teil) result.push(eintrag);
+      return result;
+    }
+    if (stat.isFile()) {
+      return [{ name, path: absolute, size: stat.size, mtime: stat.mtime, mode: stat.mode & 0o777, directory: false }];
+    }
+    return [];
+  };
+
+  const result: ZipSource[] = [];
+  for (const teil of await Promise.all([...tops].sort().map(walk))) for (const eintrag of teil) result.push(eintrag);
   return result;
 }
 
@@ -316,7 +377,9 @@ async function vorbereiten(source: ZipSource): Promise<Vorbereitet | null> {
   }
   const crc = crc32(raw);
   if (!shouldStore(source.name) && raw.length > 64) {
-    const packed = await deflateRawAsync(raw);
+    // Winzige Dateien (Kartenkacheln, Konfiguration) packt der Hauptfaden
+    // schneller, als der Wechsel in den Threadpool und zurück dauert.
+    const packed = raw.length <= SYNCHRON_MAX ? deflateRawSync(raw) : await deflateRawAsync(raw);
     if (packed.length < raw.length) return { method: 8, crc, size: raw.length, data: packed };
   }
   return { method: 0, crc, size: raw.length, data: raw };
@@ -415,36 +478,51 @@ async function schreibe(out: Ziel, sources: ZipSource[], options: ZipOptions): P
         if (istWeg(err)) { done += s.size; continue; }
         throw err;
       }
-      const e: Eintrag = {
-        ...basis, method: shouldStore(s.name) ? 0 : 8, crc: 0, size: 0, compressed: 0,
-        // Im Stream stehen Größen erst hinter den Daten – immer im ZIP64-Format,
-        // dann ist die Länge des Descriptors eindeutig.
-        zip64Lokal: !out.springt || s.size >= ZIP64_SCHWELLE,
-        deskriptor: !out.springt,
-      };
-      const kopfPos = out.pos;
-      await out.write(lokalerKopf(e));
-      const datenStart = out.pos;
       let crc = 0;
       const vorher = done;
-      const messer = new Transform({
-        transform(chunk: Buffer, _enc, cb) {
-          crc = crc32(chunk, crc);
-          e.size += chunk.length;
+      let e: Eintrag;
+      let kopfPos: number;
+      let datenStart: number;
+      try {
+        const packen = !shouldStore(s.name) && await lohntPacken(input, s.size);
+        e = {
+          ...basis, method: packen ? 8 : 0, crc: 0, size: 0, compressed: 0,
+          // Im Stream stehen Größen erst hinter den Daten – immer im ZIP64-Format,
+          // dann ist die Länge des Descriptors eindeutig.
+          zip64Lokal: !out.springt || s.size >= ZIP64_SCHWELLE,
+          deskriptor: !out.springt,
+        };
+        kopfPos = out.pos;
+        await out.write(lokalerKopf(e));
+        datenStart = out.pos;
+
+        // Blöcke werden gleichzeitig gepackt, aber in Reihenfolge geschrieben.
+        // Jeder endet mit einem Sync-Flush (bytegenau, kein Schlussblock) –
+        // aneinandergehängt und mit `DEFLATE_ENDE` abgeschlossen ergibt das
+        // einen gültigen Deflate-Strom.
+        const wartend: Promise<Buffer>[] = [];
+        for (;;) {
+          const block = Buffer.allocUnsafe(BLOCK);
+          const { bytesRead } = await input.read(block, 0, BLOCK, null);
+          if (bytesRead === 0) break;
+          const roh = bytesRead === BLOCK ? block : block.subarray(0, bytesRead);
+          crc = crc32(roh, crc);
+          e.size += bytesRead;
+          if (packen) {
+            const job = deflateRawAsync(roh, { finishFlush: zlibConstants.Z_SYNC_FLUSH });
+            job.catch(() => {}); // wird beim Abholen ausgewertet
+            wartend.push(job);
+            if (wartend.length >= PARALLEL) await out.write(await wartend.shift()!);
+          } else {
+            await out.write(roh);
+          }
           done = vorher + Math.min(e.size, s.size);
           melde();
-          cb(null, chunk);
-        },
-      });
-      const senke = new Writable({
-        write(chunk: Buffer, _enc, cb) {
-          out.write(chunk).then(() => cb(), cb);
-        },
-      });
-      try {
-        const lesen = input.createReadStream({ highWaterMark: 1024 * 1024 });
-        if (e.method === 8) await pipeline(lesen, messer, createDeflateRaw(), senke);
-        else await pipeline(lesen, messer, senke);
+        }
+        if (packen) {
+          while (wartend.length > 0) await out.write(await wartend.shift()!);
+          await out.write(DEFLATE_ENDE);
+        }
       } finally {
         await input.close().catch(() => {});
       }
