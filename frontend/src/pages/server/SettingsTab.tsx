@@ -12,6 +12,8 @@ import CloneServer from '../../components/CloneServer';
 import ServerRouting from '../../components/ServerRouting';
 import NodeMigration from '../../components/NodeMigration';
 import ServerPorts from '../../components/ServerPorts';
+import { serverTypeLabel } from '../../lib/labels';
+import { useUnsavedWarning } from '../../lib/useUnsavedWarning';
 
 const SERVER_TYPES: ServerType[] = [
   'VANILLA', 'PAPER', 'PURPUR', 'SPIGOT', 'FABRIC', 'FORGE', 'NEOFORGE', 'QUILT', 'MODPACK',
@@ -34,6 +36,8 @@ export default function SettingsTab() {
   const [env, setEnv] = useState<[string, string][]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [keepFiles, setKeepFiles] = useState(false);
+  useUnsavedWarning(name !== server.name || description !== server.description || type !== server.type
+    || mcVersion !== server.mcVersion || memoryMb !== server.memoryMb || autoStart !== server.autoStart);
 
   // Kontingente: nur Administratoren duerfen sie setzen.
   const [quotaDiskGb, setQuotaDiskGb] = useState(
@@ -127,7 +131,7 @@ export default function SettingsTab() {
             >
               {SERVER_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {t}
+                  {serverTypeLabel(t)}
                 </option>
               ))}
             </select>
@@ -299,7 +303,7 @@ export default function SettingsTab() {
               <button
                 onClick={() => setEnv((prev) => prev.filter((_, i) => i !== index))}
                 className="p-2 text-stone-450 transition hover:text-redstone"
-                title="Entfernen"
+                title="Entfernen" aria-label="Entfernen"
               >
                 <X size={16} />
               </button>

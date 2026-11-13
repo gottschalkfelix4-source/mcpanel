@@ -60,6 +60,13 @@ export default function PlayersTab() {
   ].map(player => [player.name.toLowerCase(), player])).values()]
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  /** Name erst nach Erfolg leeren – bei einem Fehler soll er nicht weg sein. */
+  function addToWhitelist() {
+    const name = newName.trim();
+    if (!name) return;
+    act.mutate({ action: 'whitelistAdd', player: name }, { onSuccess: () => setNewName('') });
+  }
+
   function run(action: Action, player: string) {
     const name = player.trim();
     if (!name) return;
@@ -171,20 +178,15 @@ export default function PlayersTab() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    run('whitelistAdd', newName);
-                    setNewName('');
-                  }
+                  if (e.key === 'Enter' && !offline && newName.trim()) addToWhitelist();
                 }}
               />
               <Button
                 variant="primary"
                 icon={<Plus size={15} />}
                 disabled={offline || !newName.trim()}
-                onClick={() => {
-                  run('whitelistAdd', newName);
-                  setNewName('');
-                }}
+                loading={act.isPending && act.variables?.action === 'whitelistAdd'}
+                onClick={addToWhitelist}
               >
                 Hinzufügen
               </Button>

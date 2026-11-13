@@ -211,7 +211,7 @@ export default function FilesTab() {
                     <td className="hidden whitespace-nowrap px-2 py-2 text-right font-mono text-xs text-stone-450 sm:table-cell">
                       {entry.isDir ? <FolderSize stats={sizes.data?.sizes[entry.name]} loading={sizes.isLoading} /> : formatBytes(entry.size)}
                     </td>
-                    <td className="hidden px-2 py-2 font-mono text-xs text-stone-450 md:table-cell">
+                    <td className="hidden whitespace-nowrap px-2 py-2 font-mono text-xs text-stone-450 md:table-cell">
                       {formatDate(entry.modified)}
                     </td>
                     <td className="px-4 py-2">
@@ -317,6 +317,7 @@ export default function FilesTab() {
                 variant="primary"
                 className="!px-3 !py-1.5 !text-xs"
                 icon={<Upload size={13} />}
+                loading={uploadPercent !== null}
                 onClick={() => fileInput.current?.click()}
               >
                 Hochladen

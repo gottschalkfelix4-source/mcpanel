@@ -13,6 +13,7 @@ import { useLiveStats, useServer } from './ServerLayout';
 import { serverStatus } from '../../lib/serverStatus';
 import TickMetrics from '../../components/TickMetrics';
 import { TaskProgress } from '../../components/TaskProgress';
+import { providerLabel, serverTypeLabel, taskLabel } from '../../lib/labels';
 
 export default function OverviewTab() {
   const { server, liveState, liveHealth, players, can } = useServer();
@@ -153,7 +154,7 @@ export default function OverviewTab() {
             <dl className="grid gap-x-6 gap-y-3.5 sm:grid-cols-2">
               <Detail label="Adresse" value={server.address || 'Kein öffentlicher Zugang'} />
               <Detail label="Port" value={String(server.port)} />
-              <Detail label="Typ" value={server.type} />
+              <Detail label="Typ" value={serverTypeLabel(server.type)} />
               <Detail label="Minecraft-Version" value={server.mcVersion} />
               <Detail label="Java-Heap" value={formatMemory(server.memoryMb)} />
               <Detail label="Besitzer" value={server.owner?.username ?? '–'} />
@@ -195,7 +196,7 @@ export default function OverviewTab() {
                     tone={server.modpack.provider === 'modrinth' ? 'green' : 'gold'}
                     className="mt-1.5"
                   >
-                    {server.modpack.provider}
+                    {providerLabel(server.modpack.provider)}
                   </Badge>
                 </div>
               </div>
@@ -222,7 +223,7 @@ export default function OverviewTab() {
                       {task.status === 'DONE' ? 'OK' : task.status === 'FAILED' ? 'Fehler' : 'Läuft'}
                     </Badge>
                     <div className="min-w-0 flex-1">
-                      <p className="font-mono text-xs text-stone-100">{task.type}</p>
+                      <p className="text-xs font-semibold text-stone-100">{taskLabel(task.type, task.status === 'RUNNING' || task.status === 'PENDING')}</p>
                       <p className="mt-[3px] truncate text-xs text-stone-450">
                         {task.error ?? task.message}
                       </p>

@@ -216,7 +216,7 @@ function Toggle3({ value, onChange, options }: { value: string; onChange: (v: st
     <div role="group" className="flex border border-stone-950">
       {options.map((option) => (
         <button key={option.value} type="button" aria-pressed={value === option.value} disabled={option.disabled}
-          title={option.disabled ? 'Braucht BlueMap' : undefined}
+          title={option.disabled ? 'Braucht BlueMap' : undefined} aria-label={option.disabled ? 'Braucht BlueMap' : undefined}
           onClick={() => onChange(option.value)}
           className={clsx('border-r border-stone-950 px-3 py-1.5 text-xs font-bold last:border-r-0 disabled:cursor-not-allowed disabled:opacity-40',
             value === option.value ? 'bg-grass text-white' : 'bg-stone-700 text-stone-300 hover:text-stone-50')}>

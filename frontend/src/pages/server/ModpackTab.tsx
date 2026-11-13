@@ -86,6 +86,7 @@ export default function ModpackTab() {
       void state.refetch();
       refresh();
     },
+    onError: (err: Error) => toast.error(err.message),
   });
 
   const onTaskFinished = useCallback(() => {

@@ -16,7 +16,7 @@ function Logo() {
           MCPanel
         </span>
         <span className="mt-[5px] hidden text-[10px] uppercase tracking-[0.24em] text-stone-450 sm:block">
-          Server Hosting
+          Server-Verwaltung
         </span>
       </span>
     </Link>

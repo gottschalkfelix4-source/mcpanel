@@ -185,7 +185,7 @@ export function ModpackBrowser({
                   : 'border-stone-700 bg-stone-800/60 text-stone-400 hover:text-stone-100',
                 disabled && 'cursor-not-allowed opacity-40',
               )}
-              title={disabled ? 'CurseForge-API-Key fehlt (Panel-Einstellungen)' : undefined}
+              title={disabled ? 'CurseForge-API-Key fehlt (Panel-Einstellungen)' : undefined} aria-label={disabled ? 'CurseForge-API-Key fehlt (Panel-Einstellungen)' : undefined}
             >
               {p === 'all' ? 'Alle Quellen' : p}
             </button>

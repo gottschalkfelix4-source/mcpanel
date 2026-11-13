@@ -352,6 +352,7 @@ function MemberRow({
               variant="danger"
               className="!px-2.5 !py-1.5 !text-xs"
               icon={<Trash2 size={13} />}
+              title="Zugriff entziehen"
               onClick={onRemove}
             />
           </div>

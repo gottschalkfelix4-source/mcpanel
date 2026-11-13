@@ -7,8 +7,9 @@ import clsx from 'clsx';
 import { api } from '../lib/api';
 import { formatBytes, formatUptime } from '../lib/format';
 import type { ServerSummary, ServerType } from '../lib/types';
-import { Button, StateBadge, useToast } from './ui';
+import { Button, ConfirmDialog, StateBadge, useToast } from './ui';
 import { BarChart, BlockIcon, PixelBar, useHistory } from './pixel';
+import { serverTypeLabel } from '../lib/labels';
 
 /** Blockfarbe und Symbol je Servertyp. */
 export const TYPE_LOOK: Record<ServerType, { color: string; Icon: typeof Boxes }> = {
@@ -52,6 +53,7 @@ export function ServerCard({ server }: { server: ServerSummary }) {
   const cpuHistory = useHistory(running ? (server.stats?.cpuPercent ?? 0) : 2, 20);
   const memHistory = useHistory(running ? memPercent : 2, 20);
 
+  const [confirmStop, setConfirmStop] = useState(false);
   const power = useMutation({
     mutationFn: (action: 'start' | 'stop' | 'restart') =>
       api.post(`/servers/${server.id}/power`, { action }),
@@ -130,7 +132,7 @@ export function ServerCard({ server }: { server: ServerSummary }) {
             <p className="mt-1 truncate text-xs text-stone-350">
               {server.modpack?.name
                 ? `${server.modpack.name} · ${server.modpack.versionName ?? ''}`
-                : `${server.type} ${server.mcVersion}`}
+                : `${serverTypeLabel(server.type)} ${server.mcVersion}`}
               {server.node && <span className="text-diamond"> · {server.node.name}</span>}
             </p>
 
@@ -138,7 +140,7 @@ export function ServerCard({ server }: { server: ServerSummary }) {
               onClick={copyAddress}
                     disabled={!server.address}
               className="mt-2 inline-flex items-center gap-[7px] font-mono text-xs text-stone-300 transition hover:text-grass-light"
-              title="Adresse kopieren"
+              title="Adresse kopieren" aria-label="Adresse kopieren"
             >
               {copied ? <Check size={12} className="text-emerald" /> : <Copy size={12} />}
               {server.address || 'Kein öffentlicher Zugang'}
@@ -197,7 +199,7 @@ export function ServerCard({ server }: { server: ServerSummary }) {
                   icon={<Play size={13} />}
                   onClick={() => power.mutate('start')}
                 >
-                  Start
+                  Starten
                 </Button>
               ) : (
                 <>
@@ -215,12 +217,22 @@ export function ServerCard({ server }: { server: ServerSummary }) {
                     className="!px-3 !py-[7px] !text-xs"
                     loading={power.isPending}
                     icon={<Square size={13} />}
-                    onClick={() => power.mutate('stop')}
+                    onClick={() => setConfirmStop(true)}
                   >
-                    Stop
+                    Stoppen
                   </Button>
                 </>
               )}
+              {/* Im Klick-Schutz der Karte: Klicks im Dialog öffnen sonst den Server. */}
+              <ConfirmDialog
+                open={confirmStop}
+                onClose={() => setConfirmStop(false)}
+                onConfirm={() => power.mutate('stop')}
+                title={`${server.name} stoppen?`}
+                message="Der Server wird sauber heruntergefahren. Verbundene Spieler werden getrennt."
+                confirmLabel="Stoppen"
+                danger
+              />
             </div>
           </div>
 

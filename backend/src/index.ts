@@ -8,7 +8,7 @@ import { ZodError } from 'zod';
 import { config } from './config.js';
 import { stopPanelBackupScheduler } from './services/panelBackups.js';
 import { prisma } from './db.js';
-import { HttpError } from './lib/errors.js';
+import { HttpError, isInternalError } from './lib/errors.js';
 import { bootstrap } from './bootstrap.js';
 import { setupConsoleGateway } from './ws/console.js';
 import { closeRconConnections } from './services/rcon.js';
@@ -25,6 +25,8 @@ import mapViewRoutes from './routes/mapView.js';
 import catalogRoutes from './routes/catalog.js';
 import settingsRoutes from './routes/settings.js';
 import setupRoutes from './routes/setup.js';
+// Deutsche Meldungen für Eingabeprüfungen – vor allen Routen laden.
+import './lib/zodDeutsch.js';
 
 const app = Fastify({
   logger: {
@@ -77,22 +79,11 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   }
 });
 
-/**
- * Systemfehler (Dateisystem mit Pfaden, Prisma mit Abfragedetails, Docker-API)
- * gehen nie an den Client. Eigene, deutsch formulierte Fehlermeldungen schon.
- */
-function isInternalError(error: Error): boolean {
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === 'string' && !code.startsWith('FST_')) return true;
-  if ((error as { errno?: unknown }).errno !== undefined) return true;
-  if (error.name.startsWith('Prisma')) return true;
-  return /\(HTTP code \d+\)|ECONNREFUSED|ENOENT|EACCES|\/data\/|\/var\/run\//.test(error.message ?? '');
-}
-
 app.setErrorHandler((error, _req, reply) => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
-      error: 'Ungültige Eingabe',
+      // Die erste konkrete Meldung gleich mit: „Ungültige Eingabe“ allein hilft nicht.
+      error: error.issues[0]?.message ? `Ungültige Eingabe: ${error.issues[0].message}` : 'Ungültige Eingabe',
       details: error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
     });
   }

@@ -76,6 +76,8 @@ export default function ProfilePage() {
     onSuccess: (res) => {
       adoptToken(res.token);
       toast.success('Passwort geändert. Andere Geräte wurden abgemeldet.');
+      // Die anderen Sitzungen sind beendet – die Liste soll das gleich zeigen.
+      void queryClient.invalidateQueries({ queryKey: ['auth-sessions'] });
       setCurrentPassword('');
       setNewPassword('');
       setRepeat('');

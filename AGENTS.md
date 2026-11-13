@@ -112,6 +112,14 @@ React (nginx) ── HTTP /api (Bearer JWT) + /socket.io ──► Fastify-Backe
 
 33. **Ordnergrößen im Dateimanager** kommen getrennt über `GET /files/sizes` (`services/treeStats.ts`: parallel, ohne Links, 20 s Zwischenspeicher, Zeit-/Mengengrenze → `partial`). Jede ändernde Anfrage an die Dateirouten und `invalidateDiskUsage`/`adjustDiskUsage` verwerfen den Zwischenspeicher.
 
+34. **Docker-Aufrufe sparen**: `locateContainer` merkt sich die Container-Id je Server (der sichtbare Name folgt dem Servernamen, der gespeicherte ist nur der Netz-Alias). Für häufige Abfragen `getStateCached` (2 s geteilt; `start/stop/kill/recreate/removeContainer` verwerfen per `changesState`). `getStats` liefert die letzte Messung sofort und misst im Hintergrund neu. CPU ist Anteil an allen Kernen (0–100 %).
+
+35. **Ereignisschleife frei halten**: Dateien zählen über `walkTree` (`services/treeStats.ts`, parallel, ohne Links), einzelne Einträge aus Jars über `readJarEntry` (`lib/jarEntry.ts`, asynchron, mit `mapLimit`) – nie `new AdmZip(pfad)` auf Mod-Jars oder synchrones `safePath` je Datei in großen Ordnern (Ordner einmal prüfen, Dateien per lstat).
+
+36. **Fehlermeldungen für Nutzer** über `publicErrorMessage()` (`lib/errors.ts`): eigene Meldungen unverändert, Netzwerkfehler übersetzt, Systemfehler neutral (Rohtext ins Protokoll) – so in `task.fail` und den Test-Knöpfen. zod meldet auf Deutsch (`lib/zodDeutsch.ts`, in `index.ts` geladen); die erste Meldung steht im `error`-Text.
+
+37. **Oberfläche**: Server-Reiter werden nachgeladen (`lazy` + `Suspense` im Layout); `useServer()` ist stabil (memo), CPU/RAM über `useLiveStats()`. Spieler kommen mit dem Socket-Status, `/players` nur ohne Socket. Bezeichnungen zentral in `lib/labels.ts` (Servertypen, Anbieter, Aufgaben laufend/fertig), Zahlen über `lib/format.ts` (Formatierer einmal angelegt, deutsches Komma). Schriften kommen aus `@fontsource` (keine Google-Fonts, CSP ohne Ausnahmen).
+
 ## Tests schreiben
 
 - Vitest mit **aggressivem Mocking**: `vi.hoisted`-Mocks + `vi.mock` für Prisma, Docker, RCON, Config (siehe `backups.test.ts`, `modpack.install.test.ts`), Dateisystem teils echt in `fs.mkdtemp`-Verzeichnissen. Neue Integrationstests ausschließlich in `backend/audit/` mit den obigen Umgebungsvariablen und Skip-Guard, sonst brechen sie andere Workflows.

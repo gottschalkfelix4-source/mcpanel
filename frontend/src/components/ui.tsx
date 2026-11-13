@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
@@ -37,6 +37,8 @@ export function Button({
     <button
       className={clsx(VARIANTS[variant], className)}
       disabled={disabled || loading}
+      // Reine Symbolknöpfe: der Tooltip ist zugleich der Name für Screenreader.
+      aria-label={rest['aria-label'] ?? (children === undefined || children === null ? rest.title : undefined)}
       {...rest}
     >
       {loading ? <Loader2 size={16} className="animate-spin" /> : icon}
@@ -70,7 +72,7 @@ export function Panel({
       <span className="mc-frame-stud-dark" />
       <div className="mc-frame-inner">
         {(title || actions) && (
-          <header className="mc-frame-head">
+          <header className="mc-frame-head flex-wrap gap-y-2">
             <div className="flex items-center gap-2.5">
               {icon && <span className="text-grass-light">{icon}</span>}
               <div>
@@ -78,7 +80,8 @@ export function Panel({
                 {subtitle && <p className="mt-1 text-xs text-stone-350">{subtitle}</p>}
               </div>
             </div>
-            {actions && <div className="flex items-center gap-2">{actions}</div>}
+            {/* Umbrechen statt über den Rand ragen – auf schmalen Bildschirmen. */}
+            {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
           </header>
         )}
         <div className={clsx('p-4', bodyClassName)}>{children}</div>
@@ -167,7 +170,7 @@ export function ProgressBar({
       </div>
       {showLabel && (
         <span className="w-10 shrink-0 text-right font-mono text-[11px] text-stone-350">
-          {Math.round(pct)}%
+          {Math.round(pct)} %
         </span>
       )}
     </div>
@@ -378,6 +381,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               <button
                 onClick={() => setToasts((list) => list.filter((x) => x.id !== t.id))}
                 className="shrink-0 text-stone-450 hover:text-stone-100"
+                aria-label="Meldung schließen"
               >
                 <X size={14} />
               </button>
@@ -484,10 +488,16 @@ export function Field({
   hint?: ReactNode;
   children: ReactNode;
 }) {
+  // Beschriftung und Feld verbinden: Klick auf den Text setzt den Fokus, und
+  // Screenreader lesen den Namen vor. Nur bei einem einzelnen Eingabeelement.
+  const generated = useId();
+  const single = isValidElement<{ id?: string }>(children) && typeof children.type === 'string'
+    && ['input', 'select', 'textarea'].includes(children.type);
+  const id = single ? (children as React.ReactElement<{ id?: string }>).props.id ?? generated : undefined;
   return (
     <div>
-      <label className="mc-label">{label}</label>
-      {children}
+      <label className="mc-label" htmlFor={id}>{label}</label>
+      {single ? cloneElement(children as React.ReactElement<{ id?: string }>, { id }) : children}
       {hint && <p className="mt-1 text-xs text-stone-450">{hint}</p>}
     </div>
   );

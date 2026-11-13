@@ -8,6 +8,7 @@ import {
   Button, EmptyState, InfoNote, LoadingBlock, Panel, Toggle, useToast,
 } from '../../components/ui';
 import { useServer } from './ServerLayout';
+import { useUnsavedWarning } from '../../lib/useUnsavedWarning';
 
 interface PropertiesResponse {
   fields: PropertyField[];
@@ -23,6 +24,7 @@ export default function ConfigTab() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [extra, setExtra] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
+  useUnsavedWarning(dirty);
   const [newKey, setNewKey] = useState('');
 
   const config = useQuery({

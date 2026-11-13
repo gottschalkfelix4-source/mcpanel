@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { audit, requireAdmin, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, notFound, publicErrorMessage } from '../lib/errors.js';
 import { DEFAULT_EVENTS, EVENTS, EVENT_LABELS, testChannel } from '../services/notify.js';
 import { assertWebhookUrl, BlockedTargetError } from '../lib/safeHttp.js';
 
@@ -197,7 +197,7 @@ export default async function notificationRoutes(app: FastifyInstance) {
       await testChannel(channel);
       return { ok: true, message: 'Testnachricht zugestellt' };
     } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : 'Zustellung fehlgeschlagen' };
+      return { ok: false, message: publicErrorMessage(err, 'Zustellung fehlgeschlagen') };
     }
   });
 }
@@ -296,7 +296,7 @@ export async function globalNotificationRoutes(app: FastifyInstance) {
       await testChannel(channel);
       return { ok: true, message: 'Testnachricht zugestellt' };
     } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : 'Zustellung fehlgeschlagen' };
+      return { ok: false, message: publicErrorMessage(err, 'Zustellung fehlgeschlagen') };
     }
   });
 }

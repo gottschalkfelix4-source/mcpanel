@@ -1,6 +1,7 @@
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { copyText } from '../../lib/clipboard';
-import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router-dom';
+import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -15,6 +16,7 @@ import { Button, ConfirmDialog, LoadErrorBlock, LoadingBlock, StateBadge, useToa
 import { BlockIcon } from '../../components/pixel';
 import { CrashDialog } from '../../components/CrashDialog';
 import { TYPE_LOOK } from '../../components/ServerCard';
+import { serverTypeLabel } from '../../lib/labels';
 
 export interface ServerContext {
   server: ServerDetail;
@@ -55,7 +57,7 @@ const TABS = [
   { to: 'worlds', label: 'Welten', icon: Globe2, permission: 'files.read' },
   { to: 'map', label: 'Karte', icon: MapIcon, permission: 'console.read' },
   { to: 'players', label: 'Spieler', icon: Users, permission: null },
-  { to: 'automation', label: 'Automation', icon: AlarmClock, permission: null },
+  { to: 'automation', label: 'Automatisierung', icon: AlarmClock, permission: null },
   { to: 'access', label: 'Zugriff', icon: Zap, permission: null },
   { to: 'settings', label: 'Einstellungen', icon: Settings2, permission: 'settings.edit' },
   { to: 'reinstall', label: 'Neuinstallation', icon: RotateCw, permission: 'server.reinstall' },
@@ -140,6 +142,11 @@ export default function ServerLayout() {
     setLiveHealth(server.health ?? null);
     setLiveStats((current) => (sameStats(current, server.stats) ? current : server.stats));
   }, [server]);
+
+  // Tab-Titel: „Survival · Konsole“
+  const location = useLocation();
+  const activeTab = TABS.find((tab) => tab.to && location.pathname.split('/').includes(tab.to)) ?? TABS[0];
+  useDocumentTitle(server ? `${server.name} · ${activeTab.label}` : null);
 
   const effectiveState = liveState ?? server?.state ?? null;
   const effectiveHealth = liveState !== null ? liveHealth : server?.health ?? null;
@@ -246,13 +253,13 @@ export default function ServerLayout() {
                     onClick={copyAddress}
                     disabled={!server.address}
                     className="inline-flex items-center gap-[7px] font-mono transition hover:text-grass-light"
-                    title="Adresse kopieren"
+                    title="Adresse kopieren" aria-label="Adresse kopieren"
                   >
                     {copied ? <Check size={12} className="text-emerald" /> : <Copy size={12} />}
                     {server.address || 'Kein öffentlicher Zugang'}
                   </button>
                   <span>
-                    {server.modpack?.name ?? server.type} · MC {server.mcVersion}
+                    {server.modpack?.name ?? serverTypeLabel(server.type)} · MC {server.mcVersion}
                   </span>
                   {players && (
                     <span className="text-[#a3d15c]">

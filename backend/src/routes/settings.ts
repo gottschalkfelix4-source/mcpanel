@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { badRequest } from '../lib/errors.js';
+import { badRequest, publicErrorMessage } from '../lib/errors.js';
 import { prisma } from '../db.js';
 import { audit, authenticate, requireAdmin } from '../auth/context.js';
 import { getCurseforgeKey, getPanelUrl, getPublicHost, panelUrlSchema, setSetting } from '../services/settings.js';
@@ -193,7 +193,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
     } catch (err) {
       return {
         ok: false,
-        error: err instanceof Error ? err.message : 'Test fehlgeschlagen',
+        error: publicErrorMessage(err, 'Test fehlgeschlagen'),
         assistant: publicAssistantConfig(current),
       };
     }
@@ -222,7 +222,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
         ok: true,
         configured: true,
         verified: false,
-        error: err instanceof Error ? err.message : 'Test fehlgeschlagen',
+        error: publicErrorMessage(err, 'Test fehlgeschlagen'),
       };
     }
   });

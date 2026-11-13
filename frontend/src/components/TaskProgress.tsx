@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
 import type { TaskInfo } from '../lib/types';
 import { ProgressBar } from './ui';
+import { taskLabel } from '../lib/labels';
 
 interface LiveTask {
   id: string;
@@ -16,19 +17,6 @@ interface LiveTask {
   log: string[];
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  'server.import': 'Server wird aus ZIP importiert',
-  'modpack.install': 'Modpack wird installiert',
-  'modpack.update': 'Modpack wird aktualisiert',
-  'backup.create': 'Backup wird erstellt',
-  'backup.restore': 'Backup wird eingespielt',
-  'server.reinstall': 'Server wird neu installiert',
-  'world.export': 'Welt wird zum Herunterladen gepackt',
-  'assistant.action': 'KI-Reparatur wird ausgeführt',
-  'server.migrate': 'Server zieht auf eine andere Node um',
-  'map.addons': 'Karten-Erweiterungen werden eingerichtet',
-  'map.trim': 'Chunks werden zurückgesetzt',
-};
 
 /**
  * Zeigt den laufenden Hintergrund-Task eines Servers mit Live-Fortschritt.
@@ -174,7 +162,7 @@ export function TaskProgress({
           </span>
 
           <div className="min-w-0 flex-1">
-            <p className="heading text-sm">{TYPE_LABELS[task.type] ?? task.type}</p>
+            <p className="heading text-sm">{taskLabel(task.type, task.status === 'RUNNING')}</p>
             <p className="mt-0.5 truncate font-mono text-xs text-stone-350">
               {task.error ?? task.message}
             </p>
@@ -187,7 +175,7 @@ export function TaskProgress({
             <button
               onClick={() => setExpanded((e) => !e)}
               className="shrink-0 text-stone-450 transition hover:text-stone-100"
-              title="Protokoll anzeigen"
+              title="Protokoll anzeigen" aria-label="Protokoll anzeigen"
             >
               {expanded ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
             </button>

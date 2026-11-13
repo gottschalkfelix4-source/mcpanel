@@ -20,6 +20,9 @@ export default function UsersPage() {
   const [passwordTarget, setPasswordTarget] = useState<PanelUser | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<PanelUser | null>(null);
+  /** Rolle oder Sperre ändern – beides erst nach Rückfrage, ein Fehlklick wäre heikel. */
+  const [roleTarget, setRoleTarget] = useState<PanelUser | null>(null);
+  const [lockTarget, setLockTarget] = useState<PanelUser | null>(null);
   const [totpTarget, setTotpTarget] = useState<PanelUser | null>(null);
 
   const users = useQuery({
@@ -145,12 +148,8 @@ export default function UsersPage() {
                           className="!px-2 !py-1 !text-[11px]"
                           icon={<Shield size={12} />}
                           disabled={user.id === me?.id}
-                          onClick={() =>
-                            update.mutate({
-                              id: user.id,
-                              data: { role: user.role === 'ADMIN' ? 'USER' : 'ADMIN' },
-                            })
-                          }
+                          loading={update.isPending && update.variables?.id === user.id && 'role' in update.variables.data}
+                          onClick={() => setRoleTarget(user)}
                           title={user.role === 'ADMIN' ? 'Adminrechte entziehen' : 'Zum Admin machen'}
                         />
                         <Button
@@ -176,7 +175,8 @@ export default function UsersPage() {
                           variant="ghost"
                           className="!px-2 !py-1 !text-[11px]"
                           disabled={user.id === me?.id}
-                          onClick={() => update.mutate({ id: user.id, data: { active: !user.active } })}
+                          loading={update.isPending && update.variables?.id === user.id && 'active' in update.variables.data}
+                          onClick={() => setLockTarget(user)}
                           title={user.active ? 'Konto deaktivieren' : 'Konto aktivieren'}
                         >
                           {user.active ? 'Sperren' : 'Entsperren'}
@@ -294,6 +294,30 @@ export default function UsersPage() {
         message={`${totpTarget?.username} meldet sich danach wieder nur mit dem Passwort an und kann den zweiten Faktor im Profil neu einrichten. Nur nach einer Rückfrage bei der Person tun – etwa bei verlorenem Handy.`}
         confirmLabel="Zurücksetzen"
         danger
+      />
+
+      <ConfirmDialog
+        open={Boolean(roleTarget)}
+        onClose={() => setRoleTarget(null)}
+        onConfirm={() => roleTarget && update.mutateAsync({ id: roleTarget.id, data: { role: roleTarget.role === 'ADMIN' ? 'USER' : 'ADMIN' } }).then(() => {})}
+        title={roleTarget?.role === 'ADMIN' ? 'Adminrechte entziehen?' : 'Zum Administrator machen?'}
+        message={roleTarget?.role === 'ADMIN'
+          ? `${roleTarget?.username} verliert den Zugriff auf alle Server und Einstellungen, die nicht ausdrücklich geteilt sind.`
+          : `${roleTarget?.username} bekommt vollen Zugriff auf alle Server, Konten und Panel-Einstellungen.`}
+        confirmLabel={roleTarget?.role === 'ADMIN' ? 'Entziehen' : 'Zum Admin machen'}
+        danger
+      />
+
+      <ConfirmDialog
+        open={Boolean(lockTarget)}
+        onClose={() => setLockTarget(null)}
+        onConfirm={() => lockTarget && update.mutateAsync({ id: lockTarget.id, data: { active: !lockTarget.active } }).then(() => {})}
+        title={lockTarget?.active ? 'Konto sperren?' : 'Konto entsperren?'}
+        message={lockTarget?.active
+          ? `${lockTarget?.username} wird sofort überall abgemeldet und kann sich nicht mehr anmelden – auch nicht per SFTP.`
+          : `${lockTarget?.username} kann sich danach wieder anmelden.`}
+        confirmLabel={lockTarget?.active ? 'Sperren' : 'Entsperren'}
+        danger={Boolean(lockTarget?.active)}
       />
 
       <ConfirmDialog

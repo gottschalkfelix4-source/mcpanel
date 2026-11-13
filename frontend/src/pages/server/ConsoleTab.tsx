@@ -227,7 +227,7 @@ export default function ConsoleTab() {
       actions={
         <div className="flex items-center gap-2">
           <input
-            className="mc-input !w-40 !py-1.5 !text-xs"
+            className="mc-input w-full !py-1.5 !text-xs sm:!w-40"
             placeholder="Filtern …"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}

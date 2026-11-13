@@ -104,6 +104,14 @@ export default function BackupsTab() {
   });
 
   const total = (backups.data ?? []).reduce((sum, b) => sum + b.sizeBytes, 0);
+  // Wie das Backend aufräumt (quota.ts): zuerst automatische, dann
+  // Sicherheits-, zuletzt manuelle Backups, jeweils das älteste; Angepinnte nie.
+  const limit = server.quota.backupLimit;
+  const PRUNE_ORDER: Record<string, number> = { AUTOMATIC: 0, SAFETY: 1, MANUAL: 2 };
+  const nextPruned = limit > 0 && (backups.data?.length ?? 0) >= limit
+    ? [...(backups.data ?? [])].filter((b) => !b.pinned)
+      .sort((a, b) => (PRUNE_ORDER[a.origin] ?? 2) - (PRUNE_ORDER[b.origin] ?? 2) || Date.parse(a.createdAt) - Date.parse(b.createdAt))[0] ?? null
+    : null;
 
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
@@ -114,7 +122,7 @@ export default function BackupsTab() {
         icon={<HardDriveDownload size={16} />}
         subtitle={
           backups.data
-            ? `${backups.data.length} Sicherungen · ${formatBytes(total)} belegt`
+            ? `${limit > 0 ? `${backups.data.length} von ${limit}` : backups.data.length} Backups · ${formatBytes(total)} belegt`
             : undefined
         }
         bodyClassName="!p-0"
@@ -232,6 +240,7 @@ export default function BackupsTab() {
                       variant="danger"
                       className="!px-2.5 !py-1.5 !text-xs"
                       icon={<Trash2 size={13} />}
+                      title={`${backup.name} löschen`}
                       onClick={() => setDeleteTarget(backup)}
                     />
                   )}
@@ -259,6 +268,12 @@ export default function BackupsTab() {
         }
       >
         <div className="space-y-4">
+          {nextPruned && (
+            <InfoNote>
+              Das Limit von {limit} Backups ist erreicht: Dabei wird „{nextPruned.name}“ entfernt.
+              Angepinnte Backups bleiben immer erhalten.
+            </InfoNote>
+          )}
           <InfoNote>
             Der Server darf weiterlaufen – die Welt wird vorher gespeichert. Große Welten brauchen
             etwas Zeit.

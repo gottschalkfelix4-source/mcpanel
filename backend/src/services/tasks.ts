@@ -1,6 +1,7 @@
 import { prisma } from '../db.js';
 import { withServerOperation } from './operations.js';
 import { emitToServer } from '../ws/io.js';
+import { publicErrorMessage } from '../lib/errors.js';
 
 export interface TaskHandle {
   id: string;
@@ -83,7 +84,12 @@ export async function createTask(
       push({ status: 'DONE', progress: 100, message: finalMessage });
     },
     async fail(error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      // Rohe Systemmeldungen (Pfade, Docker, Datenbank, englisch) nur ins
+      // Protokoll – angezeigt wird eine verständliche Meldung.
+      const msg = publicErrorMessage(error);
+      if (msg !== (error instanceof Error ? error.message : String(error))) {
+        console.error(`[aufgabe ${task.id}] ${type}:`, error);
+      }
       await flush();
       await prisma.task.update({
         where: { id: task.id },
@@ -118,7 +124,11 @@ const AUFGABEN_NAMEN: Record<string, string> = {
   'world.export': 'Ein Welt-Export',
   'assistant.action': 'Eine KI-Reparatur',
   'server.migrate': 'Ein Umzug auf eine andere Node',
+  'map.trim': 'Das Zurücksetzen von Chunks',
   'map.addons': 'Die Einrichtung der Karte',
+  'server.clone': 'Das Klonen des Servers',
+  'backup.verify': 'Die Prüfung einer Sicherung',
+  'modpack.preview': 'Ein Paketvergleich',
 };
 
 const aufgabenName = (type: string) => AUFGABEN_NAMEN[type] ?? `Die Aufgabe "${type}"`;
