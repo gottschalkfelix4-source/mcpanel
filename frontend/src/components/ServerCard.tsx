@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { copyText } from '../lib/clipboard';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Boxes, Check, Copy, Cpu, Loader2, MemoryStick, Package, Play, Puzzle, RotateCw, Square, Users } from 'lucide-react';
+import { Boxes, Check, Copy, Cpu, Folder, Loader2, MemoryStick, Package, Play, Puzzle, RotateCw, Square, Users } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { formatBytes, formatUptime } from '../lib/format';
@@ -29,6 +29,7 @@ export function ServerCard({ server }: { server: ServerSummary }) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [copied, setCopied] = useState(false);
+  const [folderCopied, setFolderCopied] = useState(false);
   const [flash, setFlash] = useState(false);
 
   const cardRef = useRef<HTMLElement>(null);
@@ -75,6 +76,16 @@ export function ServerCard({ server }: { server: ServerSummary }) {
     if (await copyText(server.address)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
+    } else {
+      toast.error('Kopieren nicht möglich');
+    }
+  };
+
+  const copyFolder = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (await copyText(server.id)) {
+      setFolderCopied(true);
+      setTimeout(() => setFolderCopied(false), 1600);
     } else {
       toast.error('Kopieren nicht möglich');
     }
@@ -128,6 +139,16 @@ export function ServerCard({ server }: { server: ServerSummary }) {
               <h3 className="heading truncate text-base leading-tight">{server.name}</h3>
               <StateBadge state={server.state} health={server.health} />
             </div>
+
+            <button
+              onClick={copyFolder}
+              className="mt-0.5 flex max-w-full items-center gap-[5px] font-mono text-[11px] text-stone-450 transition hover:text-grass-light"
+              title={`Serverordner servers/${server.id} – Ordnernamen kopieren`}
+              aria-label="Ordnernamen kopieren"
+            >
+              {folderCopied ? <Check size={11} className="shrink-0 text-emerald" /> : <Folder size={11} className="shrink-0" />}
+              <span className="truncate">servers/{server.id}</span>
+            </button>
 
             <p className="mt-1 truncate text-xs text-stone-350">
               {server.modpack?.name

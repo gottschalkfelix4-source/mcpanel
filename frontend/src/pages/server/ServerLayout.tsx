@@ -5,7 +5,7 @@ import { useDocumentTitle } from '../../lib/useDocumentTitle';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  ArrowLeft, Check, Copy, FileCode2, FolderTree, Globe2, HardDriveDownload, LayoutDashboard,
+  ArrowLeft, Check, Copy, FileCode2, Folder, FolderTree, Globe2, HardDriveDownload, LayoutDashboard,
   AlarmClock, Map as MapIcon, Package, Play, Puzzle, RotateCw, Settings2, Square, Terminal, Users, Zap,
 } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -75,6 +75,7 @@ export default function ServerLayout() {
   const [socketPlayers, setSocketPlayers] = useState<PlayerList | null | undefined>(undefined);
   const socketLive = socketPlayers !== undefined;
   const [copied, setCopied] = useState(false);
+  const [folderCopied, setFolderCopied] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
 
   const { data: server, isLoading, error, refetch } = useQuery({
@@ -205,6 +206,15 @@ export default function ServerLayout() {
     setTimeout(() => setCopied(false), 1600);
   };
 
+  const copyFolder = async () => {
+    if (!(await copyText(server.id))) {
+      toast.error('Kopieren nicht möglich – bitte den Ordnernamen von Hand markieren.');
+      return;
+    }
+    setFolderCopied(true);
+    setTimeout(() => setFolderCopied(false), 1600);
+  };
+
   return (
     <div className="flex flex-col gap-5">
       {/* Kopfbereich */}
@@ -244,6 +254,16 @@ export default function ServerLayout() {
                     <StateBadge state={state} health={context.liveHealth} />
                   </span>
                 </div>
+
+                <button
+                  onClick={copyFolder}
+                  className="mt-1 flex max-w-full items-center gap-[6px] font-mono text-[11px] text-stone-450 transition hover:text-grass-light sm:text-xs"
+                  title={`Serverordner servers/${server.id} – Ordnernamen kopieren`}
+                  aria-label="Ordnernamen kopieren"
+                >
+                  {folderCopied ? <Check size={12} className="shrink-0 text-emerald" /> : <Folder size={12} className="shrink-0" />}
+                  <span className="truncate">servers/{server.id}</span>
+                </button>
 
                 <div className="mt-[7px] flex flex-wrap items-center gap-x-[18px] gap-y-1.5 text-xs text-stone-350">
                   <span className="sm:hidden">
