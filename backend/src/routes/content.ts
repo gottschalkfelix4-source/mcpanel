@@ -93,6 +93,7 @@ export default async function contentRoutes(app: FastifyInstance) {
           .array(
             z.object({
               filename: z.string().min(1).max(255),
+              provider: z.enum(['modrinth', 'curseforge']).default('modrinth'),
               projectId: providerId,
               versionId: providerId,
             }),
@@ -106,7 +107,13 @@ export default async function contentRoutes(app: FastifyInstance) {
     const results: { filename: string; newFilename?: string; error?: string }[] = [];
     for (const update of body.updates) {
       try {
-        const res = await applyContentUpdate(access.server, update.filename, update.projectId, update.versionId);
+        const res = await applyContentUpdate(
+          access.server,
+          update.filename,
+          update.projectId,
+          update.versionId,
+          update.provider,
+        );
         await audit(req.user!.id, access.server.id, `${kind}.update`, `${update.filename} → ${res.newFilename}`);
         results.push({ filename: update.filename, newFilename: res.newFilename });
       } catch (err) {

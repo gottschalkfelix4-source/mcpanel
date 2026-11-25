@@ -86,7 +86,7 @@ export default function ContentTab() {
   });
 
   const update = useMutation({
-    mutationFn: (list: { filename: string; projectId: string; versionId: string }[]) =>
+    mutationFn: (list: { filename: string; provider: 'modrinth' | 'curseforge'; projectId: string; versionId: string }[]) =>
       api.post<{ results: { filename: string; newFilename?: string; error?: string }[]; failed: number }>(
         `/servers/${server.id}/content/update`,
         { updates: list },
@@ -196,6 +196,7 @@ export default function ContentTab() {
                       update.mutate(
                         (updates.data?.updates ?? []).map((u) => ({
                           filename: u.filename,
+                          provider: u.provider,
                           projectId: u.projectId,
                           versionId: u.latestVersionId,
                         })),
@@ -303,9 +304,10 @@ export default function ContentTab() {
                     <Badge
                       tone="green"
                       className="whitespace-nowrap font-mono"
-                      title={`${updateInfo.projectName}: ${updateInfo.installedVersion} → ${updateInfo.latestVersion} – ${updateInfo.latestVersionName}`}
+                      title={`${updateInfo.projectName} (${updateInfo.provider === 'curseforge' ? 'CurseForge' : 'Modrinth'}): ${updateInfo.installedVersion} → ${updateInfo.latestVersion} – ${updateInfo.latestVersionName}`}
                     >
-                      Update: {updateInfo.installedVersion} → {updateInfo.latestVersion}
+                      {updateInfo.provider === 'curseforge' ? 'CurseForge: ' : 'Update: '}
+                      {updateInfo.installedVersion} → {updateInfo.latestVersion}
                       {updateInfo.latestVersionType !== 'release' && ` (${updateInfo.latestVersionType})`}
                     </Badge>
                   )}
@@ -323,7 +325,12 @@ export default function ContentTab() {
                       disabled={update.isPending}
                       onClick={() =>
                         update.mutate([
-                          { filename: updateInfo.filename, projectId: updateInfo.projectId, versionId: updateInfo.latestVersionId },
+                          {
+                            filename: updateInfo.filename,
+                            provider: updateInfo.provider,
+                            projectId: updateInfo.projectId,
+                            versionId: updateInfo.latestVersionId,
+                          },
                         ])
                       }
                     />

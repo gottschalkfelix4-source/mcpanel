@@ -258,9 +258,10 @@ export interface ContentFile {
   modified: string;
 }
 
-/** Update-Angebot für eine einzelne Mod bzw. ein einzelnes Plugin (Modrinth). */
+/** Update-Angebot für eine einzelne Mod bzw. ein einzelnes Plugin. */
 export interface ContentUpdate {
   filename: string;
+  provider: 'modrinth' | 'curseforge';
   projectId: string;
   projectSlug: string;
   projectName: string;
@@ -278,7 +279,7 @@ export interface ContentUpdate {
 export interface ContentUpdatesResponse {
   checkedAt: string;
   updates: ContentUpdate[];
-  /** Gesetzt, wenn Modrinth nicht erreichbar war – dann ist `updates` leer. */
+  /** Gesetzt, wenn ein Anbieter nicht erreichbar war – die Treffer des anderen bleiben. */
   error: string | null;
 }
 

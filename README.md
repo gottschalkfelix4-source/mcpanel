@@ -492,17 +492,20 @@ Deaktivieren benennt in `.jar.disabled` um, löscht also nichts. Nach dem Instal
 oder Umschalten ist ein Neustart nötig, damit der Server die Änderung liest.
 
 **Updates einzelner Mods und Plugins.** Der Reiter erkennt jede installierte
-Datei über ihre SHA-1-Prüfsumme bei Modrinth und prüft, ob eine neuere Version
-existiert, die zur Minecraft-Version des Servers und – bei Mods – zum Loader
-passt (Plugins werden ohne Loader-Filter geprüft, weil Modrinth sie je nach
-Projekt als Paper/Spigot/Bukkit markiert). Ein grünes Badge zeigt die
-Versionsänderung („Update: a → b“); der Download-Knopf lädt die neue Datei
-herunter und entfernt erst nach Erfolg die alte. Mehrere Updates lassen sich
-zusammen einspielen („Alle aktualisieren“), die Liste auf „Nur Updates“
-einschränken. Erkannt werden nur Dateien, die Modrinth kennt – von Hand
-abgelegte Jars ohne Treffer (etwa reine CurseForge-Downloads) bleiben
-unangetastet stehen, und die Prüfung ist lesend: Sie ändert keinen Server,
-solange niemand „Aktualisieren“ drückt.
+Datei über ihre Prüfsumme bei **beiden Anbietern**: Modrinth über die
+SHA-1-Prüfsumme, CurseForge über den eigenen Datei-Fingerprint (MurmurHash2,
+nur mit hinterlegtem API-Key). Für jeden Treffer wird geprüft, ob eine neuere
+Version existiert, die zur Minecraft-Version des Servers und – bei Mods – zum
+Loader passt (Plugins werden ohne Loader-Filter geprüft). Ein grünes Badge
+zeigt die Versionsänderung („Update: a → b“, CurseForge-Treffer stehen als
+„CurseForge: a → b“); der Download-Knopf lädt die neue Datei herunter und
+entfernt erst nach Erfolg die alte. Mehrere Updates lassen sich zusammen
+einspielen („Alle aktualisieren“), die Liste auf „Nur Updates“ einschränken.
+Erkannt werden nur Dateien, die einer der Anbieter kennt – von Hand abgelegte
+Jars ohne Treffer bleiben unangetastet stehen, und die Prüfung ist lesend:
+Sie ändert keinen Server, solange niemand „Aktualisieren“ drückt. Ist
+CurseForge nicht erreichbar, erscheint ein Hinweis, die Modrinth-Treffer
+werden trotzdem geliefert.
 
 > Für Paper-Plugins sind Modrinth und Hangar die lebendigen Quellen; die
 > CurseForge-Klasse *Bukkit Plugins* ist vergleichsweise alt. Hangar ist nicht

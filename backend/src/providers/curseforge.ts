@@ -35,6 +35,11 @@ async function headers(): Promise<Record<string, string>> {
   return { 'x-api-key': key, Accept: 'application/json' };
 }
 
+/** Header für Datei-Downloads (CDN verlangt denselben Schlüssel). */
+export async function downloadHeaders(): Promise<Record<string, string>> {
+  return headers();
+}
+
 export async function isConfigured(): Promise<boolean> {
   return Boolean(await getCurseforgeKey());
 }
@@ -106,6 +111,16 @@ interface CfFile {
   isServerPack?: boolean;
   serverPackFileId?: number;
   parentProjectFileId?: number;
+  /** 1 = Release, 2 = Beta, 3 = Alpha */
+  releaseType?: number;
+  /** Vom Fingerprint-Endpunkt mitgeliefert. */
+  fileFingerprint?: number;
+}
+
+/** Ein Treffer von `/v1/fingerprints`. */
+export interface CurseforgeMatch {
+  modId: number;
+  file: CfFile;
 }
 
 export async function search(q: SearchQuery): Promise<SearchResponse> {
@@ -258,6 +273,63 @@ export async function getFilesBulk(fileIds: number[]): Promise<CfFile[]> {
   return out;
 }
 
+/**
+ * Erkennt installierte Dateien über ihre CurseForge-Fingerprints (MurmurHash2,
+ * siehe `lib/curseforgeFingerprint.ts`). Die API nimmt bis zu 500 je Aufruf
+ * und liefert für jeden Treffer Mod-ID und die getroffene Datei.
+ */
+export async function fingerprintMatches(
+  fingerprints: number[],
+): Promise<Map<number, CurseforgeMatch>> {
+  const out = new Map<number, CurseforgeMatch>();
+  for (let i = 0; i < fingerprints.length; i += 500) {
+    const chunk = fingerprints.slice(i, i + 500);
+    const res = await fetchJson<{ data: { exactMatches: { id: number; file: CfFile }[] } }>(
+      `${API}/v1/fingerprints`,
+      {
+        method: 'POST',
+        headers: { ...(await headers()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fingerprints: chunk }),
+      },
+      'CurseForge',
+    );
+    for (const match of res.data?.exactMatches ?? []) {
+      if (match.file?.fileFingerprint != null) {
+        out.set(match.file.fileFingerprint, { modId: match.id, file: match.file });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Neueste Version eines Projekts, die zur Minecraft-Version des Servers passt.
+ * Dateien ohne Loader-Angabe gelten als ungeprüft und werden durchgelassen
+ * (alte Dateien tragen oft keinen Loader); ist ein Loader angegeben, muss er
+ * passen. Die API liefert keine Garantie für die Sortierung – sortiert wird
+ * hier nach Veröffentlichungsdatum.
+ */
+export async function latestCompatibleVersion(
+  modId: string,
+  mcVersion: string,
+  loader: string | null,
+): Promise<ProjectVersion | null> {
+  for (let page = 1; page <= 2; page++) {
+    const versions = await getVersions(modId, page);
+    const passend = versions
+      .filter((v) => v.gameVersions.includes(mcVersion))
+      .filter((v) => {
+        if (!loader || v.loaders.length === 0) return true;
+        return v.loaders.includes(loader);
+      })
+      .sort((a, b) => b.datePublished.localeCompare(a.datePublished));
+    const neueste = passend.find((v) => v.downloadUrl || v.filename);
+    if (neueste) return neueste;
+    if (versions.length < 50) break;
+  }
+  return null;
+}
+
 function toSummary(m: CfMod): ProjectSummary {
   // Ein Serverpaket ist der beste Beleg dafür, dass das Pack serverseitig
   // gedacht ist. Fehlt es, heißt das nicht "läuft nicht" – nur "ungeprüft".
@@ -282,6 +354,11 @@ function toSummary(m: CfMod): ProjectSummary {
   };
 }
 
+/** Öffentliche Variante von `toVersion` für die Update-Erkennung. */
+export function toVersionPublic(f: CfFile): ProjectVersion {
+  return toVersion(f);
+}
+
 function toVersion(f: CfFile): ProjectVersion {
   const loaders = f.gameVersions
     .map((v) => v.toLowerCase())
@@ -300,6 +377,7 @@ function toVersion(f: CfFile): ProjectVersion {
     filename: f.fileName,
     fileSize: f.fileLength,
     downloadBlocked: !f.downloadUrl,
+    versionType: f.releaseType === 2 ? 'beta' : f.releaseType === 3 ? 'alpha' : 'release',
     serverPackFileId: f.serverPackFileId ?? null,
     isServerPack: f.isServerPack ?? false,
   };
