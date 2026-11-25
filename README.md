@@ -109,13 +109,14 @@ das Panel steuert sie über den Docker-Socket.
     das überlebt keinen Plattenausfall.
 
 **Benachrichtigungen**
-- Ziele: **Discord-Webhook** oder beliebiger HTTP-Endpunkt, der JSON annimmt (ntfy, Gotify, eigenes Skript)
-- Kanäle gelten je Server (Tab *Automation*) oder für alle Server (Panel-Einstellungen)
+- Ziele: **Discord-Webhook**, beliebiger HTTP-Endpunkt, der JSON annimmt (ntfy, Gotify, eigenes Skript) – oder **Web-Push auf die installierte App** (PWA, Chrome/Edge/Firefox/Safari; braucht HTTPS)
+- Kanäle gelten je Server (Tab *Automation*), für alle Server (Panel-Einstellungen) – eigene Push-Kanäle gehören dem Konto und stehen unter *Mein Konto*
 - Ereignisse einzeln abonnierbar: Server gestartet / gestoppt / **abgestürzt**, Automatisierung
   gelungen / fehlgeschlagen, Backup erstellt / fehlgeschlagen, Modpack-Update verfügbar, Speicherplatz knapp
 - Bei einem Absturz hängen die letzten Protokollzeilen mit in der Nachricht
 - Die Ereignisse „Statusprüfung länger fehlgeschlagen“ und „Statusprüfung wieder erfolgreich“ lassen sich je Kanal abonnieren. Der Wächter gibt Modpacks 15 Minuten Anlaufzeit und warnt anschließend erst nach zwei Minuten anhaltender Störung; er startet Server nicht automatisch neu.
-- Testknopf je Kanal; die gespeicherte URL wird nie zurückgegeben, in der Liste steht sie gekürzt
+- Testknopf je Kanal; die gespeicherte URL wird nie zurückgegeben, in der Liste steht sie gekürzt.
+  Push-Schlüssel liegen im Datenverzeichnis (`.vapid-keys`) – beim Umzug mitnehmen, sonst verlieren die Geräte ihre Zustellung.
 
 **Karte und Vorgenerierung**
 - Reiter „Karte“: generierte Chunks (aus den Weltdateien, ohne Mod), Spieler live, mit BlueMap auch das Gelände –

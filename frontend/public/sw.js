@@ -55,6 +55,39 @@ async function pruneAssets() {
   }
 }
 
+self.addEventListener('push', (event) => {
+  let data = null;
+  try {
+    data = event.data ? event.data.json() : null;
+  } catch {
+    /* keine JSON-Nutzlast – unten greifen die Vorgaben */
+  }
+  const title = data?.title ?? 'MCPanel';
+  const options = {
+    body: data?.message ?? 'Neue Meldung vom Panel',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    // Dieselbe Ereignisart desselben Servers ersetzt die alte Meldung,
+    // statt den Bildschirm mit Wiederholungen zu füllen.
+    tag: `${data?.event ?? 'meldung'}:${data?.serverId ?? 'panel'}`,
+    data: { event: data?.event ?? null, serverId: data?.serverId ?? null },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of windows) {
+        if ('focus' in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('/');
+    })(),
+  );
+});
+
 self.addEventListener('message', (event) => {
   if (event.data === 'prune-assets') event.waitUntil(pruneAssets().catch(() => {}));
 });

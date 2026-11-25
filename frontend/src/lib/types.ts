@@ -282,6 +282,34 @@ export interface ContentUpdatesResponse {
   error: string | null;
 }
 
+/** Web-Push-Abo eines Browsers (PWA). */
+export interface PushDevice {
+  id: string;
+  endpoint: string;
+  device: string;
+  createdAt: string;
+}
+
+/** Eigener Push-Kanal – welcher Benutzer welche Ereignisse aufs Gerät bekommt. */
+export interface PushChannel {
+  id: string;
+  name: string;
+  enabled: boolean;
+  events: string[];
+  lastSentAt: string | null;
+  lastStatus: string | null;
+  lastMessage: string | null;
+  sentCount: number;
+  createdAt: string;
+}
+
+export interface PushStateResponse {
+  subscriptions: PushDevice[];
+  channels: PushChannel[];
+  catalog: { key: string; label: string; standard: boolean }[];
+  defaults: string[];
+}
+
 /** Eine Runde im Gespraech mit dem KI-Assistenten – lebt nur im Dialog. */
 export interface AssistantMessage {
   role: 'user' | 'assistant';

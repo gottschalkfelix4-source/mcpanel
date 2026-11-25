@@ -47,11 +47,13 @@ model User {
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
 
-  ownedServers Server[]       @relation("ServerOwner")
+  ownedServers Server[]             @relation("ServerOwner")
   memberships  ServerMember[]
   backups      Backup[]
   auditLogs    AuditLog[]
   sessions     Session[]
+  pushSubscriptions PushSubscription[]
+  notificationChannels NotificationChannel[]
 }
 
 /// Angemeldetes Gerät. Das Sitzungstoken trägt die ID; fehlt die Zeile, ist es widerrufen.
@@ -313,18 +315,41 @@ model Automation {
   @@index([serverId])
 }
 
+/// Web-Push-Abo eines Browsers (PWA). Gehört zu einem Konto; die Zustellung
+/// läuft über den Push-Dienst des Browsers (FCM, Mozilla …), das Panel
+/// braucht dafür die hier gespeicherten Schlüssel.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Endpoint des Push-Dienstes – je Browser genau einmal
+  endpoint  String   @unique
+  /// Öffentlicher Schlüssel des Browsers (base64url)
+  p256dh    String
+  /// Geheimer Authentifizierungsschlüssel (base64url)
+  auth      String
+  userAgent String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
 /// Benachrichtigungsziel. serverId = null bedeutet: gilt fuer alle Server.
 model NotificationChannel {
   id       String  @id @default(cuid())
   serverId String?
   server   Server? @relation(fields: [serverId], references: [id], onDelete: Cascade)
 
+  /// Besitzer bei eigenen Push-Kanälen (`type = PUSH`); sonst null.
+  userId String?
+  user   User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   name    String
   enabled Boolean @default(true)
 
-  /// DISCORD | WEBHOOK
+  /// DISCORD | WEBHOOK | PUSH
   type         String  @default("DISCORD")
-  /// Webhook-URL des Ziels
+  /// Webhook-URL des Ziels – bei PUSH-Kanälen leer
   target       String
   /// Von einem Administrator gespeichert: Ziel darf im lokalen Netz liegen
   allowPrivate Boolean @default(false)
@@ -342,6 +367,7 @@ model NotificationChannel {
   updatedAt DateTime @updatedAt
 
   @@index([serverId])
+  @@index([userId])
 }
 
 /// Aufenthalt eines Spielers, aus der regelmäßigen Spielerabfrage abgeleitet.

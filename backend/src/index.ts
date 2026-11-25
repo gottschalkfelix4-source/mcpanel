@@ -23,6 +23,7 @@ import serverRoutes from './routes/servers.js';
 import nodeRoutes from './routes/nodes.js';
 import mapViewRoutes from './routes/mapView.js';
 import catalogRoutes from './routes/catalog.js';
+import pushRoutes from './routes/push.js';
 import settingsRoutes from './routes/settings.js';
 import setupRoutes from './routes/setup.js';
 // Deutsche Meldungen für Eingabeprüfungen – vor allen Routen laden.
@@ -127,6 +128,7 @@ await app.register(serverRoutes, { prefix: '/api/servers' });
 await app.register(nodeRoutes, { prefix: '/api/nodes' });
 await app.register(mapViewRoutes, { prefix: '/api/map-view' });
 await app.register(catalogRoutes, { prefix: '/api/catalog' });
+await app.register(pushRoutes, { prefix: '/api/push' });
 await app.register(settingsRoutes, { prefix: '/api/settings' });
 
 await app.ready();

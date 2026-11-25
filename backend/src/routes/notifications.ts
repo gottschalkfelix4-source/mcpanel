@@ -64,7 +64,7 @@ function serialize(channel: {
     name: channel.name,
     enabled: channel.enabled,
     type: channel.type,
-    targetMasked: mask(channel.target),
+    targetMasked: channel.type === 'PUSH' ? 'Eigene Geräte' : mask(channel.target),
     events: Array.isArray(channel.events) ? (channel.events as string[]) : [],
     global: channel.serverId === null,
     lastSentAt: channel.lastSentAt,
@@ -97,7 +97,7 @@ export default async function notificationRoutes(app: FastifyInstance) {
         orderBy: { createdAt: 'asc' },
       }),
       prisma.notificationChannel.findMany({
-        where: { serverId: null },
+        where: { serverId: null, userId: null },
         orderBy: { createdAt: 'asc' },
       }),
     ]);
@@ -211,7 +211,7 @@ export async function globalNotificationRoutes(app: FastifyInstance) {
 
   app.get('/', async () => {
     const channels = await prisma.notificationChannel.findMany({
-      where: { serverId: null },
+      where: { serverId: null, userId: null },
       orderBy: { createdAt: 'asc' },
     });
     return { channels: channels.map(serialize), catalog, defaults: DEFAULT_EVENTS, canManage: true };
@@ -241,7 +241,7 @@ export async function globalNotificationRoutes(app: FastifyInstance) {
   app.patch('/:channelId', async (req) => {
     const { channelId } = req.params as { channelId: string };
     const existing = await prisma.notificationChannel.findFirst({
-      where: { id: channelId, serverId: null },
+      where: { id: channelId, serverId: null, userId: null },
     });
     if (!existing) throw notFound('Kanal nicht gefunden');
 
@@ -276,7 +276,7 @@ export async function globalNotificationRoutes(app: FastifyInstance) {
   app.delete('/:channelId', async (req) => {
     const { channelId } = req.params as { channelId: string };
     const existing = await prisma.notificationChannel.findFirst({
-      where: { id: channelId, serverId: null },
+      where: { id: channelId, serverId: null, userId: null },
     });
     if (!existing) throw notFound('Kanal nicht gefunden');
 
@@ -288,7 +288,7 @@ export async function globalNotificationRoutes(app: FastifyInstance) {
   app.post('/:channelId/test', async (req) => {
     const { channelId } = req.params as { channelId: string };
     const channel = await prisma.notificationChannel.findFirst({
-      where: { id: channelId, serverId: null },
+      where: { id: channelId, serverId: null, userId: null },
     });
     if (!channel) throw notFound('Kanal nicht gefunden');
 

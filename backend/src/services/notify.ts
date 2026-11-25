@@ -17,6 +17,7 @@ import * as dockerSvc from './docker.js';
 import { getSetting, setSetting } from './settings.js';
 import { HealthMonitor } from './healthMonitor.js';
 import { postJson } from '../lib/safeHttp.js';
+import { sendPush } from './push.js';
 
 // ---------------------------------------------------------------------------
 // Ereignisse
@@ -215,7 +216,19 @@ async function deliver(
       : null;
 
   try {
-    await post(channel, payloadFor(channel, event, ctx, severity, extra));
+    if (channel.type === 'PUSH') {
+      await sendPush(channel, {
+        title: ctx.title,
+        message: [ctx.message, extra].filter(Boolean).join('\n\n'),
+        event,
+        serverId: ctx.serverId ?? null,
+        serverName: ctx.serverName ?? null,
+        severity,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      await post(channel, payloadFor(channel, event, ctx, severity, extra));
+    }
     await prisma.notificationChannel
       .update({
         where: { id: channel.id },
@@ -272,6 +285,25 @@ export async function testChannel(channel: NotificationChannel): Promise<void> {
     message: `Der Kanal „${channel.name}" ist richtig eingerichtet.`,
     fields: [{ name: 'Abonnierte Ereignisse', value: String(events.length) }],
   };
+
+  if (channel.type === 'PUSH') {
+    await sendPush(channel, {
+      title: ctx.title,
+      message: `${ctx.message}\n\nAbonnierte Ereignisse: ${events.length}`,
+      event: 'server.started',
+      serverId: channel.serverId ?? null,
+      serverName: null,
+      severity: 'info',
+      timestamp: new Date().toISOString(),
+    });
+    await prisma.notificationChannel
+      .update({
+        where: { id: channel.id },
+        data: { lastSentAt: new Date(), lastStatus: 'OK', lastMessage: 'Testnachricht' },
+      })
+      .catch(() => {});
+    return;
+  }
 
   await post(channel, payloadFor(channel, 'server.started', ctx, 'info', null));
 

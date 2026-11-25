@@ -4,6 +4,7 @@ import { KeyRound, LogOut, Monitor, Shield, User } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import TotpPanel from '../components/TotpPanel';
+import PushNotifications from '../components/PushNotifications';
 import { formatDate, formatRelative } from '../lib/format';
 import type { AuthSession } from '../lib/types';
 import { Badge, Button, ConfirmDialog, ErrorNote, Field, LoadErrorBlock, LoadingBlock, Panel, useToast } from '../components/ui';
@@ -179,6 +180,8 @@ export default function ProfilePage() {
       </Panel>
 
       <TotpPanel />
+
+      <PushNotifications />
 
       <Panel title="Angemeldete Geräte" icon={<LogOut size={16} />}>
         <div className="space-y-3">
