@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { Boxes, ChevronDown, HardDrive, LogOut, Network, Server, Settings, Shield, User, Users } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { BlockIcon, GrassStrip } from './pixel';
+import AssistantMascot from './AssistantMascot';
 
 function Logo() {
   return (
@@ -176,6 +177,10 @@ export default function Layout() {
           CurseForge
         </a>
       </footer>
+
+      {/* Kobi – die Begleitfigur, schwebt in der Ecke und chatte über den
+          gerade geöffneten Server (oder ganz ohne Serverkontext). */}
+      <AssistantMascot />
     </div>
   );
 }

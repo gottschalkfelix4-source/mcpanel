@@ -80,6 +80,36 @@ export default {
         },
         // Schwebender Block auf der Anmeldeseite
         bob: { '0%,100%': { transform: 'translateY(0)' }, '50%': { transform: 'translateY(-6px)' } },
+        // Figur unten rechts: ruhiges Schweben in der Idle-Phase
+        'mascot-float': {
+          '0%,100%': { transform: 'translateY(0) rotate(-1.5deg)' },
+          '50%': { transform: 'translateY(-7px) rotate(1.5deg)' },
+        },
+        // Schnelleres, aufgeregtes Wippen, während der Assistent denkt
+        'mascot-think': {
+          '0%,100%': { transform: 'translateY(0) rotate(-3deg)' },
+          '50%': { transform: 'translateY(-12px) rotate(3deg)' },
+        },
+        // Blinzeln der Figur: 94 % der Zeit offen, kurz zu
+        blink: {
+          '0%, 92%, 100%': { transform: 'scaleY(1)' },
+          '96%': { transform: 'scaleY(0.08)' },
+        },
+        // Antennenkugel: leuchtet auf, wenn der Assistent bereit ist
+        'antenna-pulse': {
+          '0%,100%': { opacity: '0.55', boxShadow: '0 0 4px 1px rgba(127,178,56,.35)' },
+          '50%': { opacity: '1', boxShadow: '0 0 12px 3px rgba(127,178,56,.8)' },
+        },
+        // Mund beim Antworten: öffnet und schließt sich
+        talk: {
+          '0%,100%': { transform: 'scaleY(0.35)' },
+          '50%': { transform: 'scaleY(1)' },
+        },
+        // Schatten der Figur: atmet mit dem Schweben mit
+        'shadow-breathe': {
+          '0%,100%': { transform: 'scaleX(1)', opacity: '0.5' },
+          '50%': { transform: 'scaleX(0.82)', opacity: '0.32' },
+        },
         float: {
           '0%': { transform: 'translateY(20px) rotate(0deg)', opacity: '0' },
           '12%': { opacity: '.5' },
@@ -103,6 +133,12 @@ export default {
         ring: 'ring 2.2s ease-out infinite',
         shimmer: 'shimmer 1.2s linear infinite',
         bob: 'bob 4.2s ease-in-out infinite',
+        'mascot-float': 'mascot-float 3.6s ease-in-out infinite',
+        'mascot-think': 'mascot-think 0.55s ease-in-out infinite',
+        blink: 'blink 4.2s ease-in-out infinite',
+        'antenna-pulse': 'antenna-pulse 2.4s ease-in-out infinite',
+        'shadow-breathe': 'shadow-breathe 3.6s ease-in-out infinite',
+        talk: 'talk 0.3s ease-in-out infinite',
         flash: 'flash 0.9s ease-out',
         stripe: 'stripe 0.5s linear infinite',
       },

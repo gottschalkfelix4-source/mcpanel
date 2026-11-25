@@ -410,3 +410,45 @@ export async function askAssistant(
   const actions = typen.length ? await prepareActions(opts.access!, opts.userId!, aktionen) : [];
   return { answer: text || 'Siehe Vorschläge unten.', model: cfg.model, actions };
 }
+
+/**
+ * Gespräch ohne Serverkontext – die Figur unten rechts, wenn gerade kein
+ * Server geöffnet ist. Der Dienst bekommt ausdrücklich KEINE Serverdaten:
+ * Weder Name noch Zustand noch Protokoll. Wer über einen bestimmten Server
+ * sprechen will, öffnet ihn – dann übernimmt `askAssistant` mit dem
+ * frisch geprüften Zugriff. Reparaturvorschläge gibt es hier nie.
+ */
+const GLOBAL_PROMPT = `Du bist Kobi, der kleine Begleiter von MCPanel, einem Web-Panel für Minecraft-Server. Du sitzt als Figur in der Ecke der Oberfläche.
+
+Du hast gerade KEINEN Server geöffnet und siehst keinerlei Daten aus dem Panel – weder Serverlisten noch Protokolle noch Einstellungen. Das ist Absicht: Ohne geöffneten Server darfst du über keinen konkreten Server sprechen.
+
+Regeln:
+- Antworte auf Deutsch, du-Form, freundlich und knapp. Du darfst ruhig ein wenig Charakter zeigen, aber bleibst sachlich.
+- Allgemeine Fragen beantwortest du gern: Was ist ein Modpack? Was ist ein Server-Reset? Was bedeutet "Crash"? Wie richte ich Backups ein? Welcher Loader ist was? 
+- Sobald jemand nach einem bestimmten Server, einem Protokoll, einem Absturz oder nach etwas fragt, das du nicht sehen kannst, sage freundlich, dass du dafür den Server öffnen muss – erst dann siehst du Protokoll, Modliste und Serverdaten. Nenne keine Details, die du nicht hast, und rate nicht über Serverzustände.
+- Du kannst nichts am Panel verändern – keine Aktionen, keine Vorschläge mit AKTION.
+- Schreibe schlichten Text: kurze Absätze, Listen mit "- ".`;
+
+/**
+ * Eine Runde im globalen Chat (ohne Server). `history` hält der Client;
+ * das Panel speichert nichts.
+ */
+export async function askAssistantGlobal(
+  question: string,
+  history: AssistantMessage[],
+): Promise<{ answer: string; model: string; actions: never[] }> {
+  const cfg = await getAssistantConfig();
+  if (!isConfigured(cfg)) {
+    throw badRequest('Der KI-Assistent ist nicht eingerichtet. Ein Administrator kann ihn unter Panel-Einstellungen anbinden.');
+  }
+  const frage = question.trim();
+  if (!frage) throw badRequest('Bitte eine Frage stellen.');
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: GLOBAL_PROMPT },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    { role: 'user', content: frage },
+  ];
+  const antwort = await chatCompletion(cfg, messages);
+  return { answer: antwort, model: cfg.model, actions: [] };
+}

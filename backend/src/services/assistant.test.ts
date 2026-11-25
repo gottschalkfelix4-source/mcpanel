@@ -222,6 +222,44 @@ describe('askAssistant mit Reparaturen', () => {
   });
 });
 
+describe('askAssistantGlobal (Figur ohne Serverkontext)', () => {
+  it('schickt nur Systemprompt, Verlauf und Frage – niemals Serverdaten', async () => {
+    await saveAssistantConfig(cfg);
+    m.fetch.mockResolvedValueOnce(antwort('Gerne!'));
+    const { askAssistantGlobal } = await import('./assistant.js');
+
+    const res = await askAssistantGlobal('Was ist ein Modpack?', [
+      { role: 'user', content: 'Hallo!' },
+      { role: 'assistant', content: 'Hi!' },
+    ]);
+    expect(res).toEqual({ answer: 'Gerne!', model: 'test-modell', actions: [] });
+
+    const body = JSON.parse(String((m.fetch.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(body.messages[0].role).toBe('system');
+    expect(body.messages[0].content).toContain('Kobi');
+    expect(body.messages[0].content).toContain('KEINEN Server');
+    // Rollen: system, user, assistant, user – der Verlauf bleibt unverändert.
+    expect(body.messages.map((x: { role: string }) => x.role)).toEqual(['system', 'user', 'assistant', 'user']);
+    // Kein Serverkontext, keine Protokolle, keine Modliste im Request.
+    expect(JSON.stringify(body)).not.toContain('## Protokoll');
+    expect(JSON.stringify(body)).not.toContain('## Server');
+    expect(body.messages.at(-1).content).toBe('Was ist ein Modpack?');
+  });
+
+  it('weigert sich ohne eingerichteten Assistenten', async () => {
+    const { askAssistantGlobal } = await import('./assistant.js');
+    await expect(askAssistantGlobal('Hallo', [])).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.fetch).not.toHaveBeenCalled();
+  });
+
+  it('lehnt eine leere Frage ab, ohne den Dienst zu belasten', async () => {
+    await saveAssistantConfig(cfg);
+    const { askAssistantGlobal } = await import('./assistant.js');
+    await expect(askAssistantGlobal('   ', [])).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('publicAssistantConfig', () => {
   it('gibt den Key nie heraus, nur eine Maske', () => {
     const pub = publicAssistantConfig(cfg);

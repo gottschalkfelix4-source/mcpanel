@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
 import { HttpError } from '../lib/errors.js';
-import { askAssistant } from '../services/assistant.js';
+import { askAssistant, askAssistantGlobal } from '../services/assistant.js';
 import { executeAction } from '../services/assistantActions.js';
 
 const askSchema = z.object({
@@ -80,6 +80,38 @@ export default async function assistantRoutes(app: FastifyInstance) {
       const { actionId } = req.params as { actionId: string };
       const body = freigabeSchema.parse(req.body ?? {});
       return executeAction(req.user!, access.server.id, actionId, body);
+    },
+  );
+}
+
+/**
+ * Globaler Assistent (die Figur unten rechts) ohne Serverkontext. Bewusst
+ * OHNE `requireServer`: Der Dienst bekommt keine Serverdaten zu sehen
+ * (siehe `GLOBAL_PROMPT` in services/assistant.ts). Wer mit einem Server
+ * als Kontext sprechen will, nutzt den Server-Endpunkt – der prüft den
+ * Zugriff frisch. So kann niemand über einen fremden Server plaudern.
+ */
+export async function globalAssistantRoutes(app: FastifyInstance) {
+  app.post(
+    '/ask',
+    {
+      config: {
+        rateLimit: {
+          max: 12,
+          timeWindow: '1 minute',
+          errorResponseBuilder: () =>
+            new HttpError(429, 'Zu viele Anfragen an den KI-Assistenten. Bitte warte eine Minute.'),
+        },
+      },
+    },
+    async (req) => {
+      const body = askSchema.parse(req.body ?? {});
+      const frage = body.question?.trim();
+      if (!frage) throw new HttpError(400, 'Bitte eine Frage stellen.');
+
+      const result = await askAssistantGlobal(frage, body.history);
+      await audit(req.user!.id, null, 'assistant.ask', frage.slice(0, 120));
+      return result;
     },
   );
 }

@@ -10,6 +10,9 @@ Taggen wird daraus eine Versionsüberschrift.
 
 ## [Unveröffentlicht]
 
+### Neu
+- **Kobi, der Begleiter**: Eine kleine animierte Figur sitzt unten rechts auf jeder Seite (schwebt, blinzelt, die Antenne leuchtet, wenn der KI-Assistent eingerichtet ist) und öffnet per Klick ein Gespräch. Ist ein Server geöffnet, redet Kobi nur über diesen – mit demselben geprüften Server-Endpunkt wie der Absturz-Dialog. Ohne geöffneten Server beantwortet Kobi nur allgemeine Fragen; der neue globale Endpunkt bekommt bewusst keine Serverdaten, damit niemand über fremde Server plaudern kann.
+
 ### Behoben
 - **KI-Assistent: leere Antwort bei OpenAI-kompatiblen Diensten**: Der Assistent versteht jetzt auch Dienste, die ihre Antwort als Stream (SSE) schicken, `content` als Teileliste liefern oder nur nachdenken, ohne zu antworten (Reasoning-Modelle) – statt pauschal „leere Antwort“ zu melden. Der Verbindungstest beim Speichern bekommt außerdem mehr Token-Budget, damit Modelle mit Nachdenken (z. B. DeepSeek-R1) überhaupt eine Antwort erzeugen können; schöpft ein Dienst das Budget trotzdem aus, nennt die Meldung jetzt den Grund.
 

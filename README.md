@@ -468,6 +468,15 @@ Klick des Nutzers. Fragen darf, wer die Konsole lesen darf; jede Anfrage steht i
 Aktivitätsprotokoll. Bei Anthropic, OpenRouter und OpenAI verlassen die Protokolle damit das eigene
 Netz – wer das nicht will, nimmt ein lokales Modell.
 
+**Die Begleitfigur Kobi** sitzt als kleiner, animierter Roboter unten rechts auf jeder
+Seite (schwebt, blinzelt, die Antenne leuchtet, wenn der Dienst bereit ist). Ein Klick
+öffnet das Gespräch: Ist gerade ein Server geöffnet, redet Kobi **nur über diesen** –
+derselbe geprüfte Server-Endpunkt wie der Dialog, der Zugriff wird bei jeder Frage frisch
+geprüft. Ohne geöffneten Server beantwortet Kobi nur allgemeine Fragen; der globale
+Endpunkt bekommt bewusst keine Serverdaten zu sehen, damit niemand über fremde Server
+plaudern kann. Reparatur-Vorschläge erscheinen im Chat nur als Hinweis – freigeben kann
+man sie weiterhin nur im Server-Dialog „KI fragen“.
+
 ### Mods und Plugins
 
 Beides ist derselbe Vorgang – eine `.jar` in einem Verzeichnis, das der Server beim
