@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import webpush from 'web-push';
+import { generateVAPIDKeys, sendNotification, setVapidDetails } from 'web-push';
 import type { NotificationChannel, PushSubscription as PushSubscriptionRow } from '@prisma/client';
 import { prisma } from '../db.js';
 import { config } from '../config.js';
@@ -14,14 +14,26 @@ import { config } from '../config.js';
  * Sitzungs-Geheimnis – im Datenverzeichnis und wird beim ersten Start
  * erzeugt. Wer das Panel umzieht, nimmt die Datei mit: unveränderte
  * Schlüssel halten die Abos der Geräte gültig.
+ *
+ * Hinweis: web-push ab v4 ist reines ESM (benannte Exports); der Typ aus
+ * @types/web-push passt dazu nicht mehr genau, deshalb hier lokale Typen.
  */
 
 const VAPID_FILE = '.vapid-keys';
 const SUBJECT = 'mailto:mcpanel@localhost';
 
+/** Schreibzugriff auf `sendNotification` mit Statuscode im Fehler. */
+type PushResponse = { statusCode?: number };
+
 interface VapidKeyPair {
   publicKey: string;
   privateKey: string;
+}
+
+/** Was der Push-Dienst des Browsers zum Zustellen braucht. */
+export interface PushSubscription {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
 }
 
 let keysPromise: Promise<VapidKeyPair> | null = null;
@@ -45,12 +57,12 @@ export function ensureVapidKeys(): Promise<VapidKeyPair> {
       /* erste Start – unten wird erzeugt */
     }
     if (!pair) {
-      pair = webpush.generateVAPIDKeys();
+      pair = generateVAPIDKeys();
       await fs.mkdir(config.dataRoot, { recursive: true });
       await fs.writeFile(file, JSON.stringify(pair, null, 2), { mode: 0o600 });
     }
     if (!configured) {
-      webpush.setVapidDetails(SUBJECT, pair.publicKey, pair.privateKey);
+      setVapidDetails(SUBJECT, pair.publicKey, pair.privateKey);
       configured = true;
     }
     return pair;
@@ -67,7 +79,7 @@ export async function publicVapidKey(): Promise<string> {
   return pair.publicKey.replace(/=+$/, '');
 }
 
-function subscriptionOf(row: PushSubscriptionRow): webpush.PushSubscription {
+function subscriptionOf(row: PushSubscriptionRow): PushSubscription {
   return { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } };
 }
 
@@ -93,10 +105,10 @@ export async function sendPush(channel: NotificationChannel, payload: unknown): 
   let ersterFehler: string | null = null;
   for (const sub of subscriptions) {
     try {
-      await webpush.sendNotification(subscriptionOf(sub), body);
+      await sendNotification(subscriptionOf(sub), body);
       delivered++;
     } catch (err) {
-      const status = (err as { statusCode?: number }).statusCode;
+      const status = (err as PushResponse).statusCode;
       if (status === 404 || status === 410) {
         // Das Gerät hat das Abo verloren (Browser-Daten gelöscht …) – aufräumen.
         await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});

@@ -13,11 +13,9 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock('web-push', () => ({
-  default: {
-    sendNotification: m.sendNotification,
-    generateVAPIDKeys: m.generateVAPIDKeys,
-    setVapidDetails: m.setVapidDetails,
-  },
+  sendNotification: m.sendNotification,
+  generateVAPIDKeys: m.generateVAPIDKeys,
+  setVapidDetails: m.setVapidDetails,
 }));
 vi.mock('../db.js', () => ({
   prisma: {
