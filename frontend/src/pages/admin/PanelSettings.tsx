@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Boxes, Container, ExternalLink, Key, ScrollText, Server, Sparkles } from 'lucide-react';
+import { Boxes, Container, ExternalLink, Key, ListTree, ScrollText, Server, Sparkles } from 'lucide-react';
 import { api } from '../../lib/api';
 import NotificationChannels from '../../components/NotificationChannels';
 import BackupTarget from '../../components/BackupTarget';
@@ -39,6 +39,8 @@ interface AssistantInfo {
   baseUrl: string;
   model: string;
   hasKey: boolean;
+  /** Antwortbudget (max_tokens) – einstellbar, weil Reasoning-Modelle erst denken. */
+  maxTokens?: number;
   /** Darf der Assistent Reparaturen zur Freigabe vorschlagen? */
   actions: boolean;
   masked: string | null;
@@ -357,6 +359,8 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
   const [baseUrl, setBaseUrl] = useState(data.baseUrl);
   const [model, setModel] = useState(data.model);
   const [apiKey, setApiKey] = useState('');
+  // Das eingestellte Antwortbudget – Standard 1500, sofern das Backend keins liefert.
+  const [maxTokens, setMaxTokens] = useState(data.maxTokens ?? 1500);
 
   const anthropic = provider === 'anthropic';
   // Ein gespeicherter Key gilt nur fuer den Anbieter, fuer den er hinterlegt wurde.
@@ -367,6 +371,7 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
       provider: AssistantProvider;
       baseUrl: string;
       model: string;
+      maxTokens?: number;
       apiKey?: string;
       entfernen?: boolean;
     }) => api.put<{ ok: boolean; configured?: boolean; error?: string }>('/settings/assistant', body),
@@ -395,6 +400,15 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
       void queryClient.invalidateQueries({ queryKey: ['settings-public'] });
       onSaved();
     },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  /** Modelle vom OpenAI-kompatiblen Dienst holen – der Knopf „Abrufen“. */
+  const modelle = useMutation({
+    mutationFn: () =>
+      api.get<{ ok: boolean; models?: { id: string; owned_by?: string }[]; error?: string }>(
+        '/settings/assistant/models',
+      ),
     onError: (err: Error) => toast.error(err.message),
   });
 
@@ -463,7 +477,7 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
               onChange={(e) => setBaseUrl(e.target.value)}
             />
           </Field>
-          <Field label="Modell" hint="Genau so, wie der Anbieter es listet.">
+          <Field label="Modell" hint="Genau so, wie der Anbieter es listet – der Knopf „Abrufen“ zeigt dir die echten Namen.">
             <input
               className="mc-input font-mono"
               placeholder={anthropic ? 'claude-opus-5-5' : 'anthropic/claude-sonnet-4.5'}
@@ -476,8 +490,63 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
                 <option key={m} value={m} />
               ))}
             </datalist>
+            {!anthropic && (
+              <div className="mt-2 space-y-1.5">
+                <Button
+                  variant="ghost"
+                  className="!px-2.5 !py-1 !text-xs"
+                  icon={<ListTree size={13} />}
+                  loading={modelle.isPending}
+                  disabled={!baseUrl.trim()}
+                  title={baseUrl.trim() ? 'Modellnamen von diesem Dienst laden' : 'Zuerst die Adresse eintragen'}
+                  onClick={() => modelle.mutate()}
+                >
+                  Modelle abrufen
+                </Button>
+                {modelle.data && (
+                  <div className="max-h-44 overflow-y-auto border border-stone-800 bg-stone-950/60">
+                    {modelle.data.ok && modelle.data.models ? (
+                      modelle.data.models.map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          title={m.owned_by ? `von ${m.owned_by}` : undefined}
+                          className="block w-full truncate px-2.5 py-1.5 text-left font-mono text-xs text-stone-300 transition hover:bg-grass/15 hover:text-white"
+                          onClick={() => setModel(m.id)}
+                        >
+                          {m.id}
+                        </button>
+                      ))
+                    ) : (
+                      <p className="px-2.5 py-2 text-xs text-redstone">{modelle.data.error}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </Field>
         </div>
+
+        <Field
+          label="Antwortbudget (max_tokens)"
+          hint={
+            anthropic
+              ? 'Wie viele Token die Antwort maximal verbrauchen darf. Claude fasst sich kurz – 1500 genügt meist.'
+              : 'Modelle mit Nachdenken (z. B. DeepSeek-R1) brauchen erst Budget zum Denken, bevor eine Antwort entsteht – bei „Budget ausgeschöpft“ hier erhöhen.'
+          }
+        >
+          <input
+            className="mc-input w-40 font-mono"
+            type="number"
+            min={200}
+            max={64000}
+            step={100}
+            value={maxTokens}
+            disabled={anthropic}
+            onChange={(e) => setMaxTokens(Number(e.target.value))}
+          />
+          <p className="mt-1 text-xs text-stone-450">Erlaubt: 200 – 64 000.</p>
+        </Field>
 
         <Field
           label="API-Key"
@@ -506,6 +575,7 @@ function AssistantSettings({ data, onSaved }: { data: AssistantInfo; onSaved: ()
                   provider,
                   baseUrl: baseUrl.trim(),
                   model: model.trim(),
+                  maxTokens,
                   apiKey: apiKey || undefined,
                 })
               }

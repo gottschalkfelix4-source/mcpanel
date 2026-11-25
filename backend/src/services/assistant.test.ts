@@ -171,6 +171,13 @@ describe('chatCompletion', () => {
     );
     await expect(chatCompletion(cfg, [])).rejects.toThrow('Antwortbudget');
   });
+
+  it('nutzt das eingestellte Antwortbudget, wenn der Aufrufer keins vorgibt', async () => {
+    m.fetch.mockResolvedValueOnce(antwort('OK'));
+    await chatCompletion({ ...cfg, maxTokens: 8000 }, []);
+    const [, init] = m.fetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).max_tokens).toBe(8000);
+  });
 });
 
 describe('askAssistant', () => {
@@ -268,6 +275,59 @@ describe('publicAssistantConfig', () => {
     expect(pub.configured).toBe(true);
   });
 });
+
+describe('Antwortbudget', () => {
+  it('speichert und liest das Budget gerundet in erlaubten Grenzen', async () => {
+    const { saveAssistantConfig, getAssistantConfig } = await import('./assistant.js');
+    await saveAssistantConfig({ ...cfg, maxTokens: 42 }); // unter dem Minimum
+    expect((await getAssistantConfig()).maxTokens).toBe(200);
+    await saveAssistantConfig({ ...cfg, maxTokens: 1_000_000 }); // über dem Maximum
+    expect((await getAssistantConfig()).maxTokens).toBe(64_000);
+    await saveAssistantConfig({ ...cfg, maxTokens: 4000 });
+    expect((await getAssistantConfig()).maxTokens).toBe(4000);
+  });
+
+  it('liefert das Standardbudget, wenn nichts gespeichert ist', async () => {
+    const { getAssistantConfig } = await import('./assistant.js');
+    expect((await getAssistantConfig()).maxTokens).toBe(1500);
+  });
+});
+
+describe('listAssistantModels', () => {
+  it('liest die Modell-Liste vom OpenAI-kompatiblen Dienst mit dem Key', async () => {
+    m.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          object: 'list',
+          data: [{ id: 'gpt-4.1-mini', owned_by: 'system' }, { id: 'qwen2.5:14b' }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const { listAssistantModels } = await import('./assistant.js');
+    const modelle = await listAssistantModels(cfg);
+    expect(modelle).toEqual([
+      { id: 'gpt-4.1-mini', owned_by: 'system' },
+      { id: 'qwen2.5:14b', owned_by: undefined },
+    ]);
+    const [url, init] = m.fetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://ki.example/v1/models');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-geheim-1234');
+  });
+
+  it('erklärt einen fehlenden /models-Pfad verständlich', async () => {
+    m.fetch.mockResolvedValueOnce(new Response('nope', { status: 404 }));
+    const { listAssistantModels } = await import('./assistant.js');
+    await expect(listAssistantModels(cfg)).rejects.toThrow(/\/v1 enden/);
+  });
+
+  it('besteht ohne Key – lokale Dienste haben keinen', async () => {
+    m.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: 'llama3' }] }), { status: 200 }));
+    const { listAssistantModels } = await import('./assistant.js');
+    await expect(listAssistantModels({ ...cfg, apiKey: '' })).resolves.toEqual([{ id: 'llama3', owned_by: undefined }]);
+  });
+});
+
 
 describe('Anthropic', () => {
   const anthropic = {

@@ -39,6 +39,13 @@ export interface AssistantConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * Antwortbudget (max_tokens). Fehlt bei alten Einstellungen → 1500.
+   * Modelle mit Nachdenken (DeepSeek-R1 & Co.) brauchen erst Budget zum
+   * Denken, bevor eine Antwort entsteht – ein zu knapper Wert bricht sonst
+   * mit „Antwortbudget ausgeschöpft“ ab.
+   */
+  maxTokens?: number;
 }
 
 export interface AssistantMessage {
@@ -60,7 +67,20 @@ const SCHLUESSEL = {
   baseUrl: 'assistant.baseUrl',
   apiKey: 'assistant.apiKey',
   model: 'assistant.model',
+  maxTokens: 'assistant.maxTokens',
 } as const;
+
+/** Standard-Antwortbudget, wenn nichts eingestellt ist. */
+export const ASSISTANT_STANDARD_BUDGET = 1500;
+/** Grenzen für die Einstellung – zu klein stirbt jedes Reasoning-Modell. */
+export const ASSISTANT_BUDGET_MIN = 200;
+export const ASSISTANT_BUDGET_MAX = 64_000;
+
+function budgetVon(wert: string): number {
+  const n = Number(wert);
+  if (!Number.isFinite(n)) return ASSISTANT_STANDARD_BUDGET;
+  return Math.min(ASSISTANT_BUDGET_MAX, Math.max(ASSISTANT_BUDGET_MIN, Math.round(n)));
+}
 
 export async function getAssistantConfig(): Promise<AssistantConfig> {
   const provider = (await getSetting(SCHLUESSEL.provider, 'openai')) === 'anthropic' ? 'anthropic' : 'openai';
@@ -69,6 +89,7 @@ export async function getAssistantConfig(): Promise<AssistantConfig> {
     baseUrl: (await getSetting(SCHLUESSEL.baseUrl, '')).replace(/\/+$/, ''),
     apiKey: await getSetting(SCHLUESSEL.apiKey, ''),
     model: await getSetting(SCHLUESSEL.model, ''),
+    maxTokens: budgetVon(await getSetting(SCHLUESSEL.maxTokens, String(ASSISTANT_STANDARD_BUDGET))),
   };
 }
 
@@ -78,6 +99,8 @@ export async function saveAssistantConfig(next: AssistantConfig): Promise<void> 
   await setSetting(SCHLUESSEL.baseUrl, next.baseUrl.trim().replace(/\/+$/, ''));
   await setSetting(SCHLUESSEL.apiKey, next.apiKey.trim());
   await setSetting(SCHLUESSEL.model, next.model.trim());
+  const budget = next.maxTokens ?? ASSISTANT_STANDARD_BUDGET;
+  await setSetting(SCHLUESSEL.maxTokens, String(Math.min(ASSISTANT_BUDGET_MAX, Math.max(ASSISTANT_BUDGET_MIN, Math.round(budget)))));
 }
 
 /**
@@ -96,6 +119,7 @@ export function publicAssistantConfig(cfg: AssistantConfig) {
     provider: cfg.provider ?? 'openai',
     baseUrl: cfg.baseUrl,
     model: cfg.model,
+    maxTokens: cfg.maxTokens ?? ASSISTANT_STANDARD_BUDGET,
     hasKey: Boolean(cfg.apiKey),
     masked: cfg.apiKey ? `${cfg.apiKey.slice(0, 6)}…${cfg.apiKey.slice(-4)}` : null,
   };
@@ -204,7 +228,9 @@ export async function chatCompletion(
         model: cfg.model,
         messages,
         temperature: 0.2,
-        max_tokens: opts.maxTokens ?? 1500,
+        // Das Antwortbudget ist einstellbar – Reasoning-Modelle brauchen
+        // erst Budget zum Denken. Der Aufrufer (Test) kann es begrenzen.
+        max_tokens: opts.maxTokens ?? cfg.maxTokens ?? ASSISTANT_STANDARD_BUDGET,
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -273,9 +299,9 @@ export async function testAssistant(cfg: AssistantConfig): Promise<string> {
   return chatCompletion(
     cfg,
     [{ role: 'user', content: 'Antworte mit genau einem Wort: OK' }],
-    // Großzügig: Reasoning-Modelle brauchen erst Budget zum Nachdenken,
-    // bevor überhaupt eine Antwort entsteht.
-    { maxTokens: 300 },
+    // Kein eigenes Budget: Es gilt das eingestellte Antwortbudget –
+    // Reasoning-Modelle brauchen erst Budget zum Nachdenken, ein zu knapper
+    // Test würde sonst „Budget ausgeschöpft“ melden.
   );
 }
 
@@ -452,3 +478,54 @@ export async function askAssistantGlobal(
   const antwort = await chatCompletion(cfg, messages);
   return { answer: antwort, model: cfg.model, actions: [] };
 }
+
+/**
+ * Modell-Liste eines OpenAI-kompatiblen Dienstes (`GET /v1/models`) für den
+ * Abruf-Knopf in den Einstellungen. Viele Dienste (Ollama, OpenWebUI, LM
+ * Studio) nennen ihre Modelle anders, als man denkt – der Knopf zeigt, was
+ * der Endpunkt wirklich kennt. Nur `id` und `owned_by` kommen zurück; ein
+ * Fehler wird als verständlicher deutscher Satz geworfen.
+ */
+export async function listAssistantModels(cfg: AssistantConfig): Promise<{ id: string; owned_by?: string }[]> {
+  const base = cfg.baseUrl.replace(/\/+$/, '');
+  if (!base) throw badRequest('Bitte zuerst die Adresse des Dienstes eintragen.');
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(30_000) });
+  } catch (err) {
+    const grund = err instanceof Error ? err.message : String(err);
+    if (/abort|timeout/i.test(grund)) throw new Error('Der Dienst hat nicht rechtzeitig geantwortet (30 Sekunden).');
+    throw new Error(`Der Dienst ist nicht erreichbar: ${grund}`);
+  }
+
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`Der Dienst hat den API-Key abgelehnt (HTTP ${res.status}).`);
+    }
+    if (res.status === 404) {
+      throw new Error('Der Dienst kennt den Pfad /models nicht (HTTP 404) – die Adresse muss auf /v1 enden.');
+    }
+    throw new Error(`Der Dienst meldet HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  let data: { data?: { id?: unknown; owned_by?: unknown }[] } = {};
+  try {
+    data = JSON.parse(text) as typeof data;
+  } catch {
+    throw new Error('Der Dienst hat keine JSON-Antwort auf /models geliefert.');
+  }
+
+  const modelle = (data.data ?? [])
+    .map((m) => ({ id: String(m.id ?? ''), owned_by: typeof m.owned_by === 'string' ? m.owned_by : undefined }))
+    .filter((m) => m.id);
+  if (modelle.length === 0) {
+    throw new Error('Die Antwort des Dienstes enthält keine Modelle (data-Liste leer).');
+  }
+  return modelle;
+}
+

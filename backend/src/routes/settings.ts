@@ -20,8 +20,8 @@ import { scheduleUnifiSync } from '../services/unifi.js';
 import { volumeSpace } from '../services/quota.js';
 import { getTotpPolicy, policyApplies, TOTP_POLICIES, TOTP_POLICY_KEY } from '../auth/totpPolicy.js';
 import {
-  getAssistantConfig, isConfigured as assistantConfigured, publicAssistantConfig,
-  saveAssistantConfig, testAssistant,
+  ASSISTANT_BUDGET_MAX, ASSISTANT_BUDGET_MIN, getAssistantConfig, isConfigured as assistantConfigured,
+  listAssistantModels, publicAssistantConfig, saveAssistantConfig, testAssistant,
 } from '../services/assistant.js';
 import {
   actionsEnabled as assistantActionsEnabled,
@@ -152,6 +152,8 @@ export default async function settingsRoutes(app: FastifyInstance) {
         baseUrl: z.string().trim().max(300).default(''),
         model: z.string().trim().max(200).default(''),
         apiKey: z.string().max(500).optional(),
+        // Antwortbudget – Reasoning-Modelle brauchen erst Budget zum Denken.
+        maxTokens: z.number().int().min(ASSISTANT_BUDGET_MIN).max(ASSISTANT_BUDGET_MAX).optional(),
         entfernen: z.boolean().optional(),
       })
       .parse(req.body);
@@ -181,6 +183,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
       baseUrl: body.baseUrl.replace(/\/+$/, ''),
       model: body.model,
       apiKey: body.apiKey?.trim().length ? body.apiKey.trim() : gleicherAnbieter ? current.apiKey : '',
+      maxTokens: body.maxTokens ?? current.maxTokens ?? undefined,
     };
     if (next.provider === 'anthropic' && !next.apiKey) {
       throw badRequest('Bitte einen Anthropic-API-Key angeben (beginnt mit sk-ant-).');
@@ -206,6 +209,24 @@ export default async function settingsRoutes(app: FastifyInstance) {
       `${next.provider === 'anthropic' ? 'Anthropic' : next.baseUrl} · ${next.model}`,
     );
     return { ok: true, configured: true, assistant: publicAssistantConfig(next) };
+  });
+
+  /**
+   * Modell-Liste vom OpenAI-kompatiblen Dienst holen (`GET /models`), damit
+   * der Admin den genauen Modellnamen sieht, statt zu raten. Lesend, der
+   * Key gilt nur für die gespeicherte Adresse.
+   */
+  app.get('/assistant/models', { preHandler: requireAdmin }, async () => {
+    const cfg = await getAssistantConfig();
+    if (cfg.provider === 'anthropic') {
+      return { ok: false, error: 'Anthropic listet keine Modelle über diesen Knopf – nutze die Vorschläge im Modellfeld.' };
+    }
+    try {
+      const models = await listAssistantModels(cfg);
+      return { ok: true, models };
+    } catch (err) {
+      return { ok: false, error: publicErrorMessage(err, 'Modelle konnten nicht geladen werden') };
+    }
   });
 
   app.put('/curseforge', { preHandler: requireAdmin }, async (req) => {
