@@ -42,6 +42,8 @@ interface MrVersion {
   game_versions: string[];
   loaders: string[];
   date_published: string;
+  /** "release" | "beta" | "alpha" */
+  version_type?: string;
   files: MrFile[];
 }
 
@@ -156,13 +158,90 @@ export async function getProject(id: string): Promise<ProjectSummary> {
   };
 }
 
-export async function getVersions(projectId: string): Promise<ProjectVersion[]> {
+/** Filter für die Versionsliste eines Projekts – Modrinth wertet sie als UND aus. */
+export interface VersionFilter {
+  loaders?: string[];
+  gameVersions?: string[];
+}
+
+export async function getVersions(projectId: string, filter: VersionFilter = {}): Promise<ProjectVersion[]> {
+  const params = new URLSearchParams();
+  if (filter.loaders?.length) params.set('loaders', JSON.stringify(filter.loaders));
+  if (filter.gameVersions?.length) params.set('game_versions', JSON.stringify(filter.gameVersions));
+  const query = params.toString();
   const versions = await fetchJson<MrVersion[]>(
-    `${API}/project/${projectId}/version`,
+    `${API}/project/${projectId}/version${query ? `?${query}` : ''}`,
     { headers: headers() },
     'Modrinth',
   );
   return versions.map(toVersion);
+}
+
+/** Projektkopf für Update-Anzeigen – nur die Felder, die die Liste braucht. */
+export interface ProjectMeta {
+  id: string;
+  slug: string;
+  title: string;
+  projectType: string;
+  iconUrl: string | null;
+}
+
+const MAX_IDS = 100;
+
+/**
+ * Projektköpfe zu IDs laden (GET /v2/projects?ids=[...]). Die Antwort enthält
+ * keine Versionen – die kommen über getVersions. Ein unbekanntes Projekt fällt
+ * in der Antwort einfach weg.
+ */
+export async function getProjectsByIds(ids: string[]): Promise<Map<string, ProjectMeta>> {
+  const found = new Map<string, ProjectMeta>();
+  for (let i = 0; i < ids.length; i += MAX_IDS) {
+    const chunk = ids.slice(i, i + MAX_IDS);
+    const data = await fetchJson<
+      { id: string; slug: string; title: string; project_type: string; icon_url: string | null }[]
+    >(
+      `${API}/projects?ids=${encodeURIComponent(JSON.stringify(chunk))}`,
+      { headers: headers() },
+      'Modrinth',
+    );
+    for (const p of data) {
+      found.set(p.id, {
+        id: p.id,
+        slug: p.slug,
+        title: p.title,
+        projectType: p.project_type,
+        iconUrl: p.icon_url,
+      });
+    }
+  }
+  return found;
+}
+
+/**
+ * Installierte Dateien über ihre SHA-1-Prüfsumme erkennen
+ * (POST /v2/version_files, höchstens 100 Hashes je Anfrage). Liefert nur
+ * Treffer – ein Hash ohne passende Datei fehlt in der Antwort. Jede Datei
+ * gehört üblicherweise zu genau einer Version; bei mehreren zählt im Service
+ * die neueste.
+ */
+export async function getVersionsForHashes(hashes: string[]): Promise<Map<string, ProjectVersion[]>> {
+  const found = new Map<string, ProjectVersion[]>();
+  for (let i = 0; i < hashes.length; i += MAX_IDS) {
+    const chunk = hashes.slice(i, i + MAX_IDS);
+    const data = await fetchJson<Record<string, MrVersion[]>>(
+      `${API}/version_files?algorithm=sha1&multiple=true`,
+      {
+        method: 'POST',
+        headers: { ...headers(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hashes: chunk }),
+      },
+      'Modrinth',
+    );
+    for (const [hash, versions] of Object.entries(data)) {
+      found.set(hash, versions.map(toVersion));
+    }
+  }
+  return found;
 }
 
 export async function getVersion(versionId: string): Promise<ProjectVersion> {
@@ -188,6 +267,7 @@ function toVersion(v: MrVersion): ProjectVersion {
     downloadUrl: file?.url ?? null,
     filename: file?.filename ?? `${v.version_number}.mrpack`,
     fileSize: file?.size ?? 0,
+    versionType: v.version_type === 'beta' || v.version_type === 'alpha' ? v.version_type : 'release',
   };
 }
 

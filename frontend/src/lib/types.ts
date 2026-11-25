@@ -258,6 +258,30 @@ export interface ContentFile {
   modified: string;
 }
 
+/** Update-Angebot für eine einzelne Mod bzw. ein einzelnes Plugin (Modrinth). */
+export interface ContentUpdate {
+  filename: string;
+  projectId: string;
+  projectSlug: string;
+  projectName: string;
+  projectUrl: string | null;
+  installedVersion: string;
+  latestVersionId: string;
+  latestVersion: string;
+  latestVersionName: string;
+  latestVersionType: 'release' | 'beta' | 'alpha';
+  latestFilename: string;
+  downloadUrl: string | null;
+  releasedAt: string;
+}
+
+export interface ContentUpdatesResponse {
+  checkedAt: string;
+  updates: ContentUpdate[];
+  /** Gesetzt, wenn Modrinth nicht erreichbar war – dann ist `updates` leer. */
+  error: string | null;
+}
+
 /** Eine Runde im Gespraech mit dem KI-Assistenten – lebt nur im Dialog. */
 export interface AssistantMessage {
   role: 'user' | 'assistant';

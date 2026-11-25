@@ -5,11 +5,12 @@ import { z } from 'zod';
 import { audit, requireServer } from '../auth/context.js';
 import type { Permission } from '../auth/permissions.js';
 import { PERMISSIONS } from '../auth/permissions.js';
-import { badRequest } from '../lib/errors.js';
+import { badRequest, publicErrorMessage } from '../lib/errors.js';
 import { downloadToFile } from '../lib/download.js';
 import * as modrinth from '../providers/modrinth.js';
 import * as curseforge from '../providers/curseforge.js';
 import { catalogLoaderFor, contentDir, contentDirName, contentKindFor } from '../services/content.js';
+import { applyContentUpdate, checkContentUpdates } from '../services/contentUpdates.js';
 import { analyseCrash } from '../services/crashAnalysis.js';
 import * as dockerSvc from '../services/docker.js';
 import { guardMutations } from './mutationGuard.js';
@@ -68,6 +69,53 @@ export default async function contentRoutes(app: FastifyInstance) {
       mcVersion: access.server.mcVersion,
       items,
     };
+  });
+
+  /**
+   * Update-Verfügbarkeit einzelner Mods/Plugins über Modrinth. Lesend, deshalb
+   * genügt FILES_READ – wer die Liste sehen darf, darf auch Updates sehen.
+   */
+  app.get('/updates', async (req) => {
+    const access = await requireServer(req, PERMISSIONS.FILES_READ);
+    return checkContentUpdates(access.server);
+  });
+
+  /**
+   * Einzelne Mods/Plugins auf die neueste passende Modrinth-Version bringen.
+   * Läuft unter der Serversperre (`guardMutations`); jede Datei wird für sich
+   * versucht, eine fehlgeschlagene bricht die übrigen nicht ab.
+   */
+  app.post('/update', async (req) => {
+    const { access } = await requireDir(req, PERMISSIONS.MODPACK_MANAGE);
+    const body = z
+      .object({
+        updates: z
+          .array(
+            z.object({
+              filename: z.string().min(1).max(255),
+              projectId: providerId,
+              versionId: providerId,
+            }),
+          )
+          .min(1)
+          .max(50),
+      })
+      .parse(req.body);
+
+    const kind = contentKindFor(access.server.type)!;
+    const results: { filename: string; newFilename?: string; error?: string }[] = [];
+    for (const update of body.updates) {
+      try {
+        const res = await applyContentUpdate(access.server, update.filename, update.projectId, update.versionId);
+        await audit(req.user!.id, access.server.id, `${kind}.update`, `${update.filename} → ${res.newFilename}`);
+        results.push({ filename: update.filename, newFilename: res.newFilename });
+      } catch (err) {
+        results.push({ filename: update.filename, error: publicErrorMessage(err) });
+      }
+    }
+    const failed = results.filter((r) => r.error);
+    if (failed.length === results.length) throw badRequest(failed[0]?.error ?? 'Aktualisieren fehlgeschlagen');
+    return { results, failed: failed.length };
   });
 
   /** Einzelne Mod bzw. einzelnes Plugin von Modrinth/CurseForge ablegen. */

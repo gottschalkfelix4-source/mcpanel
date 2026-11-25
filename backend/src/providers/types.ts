@@ -62,6 +62,8 @@ export interface ProjectVersion {
   downloadUrl: string | null;
   filename: string;
   fileSize: number;
+  /** Nur Modrinth: release | beta | alpha. */
+  versionType?: 'release' | 'beta' | 'alpha';
   /** Nur bei CurseForge: manche Autoren verbieten API-Downloads. */
   downloadBlocked?: boolean;
   /** Nur bei CurseForge: ID des vom Autor bereitgestellten Serverpakets. */

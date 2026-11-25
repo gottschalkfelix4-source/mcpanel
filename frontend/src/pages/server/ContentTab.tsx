@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Plus, Puzzle, Search, Trash2 } from 'lucide-react';
+import { Download, Plus, Puzzle, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatBytes, formatDate } from '../../lib/format';
-import { CONTENT_KIND_BY_TYPE, type ContentKind, type ContentListing } from '../../lib/types';
+import { CONTENT_KIND_BY_TYPE, type ContentKind, type ContentListing, type ContentUpdatesResponse } from '../../lib/types';
 import { ModpackBrowser } from '../../components/ModpackBrowser';
 import {
   Badge, Button, ConfirmDialog, EmptyState, LoadingBlock, Modal, Panel, Toggle, useToast, LoadErrorBlock } from '../../components/ui';
@@ -25,19 +25,36 @@ export default function ContentTab() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBrowser, setShowBrowser] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** Nur Zeilen mit verfügbarem Update zeigen. */
+  const [nurUpdates, setNurUpdates] = useState(false);
 
   const content = useQuery({
     queryKey: ['content', server.id],
     queryFn: () => api.get<ContentListing>(`/servers/${server.id}/content`),
   });
 
+  /**
+   * Update-Verfügbarkeit einzeln installierter Mods/Plugins. Läuft erst, wenn
+   * die Liste weiß, dass dieser Server überhaupt Inhalte lädt; geprüft wird
+   * über die SHA-1-Prüfsumme der Dateien gegen Modrinth.
+   */
+  const updates = useQuery({
+    queryKey: ['content-updates', server.id],
+    queryFn: () => api.get<ContentUpdatesResponse>(`/servers/${server.id}/content/updates`),
+    enabled: Boolean(content.data?.kind),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['content', server.id] });
+    queryClient.invalidateQueries({ queryKey: ['content-updates', server.id] });
+  };
+
   // Bis die Antwort da ist, beschriftet der Servertyp den Reiter – sonst
   // stuende auf einem Paper-Server kurz „Mods“.
   const kind = content.data?.kind ?? CONTENT_KIND_BY_TYPE[server.type];
   const words = WORDS[kind ?? 'mod'];
   const dirName = content.data?.dirName ?? words.dir;
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['content', server.id] });
 
   const toggle = useMutation({
     mutationFn: (filename: string) =>
@@ -68,14 +85,48 @@ export default function ContentTab() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const update = useMutation({
+    mutationFn: (list: { filename: string; projectId: string; versionId: string }[]) =>
+      api.post<{ results: { filename: string; newFilename?: string; error?: string }[]; failed: number }>(
+        `/servers/${server.id}/content/update`,
+        { updates: list },
+      ),
+    onSuccess: (res) => {
+      const ok = res.results.length - res.failed;
+      const ersterFehler = res.results.find((r) => r.error)?.error;
+      if (res.failed === 0) {
+        toast.success(`${ok} ${ok === 1 ? words.singular : words.plural} aktualisiert. Neustart nötig.`);
+      } else if (ok > 0) {
+        toast.success(`${ok} aktualisiert, ${res.failed} Fehler.`);
+        if (ersterFehler) toast.error(ersterFehler);
+      } else {
+        toast.error(ersterFehler ?? 'Aktualisieren fehlgeschlagen');
+      }
+      invalidate();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   const items = content.data?.items ?? [];
+
+  // Update je Dateiname – die Zeile zeigt Badge und Knopf nur, wenn es eins gibt.
+  const updatesByFile = useMemo(() => {
+    const map = new Map<string, ContentUpdatesResponse['updates'][number]>();
+    for (const u of updates.data?.updates ?? []) map.set(u.filename, u);
+    return map;
+  }, [updates.data]);
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? items.filter((item) => item.displayName.toLowerCase().includes(q)) : items;
-  }, [items, search]);
+    return items.filter(
+      (item) =>
+        (!q || item.displayName.toLowerCase().includes(q)) &&
+        (!nurUpdates || updatesByFile.has(item.filename)),
+    );
+  }, [items, search, nurUpdates, updatesByFile]);
 
   const enabledCount = items.filter((item) => item.enabled).length;
+  const updateCount = updates.data?.updates.length ?? 0;
 
   function toggleSelection(filename: string) {
     setSelected((prev) => {
@@ -122,6 +173,40 @@ export default function ContentTab() {
         bodyClassName="!p-0"
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="ghost"
+              className="!px-3 !py-1.5 !text-xs"
+              icon={<RefreshCw size={13} className={updates.isFetching ? 'animate-spin' : undefined} />}
+              title="Nach Updates suchen"
+              onClick={() => void updates.refetch()}
+            >
+              Prüfen
+            </Button>
+            {updateCount > 0 && (
+              <>
+                <Toggle checked={nurUpdates} onChange={setNurUpdates} label="Nur Updates" />
+                {can('modpack.manage') && (
+                  <Button
+                    variant="gold"
+                    className="!px-3 !py-1.5 !text-xs"
+                    icon={<Download size={13} />}
+                    loading={update.isPending}
+                    title={`${updateCount} ${updateCount === 1 ? words.singular : words.plural} aktualisieren`}
+                    onClick={() =>
+                      update.mutate(
+                        (updates.data?.updates ?? []).map((u) => ({
+                          filename: u.filename,
+                          projectId: u.projectId,
+                          versionId: u.latestVersionId,
+                        })),
+                      )
+                    }
+                  >
+                    {updateCount} aktualisieren
+                  </Button>
+                )}
+              </>
+            )}
             <div className="relative">
               <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-450" />
               <input
@@ -156,6 +241,12 @@ export default function ContentTab() {
           </div>
         }
       >
+        {updates.data?.error && (
+          <p className="border-b border-stone-875 px-4 py-2.5 text-xs leading-relaxed text-redstone">
+            Update-Prüfung fehlgeschlagen: {updates.data.error} – die Liste zeigt nur den
+            installierten Stand. <button className="underline" onClick={() => void updates.refetch()}>Erneut versuchen</button>
+          </p>
+        )}
         {content.isLoading ? (
           <LoadingBlock />
         ) : !content.data ? (
@@ -174,49 +265,80 @@ export default function ContentTab() {
           />
         ) : (
           <ul className="divide-y divide-stone-875">
-            {list.map((item, i) => (
-              <li
-                key={item.filename}
-                className={clsx(
-                  'flex animate-slide-in items-center gap-3 px-4 py-2.5 transition-colors',
-                  selected.has(item.filename) ? 'bg-grass/10' : 'hover:bg-stone-600/[0.28]',
-                )}
-                style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }}
-              >
-                {can('modpack.manage') && (
-                  <input
-                    type="checkbox"
-                    checked={selected.has(item.filename)}
-                    onChange={() => toggleSelection(item.filename)}
-                    className="h-4 w-4 shrink-0 accent-[#5B8731]"
-                  />
-                )}
+            {list.map((item, i) => {
+              const updateInfo = updatesByFile.get(item.filename);
+              return (
+                <li
+                  key={item.filename}
+                  className={clsx(
+                    'flex animate-slide-in items-center gap-3 px-4 py-2.5 transition-colors',
+                    selected.has(item.filename) ? 'bg-grass/10' : 'hover:bg-stone-600/[0.28]',
+                  )}
+                  style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }}
+                >
+                  {can('modpack.manage') && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(item.filename)}
+                      onChange={() => toggleSelection(item.filename)}
+                      className="h-4 w-4 shrink-0 accent-[#5B8731]"
+                    />
+                  )}
 
-                <div className="min-w-0 flex-1">
-                  <p
-                    className={clsx(
-                      'truncate font-mono text-[13px]',
-                      item.enabled ? 'text-stone-100' : 'text-stone-450 line-through',
-                    )}
-                  >
-                    {item.displayName}
-                  </p>
-                  <p className="mt-0.5 font-mono text-[11px] text-stone-450">
-                    {formatBytes(item.size)} · {formatDate(item.modified)}
-                  </p>
-                </div>
+                  <div className="min-w-0 flex-1">
+                    <p
+                      className={clsx(
+                        'truncate font-mono text-[13px]',
+                        item.enabled ? 'text-stone-100' : 'text-stone-450 line-through',
+                      )}
+                    >
+                      {item.displayName}
+                    </p>
+                    <p className="mt-0.5 font-mono text-[11px] text-stone-450">
+                      {formatBytes(item.size)} · {formatDate(item.modified)}
+                    </p>
+                  </div>
 
-                {!item.enabled && <Badge>deaktiviert</Badge>}
+                  {updateInfo && (
+                    <Badge
+                      tone="green"
+                      className="whitespace-nowrap font-mono"
+                      title={`${updateInfo.projectName}: ${updateInfo.installedVersion} → ${updateInfo.latestVersion} – ${updateInfo.latestVersionName}`}
+                    >
+                      Update: {updateInfo.installedVersion} → {updateInfo.latestVersion}
+                      {updateInfo.latestVersionType !== 'release' && ` (${updateInfo.latestVersionType})`}
+                    </Badge>
+                  )}
 
-                {can('modpack.manage') && (
-                  <Toggle
-                    checked={item.enabled}
-                    disabled={toggle.isPending}
-                    onChange={() => toggle.mutate(item.filename)}
-                  />
-                )}
-              </li>
-            ))}
+                  {!item.enabled && <Badge>deaktiviert</Badge>}
+
+                  {can('modpack.manage') && updateInfo?.downloadUrl && (
+                    <Button
+                      variant="ghost"
+                      className="!px-2 !py-1.5"
+                      title={`Auf ${updateInfo.latestVersion} aktualisieren`}
+                      aria-label={`${item.displayName} aktualisieren`}
+                      icon={<Download size={14} />}
+                      loading={update.isPending && update.variables?.some((v) => v.filename === item.filename)}
+                      disabled={update.isPending}
+                      onClick={() =>
+                        update.mutate([
+                          { filename: updateInfo.filename, projectId: updateInfo.projectId, versionId: updateInfo.latestVersionId },
+                        ])
+                      }
+                    />
+                  )}
+
+                  {can('modpack.manage') && (
+                    <Toggle
+                      checked={item.enabled}
+                      disabled={toggle.isPending}
+                      onChange={() => toggle.mutate(item.filename)}
+                    />
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </Panel>

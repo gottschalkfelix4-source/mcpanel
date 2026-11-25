@@ -96,10 +96,12 @@ export function Badge({
   children,
   tone = 'neutral',
   className,
+  title,
 }: {
   children: ReactNode;
   tone?: 'neutral' | 'green' | 'red' | 'gold' | 'blue' | 'purple';
   className?: string;
+  title?: string;
 }) {
   const tones = {
     neutral: 'border-stone-600 bg-stone-700/60 text-stone-300',
@@ -109,7 +111,7 @@ export function Badge({
     blue: 'border-diamond/40 bg-diamond/10 text-diamond',
     purple: 'border-lapis/60 bg-lapis/20 text-indigo-300',
   };
-  return <span className={clsx('mc-badge', tones[tone], className)}>{children}</span>;
+  return <span title={title} className={clsx('mc-badge', tones[tone], className)}>{children}</span>;
 }
 
 const STATE_META: Record<

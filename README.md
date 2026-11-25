@@ -490,6 +490,19 @@ deshalb leitet das Panel den Ordner aus dem Servertyp ab, statt ihn raten zu las
 Deaktivieren benennt in `.jar.disabled` um, löscht also nichts. Nach dem Installieren
 oder Umschalten ist ein Neustart nötig, damit der Server die Änderung liest.
 
+**Updates einzelner Mods und Plugins.** Der Reiter erkennt jede installierte
+Datei über ihre SHA-1-Prüfsumme bei Modrinth und prüft, ob eine neuere Version
+existiert, die zur Minecraft-Version des Servers und – bei Mods – zum Loader
+passt (Plugins werden ohne Loader-Filter geprüft, weil Modrinth sie je nach
+Projekt als Paper/Spigot/Bukkit markiert). Ein grünes Badge zeigt die
+Versionsänderung („Update: a → b“); der Download-Knopf lädt die neue Datei
+herunter und entfernt erst nach Erfolg die alte. Mehrere Updates lassen sich
+zusammen einspielen („Alle aktualisieren“), die Liste auf „Nur Updates“
+einschränken. Erkannt werden nur Dateien, die Modrinth kennt – von Hand
+abgelegte Jars ohne Treffer (etwa reine CurseForge-Downloads) bleiben
+unangetastet stehen, und die Prüfung ist lesend: Sie ändert keinen Server,
+solange niemand „Aktualisieren“ drückt.
+
 > Für Paper-Plugins sind Modrinth und Hangar die lebendigen Quellen; die
 > CurseForge-Klasse *Bukkit Plugins* ist vergleichsweise alt. Hangar ist nicht
 > angebunden – von dort geladene Jars lassen sich über den Dateimanager in
