@@ -10,6 +10,8 @@ Taggen wird daraus eine Versionsüberschrift.
 
 ## [Unveröffentlicht]
 
+## [1.1.0] – 2026-11-25
+
 ### Neu
 - **Einzelne Mods auf dem neuesten Stand halten**: Der Reiter „Mods / Plugins“ erkennt jede installierte Datei über ihre SHA-1-Prüfsumme bei Modrinth und zeigt mit „Update: a → b“, wenn eine neuere passende Version existiert – einzeln oder zusammen („Alle aktualisieren“), mit Filter „Nur Updates“ und Fehlerhinweis, wenn Modrinth nicht erreichbar ist. Erkannt werden nur Dateien, die Modrinth kennt; reine CurseForge-Downloads ohne Modrinth-Spiegel bleiben unangetastet.
 - **FTB-Partys verwalten**: Läuft FTB Teams auf einem Server, zeigt der Reiter „Spieler“ alle Partys mit Mitgliedern und Rängen. Spieler hinzufügen oder entfernen, Besitzer wechseln, umbenennen, auflösen und neue Partys anlegen – direkt im Panel, ohne ins Spiel zu müssen. Details in `docs/FTB_TEAMS.md`.

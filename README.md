@@ -683,8 +683,8 @@ hinzufügen"* / *„App installieren"*. Die App startet dann ohne Browserleisten
    aus Browser-Sicherheitsgründen nur über **HTTPS** oder `localhost`. Über eine
    nackte LAN-IP funktioniert die App vollständig und „Zum Startbildschirm" gibt
    es trotzdem – nur der Offline-Cache bleibt aus. Für die volle PWA einen
-   Reverse-Proxy mit Zertifikat davorschalten (Caddy macht das mit zwei Zeilen)
-   oder im Heimnetz z. B. Tailscale (`https://…ts.net`) nutzen.
+   Reverse-Proxy mit Zertifikat davorschalten – Anleitung für Caddy, nginx,
+   Unraid und Tailscale in [docs/HTTPS.md](docs/HTTPS.md).
 
 **Mobil-Layout prüfen:** [scripts/mobile-sim.sh](scripts/mobile-sim.sh) startet einen
 headless Edge als iPhone (375×812, DPR 3, Touch), meldet sich an, legt Screenshots
@@ -958,7 +958,9 @@ Server werden beim nächsten Start mit der neuen Einstellung neu aufgesetzt.
 - Server müssen für Spieler von außen erreichbar sein – Portfreigaben im Router bzw.
   in der Firewall sind Handarbeit.
 - Kein HTTPS im Stack. Für den Betrieb im Internet einen Reverse-Proxy
-  (Caddy, Traefik, nginx) mit Zertifikat davorsetzen.
+  (Caddy, Traefik, nginx) mit Zertifikat davorsetzen – Schritt-für-Schritt in
+  [docs/HTTPS.md](docs/HTTPS.md). Push-Benachrichtigungen und der Offline-Cache
+  der App brauchen zwingend HTTPS.
 - **Ein aus dem Internet erreichbares Panel ist ein Panel am Docker-Socket.** Wer die
   Anmeldung überwindet, kann Container anlegen und damit auf dem Host tun, was er will –
   ein Zertifikat schützt die Leitung, nicht die Tür. Für den Zugriff von unterwegs ist
