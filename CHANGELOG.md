@@ -10,6 +10,9 @@ Taggen wird daraus eine Versionsüberschrift.
 
 ## [Unveröffentlicht]
 
+### Behoben
+- **KI-Assistent: leere Antwort bei OpenAI-kompatiblen Diensten**: Der Assistent versteht jetzt auch Dienste, die ihre Antwort als Stream (SSE) schicken, `content` als Teileliste liefern oder nur nachdenken, ohne zu antworten (Reasoning-Modelle) – statt pauschal „leere Antwort“ zu melden. Der Verbindungstest beim Speichern bekommt außerdem mehr Token-Budget, damit Modelle mit Nachdenken (z. B. DeepSeek-R1) überhaupt eine Antwort erzeugen können; schöpft ein Dienst das Budget trotzdem aus, nennt die Meldung jetzt den Grund.
+
 ## [1.1.0] – 2026-11-25
 
 ### Neu

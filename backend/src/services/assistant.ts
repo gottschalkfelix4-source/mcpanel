@@ -110,9 +110,67 @@ interface ChatMessage {
   content: string;
 }
 
+/**
+ * Die Antwortformen, die OpenAI-kompatible Dienste tatsächlich schicken:
+ * - klassisch `message.content` als String
+ * - neuere APIs liefern `content` als Liste von Teilen (`[{type:'text',text:'…'}]`)
+ * - Reasoning-Modelle (DeepSeek R1 & Co.) schreiben erst in `reasoning_content`
+ *   und lassen `content` bis zum Abschluss leer
+ * - uralte `/completions`-Endpunkte antworten mit `choices[0].text`
+ * - manche Dienste streamen grundsätzlich (SSE), auch ohne `stream: true`
+ */
+export type ChatContentTeil = { type?: string; text?: string };
+export type ChatContent = string | ChatContentTeil[] | null;
+
 interface ChatResponse {
-  choices?: { message?: { content?: string | null } }[];
+  choices?: {
+    message?: {
+      content?: ChatContent;
+      reasoning_content?: string | null;
+    };
+    delta?: { content?: string | null; reasoning_content?: string | null };
+    text?: string | null;
+    finish_reason?: string | null;
+  }[];
   error?: { message?: string } | string;
+}
+
+/** Antworttext aus `message.content`, egal ob String oder Teileliste. */
+function contentText(content: ChatContent | undefined): string {
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .filter((teil) => teil?.type === 'text' && typeof teil.text === 'string')
+      .map((teil) => teil.text as string)
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
+/**
+ * Einige Dienste antworten als SSE-Stream, auch wenn nicht danach gefragt
+ * wurde. Aus den `data:`-Zeilen wird das letzte JSON-Stück gezogen und die
+ * über die Chunks verteilten Textteile wieder zusammengesetzt.
+ */
+function parseSse(text: string): ChatResponse {
+  let result: ChatResponse = {};
+  const teile: string[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const chunk = JSON.parse(payload) as ChatResponse;
+      const delta = chunk.choices?.[0]?.delta?.content;
+      if (typeof delta === 'string' && delta) teile.push(delta);
+      result = chunk;
+    } catch {
+      /* Kommentarzeile oder unvollständiges Stück – ignorieren */
+    }
+  }
+  if (teile.length > 0) result.choices = [{ message: { content: teile.join('') } }];
+  return result;
 }
 
 /**
@@ -184,8 +242,28 @@ export async function chatCompletion(
     throw new Error(`Der KI-Dienst meldet HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
   }
 
-  const antwort = data.choices?.[0]?.message?.content?.trim();
-  if (!antwort) throw new Error('Der KI-Dienst hat eine leere Antwort geschickt.');
+  // Streamt der Dienst grundsätzlich (auch ohne `stream: true`), steckt die
+  // Antwort in `data:`-Zeilen statt im JSON – dann dort nachlesen.
+  if (!data.choices?.length && /^data:/m.test(text)) {
+    data = parseSse(text);
+  }
+
+  const choice = data.choices?.[0];
+  let antwort = contentText(choice?.message?.content);
+  // Reasoning-Modelle: erst nachgedacht, aber noch keine Antwort geliefert.
+  const nachgedacht = (choice?.message?.reasoning_content ?? '').trim();
+  // Uralte /completions-Antworten.
+  if (!antwort && !nachgedacht && choice?.text) antwort = choice.text.trim();
+
+  if (!antwort) {
+    if (choice?.finish_reason === 'length') {
+      throw new Error(
+        'Der KI-Dienst hat das Antwortbudget (max_tokens) ausgeschöpft, bevor eine Antwort kam – ' +
+          'bei Modellen mit Nachdenken (z. B. DeepSeek-R1) kann das schon bei einer kurzen Frage passieren.',
+      );
+    }
+    throw new Error('Der KI-Dienst hat eine leere Antwort geschickt.');
+  }
   return antwort;
 }
 
@@ -195,7 +273,9 @@ export async function testAssistant(cfg: AssistantConfig): Promise<string> {
   return chatCompletion(
     cfg,
     [{ role: 'user', content: 'Antworte mit genau einem Wort: OK' }],
-    { maxTokens: 20 },
+    // Großzügig: Reasoning-Modelle brauchen erst Budget zum Nachdenken,
+    // bevor überhaupt eine Antwort entsteht.
+    { maxTokens: 300 },
   );
 }
 

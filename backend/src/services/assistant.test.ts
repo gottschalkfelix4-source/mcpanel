@@ -121,6 +121,56 @@ describe('chatCompletion', () => {
     });
     expect(m.fetch).not.toHaveBeenCalled();
   });
+
+  it('liest neuere APIs, die content als Teileliste liefern', async () => {
+    m.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: [{ type: 'text', text: 'Hallo ' }, { type: 'text', text: 'Welt' }] } }] }),
+        { status: 200 },
+      ),
+    );
+    await expect(chatCompletion(cfg, [])).resolves.toBe('Hallo Welt');
+  });
+
+  it('setzt eine SSE-Antwort zusammen, wenn der Dienst grundsätzlich streamt', async () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"content":"Hal"}}]}',
+      '',
+      'data: {"choices":[{"delta":{"content":"lo"}}]}',
+      '',
+      'data: {"choices":[{"delta":{"content":" Welt"}}]}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n');
+    m.fetch.mockResolvedValueOnce(new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    await expect(chatCompletion(cfg, [])).resolves.toBe('Hallo Welt');
+  });
+
+  it('nutzt reasoning_content nicht als Antwort, meldet aber ein leeres Budget', async () => {
+    m.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{
+            message: { content: null, reasoning_content: 'Hmm, lass mich nachdenken …' },
+            finish_reason: 'length',
+          }],
+        }),
+        { status: 200 },
+      ),
+    );
+    await expect(chatCompletion(cfg, [])).rejects.toThrow('max_tokens');
+  });
+
+  it('erkennt eine abgeschnittene Antwort am finish_reason', async () => {
+    m.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: '' }, finish_reason: 'length' }] }),
+        { status: 200 },
+      ),
+    );
+    await expect(chatCompletion(cfg, [])).rejects.toThrow('Antwortbudget');
+  });
 });
 
 describe('askAssistant', () => {
