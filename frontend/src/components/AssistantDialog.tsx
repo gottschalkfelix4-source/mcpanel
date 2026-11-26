@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Ban, CheckCircle2, RotateCcw, Send, ShieldAlert, Sparkles, Wrench, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, streamAssistant } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import type { AssistantAction, AssistantMessage } from '../lib/types';
 import { TaskProgress } from './TaskProgress';
@@ -92,19 +92,40 @@ export function AssistantDialog({
   async function fragen(text: string | null, basis: Eintrag[]) {
     setBusy(true);
     setFehler(null);
+    // Platzhalter-Antwort anlegen – der Stream füllt sie live.
+    setVerlauf([...basis, ...(text ? [{ role: 'user' as const, content: text }] : []), { role: 'assistant', content: '' }]);
     try {
-      const res = await api.post<{ answer: string; model: string; actions?: AssistantAction[] }>(
-        `/servers/${serverId}/assistant/ask`,
+      let aktionen: AssistantAction[] = [];
+      await streamAssistant(
+        `/servers/${serverId}/assistant/ask-stream`,
         // Hoechstens 20 Eintraege nimmt das Panel an – die aeltesten fallen weg.
         { question: text ?? undefined, history: fuerVerlauf(basis, staende).slice(-20) },
+        (delta) => {
+          setVerlauf((v) => {
+            const kopie = [...v];
+            const letzte = kopie[kopie.length - 1];
+            if (letzte && letzte.role === 'assistant') {
+              kopie[kopie.length - 1] = { ...letzte, content: letzte.content + delta };
+            }
+            return kopie;
+          });
+        },
+        (meta) => {
+          if (meta.model) setModell(meta.model);
+          aktionen = (meta.actions ?? []) as AssistantAction[];
+        },
       );
-      setModell(res.model);
-      setVerlauf([
-        ...basis,
-        ...(text ? [{ role: 'user' as const, content: text }] : []),
-        { role: 'assistant', content: res.answer, actions: res.actions ?? [] },
-      ]);
+      setVerlauf((v) => {
+        const kopie = [...v];
+        const letzte = kopie[kopie.length - 1];
+        if (letzte && letzte.role === 'assistant') {
+          kopie[kopie.length - 1] = { ...letzte, actions: aktionen };
+        }
+        return kopie;
+      });
     } catch (err) {
+      // Leeren Entwurf wieder entfernen und die Fehlermeldung zeigen.
+      setVerlauf((v) => v.filter((e) => e.role !== 'assistant' || e.content !== ''));
       setFehler(err instanceof Error ? err.message : 'Anfrage fehlgeschlagen');
     } finally {
       setBusy(false);

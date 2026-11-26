@@ -15,6 +15,7 @@ import {
   erlaubteAktionen,
   extractActions,
   prepareActions,
+  type AktionsTyp,
   type AktionsVorschlag,
 } from './assistantActions.js';
 
@@ -293,6 +294,162 @@ export async function chatCompletion(
   return antwort;
 }
 
+/**
+ * Streaming-Variante von `chatCompletion`: schickt `stream: true` und reicht
+ * jeden Textteil sofort an `onDelta` weiter, sobald der Dienst ihn liefert.
+ * Die komplette Antwort kommt als Rückgabewert (daran hängen z. B. die
+ * Reparaturvorschläge). Dienste, die `stream` ignorieren und trotzdem als
+ * ganzes JSON antworten, funktionieren ebenfalls (Fallback auf den normalen
+ * Weg). Fehler mitten im Stream werden als Fehler geworfen.
+ */
+export async function chatCompletionStream(
+  cfg: AssistantConfig,
+  messages: ChatMessage[],
+  onDelta: (text: string) => void,
+  opts: { maxTokens?: number } = {},
+): Promise<string> {
+  if (!isConfigured(cfg)) {
+    throw badRequest('Der KI-Assistent ist nicht eingerichtet. Ein Administrator kann ihn unter Panel-Einstellungen anbinden.');
+  }
+  if (cfg.provider === 'anthropic') {
+    // Anthropic streamt nicht über diesen Pfad – der normale Aufruf liefert
+    // die Antwort in einem Stück, `onDelta` bekommt sie einmal komplett.
+    const antwort = await anthropicCompletion(cfg, messages);
+    onDelta(antwort);
+    return antwort;
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'HTTP-Referer': 'https://github.com/gottschalkfelix4-source/mcpanel',
+    'X-Title': 'MCPanel',
+  };
+  if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: cfg.model,
+        messages,
+        temperature: 0.2,
+        max_tokens: opts.maxTokens ?? cfg.maxTokens ?? ASSISTANT_STANDARD_BUDGET,
+        stream: true,
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    const grund = err instanceof Error ? err.message : String(err);
+    if (/abort|timeout/i.test(grund)) {
+      throw new Error('Der KI-Dienst hat nicht rechtzeitig geantwortet (2 Minuten).');
+    }
+    throw new Error(`Der KI-Dienst ist nicht erreichbar: ${grund}`);
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    let data: ChatResponse = {};
+    try { data = JSON.parse(text) as ChatResponse; } catch { /* kein JSON */ }
+    const detail = typeof data.error === 'string' ? data.error : data.error?.message ?? text.slice(0, 200);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`Der KI-Dienst hat den API-Key abgelehnt (HTTP ${res.status}).`);
+    }
+    if (res.status === 404) {
+      throw new Error(
+        `Der KI-Dienst kennt den Pfad oder das Modell "${cfg.model}" nicht (HTTP 404). ` +
+          'Die Adresse muss auf /v1 enden und das Modell so heißen, wie der Anbieter es listet.',
+      );
+    }
+    if (res.status === 429) {
+      throw new Error('Der KI-Dienst bremst: zu viele Anfragen oder kein Guthaben mehr (HTTP 429).');
+    }
+    throw new Error(`Der KI-Dienst meldet HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+  }
+
+  // Manche Dienste ignorieren `stream: true` – dann ist es eine ganz normale
+  // JSON-Antwort, die der bisherige Parser versteht.
+  const typ = res.headers.get('content-type') ?? '';
+  if (!/text\/event-stream/i.test(typ)) {
+    const antwort = await chatCompletion(cfg, messages, opts);
+    onDelta(antwort);
+    return antwort;
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('Der KI-Dienst hat keinen Antwort-Stream geliefert.');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let antwort = '';
+  let finishReason: string | null = null;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const zeilen = buffer.split('\n');
+      buffer = zeilen.pop() ?? '';
+      for (const zeile of zeilen) {
+        const getrimmt = zeile.trim();
+        if (!getrimmt.startsWith('data:')) continue;
+        const payload = getrimmt.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+
+        let chunk: ChatResponse = {};
+        try {
+          chunk = JSON.parse(payload) as ChatResponse;
+        } catch {
+          continue; /* Kommentar oder unvollständiges Stück */
+        }
+        if (chunk.error) {
+          const detail = typeof chunk.error === 'string' ? chunk.error : chunk.error?.message ?? 'unbekannt';
+          throw new Error(`Der KI-Dienst meldet mitten im Stream einen Fehler: ${detail}`);
+        }
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta) {
+          antwort += delta;
+          onDelta(delta);
+        }
+        const kopf = chunk.choices?.[0];
+        if (kopf?.finish_reason) finishReason = kopf.finish_reason;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (buffer.trim()) {
+    // Letzte Zeile ohne Zeilenumbruch – selten, der Vollständigkeit halber.
+    const rest = buffer.trim();
+    if (rest.startsWith('data:')) {
+      const payload = rest.slice(5).trim();
+      if (payload && payload !== '[DONE]') {
+        try {
+          const chunk = JSON.parse(payload) as ChatResponse;
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (typeof delta === 'string') { antwort += delta; onDelta(delta); }
+        } catch { /* ignorieren */ }
+      }
+    }
+  }
+
+  const endErgebnis = antwort.trim();
+  if (!endErgebnis) {
+    if (finishReason === 'length') {
+      throw new Error(
+        'Der KI-Dienst hat das Antwortbudget (max_tokens) ausgeschöpft, bevor eine Antwort kam – ' +
+          'bei Modellen mit Nachdenken (z. B. DeepSeek-R1) kann das schon bei einer kurzen Frage passieren.',
+      );
+    }
+    throw new Error('Der KI-Dienst hat eine leere Antwort geschickt.');
+  }
+  return endErgebnis;
+}
+
+
 /** Kurzer Aufruf, um Adresse, Key und Modell beim Speichern zu prüfen. */
 export async function testAssistant(cfg: AssistantConfig): Promise<string> {
   if (cfg.provider === 'anthropic') return testAnthropic(cfg);
@@ -413,9 +570,24 @@ export async function askAssistant(
   if (!isConfigured(cfg)) {
     throw badRequest('Der KI-Assistent ist nicht eingerichtet. Ein Administrator kann ihn unter Panel-Einstellungen anbinden.');
   }
+  const { messages, typen } = await serverNachrichten(server, question, history, opts);
+  const roh = await chatCompletion(cfg, messages);
+  const { text, actions } = await verarbeiteAntwort(roh, typen, opts);
+  return { answer: text, model: cfg.model, actions };
+}
 
+/**
+ * Nachrichten für den Server-Chat (Kontext + Frage + Verlauf) und die Art der
+ * erlaubten Reparaturen – gemeinsam für den normalen und den Stream-Aufruf.
+ */
+async function serverNachrichten(
+  server: Server,
+  question: string | null,
+  history: AssistantMessage[],
+  opts: { access?: ServerAccess; userId?: string },
+): Promise<{ messages: ChatMessage[]; typen: AktionsTyp[] }> {
   const typen = opts.access && opts.userId && (await actionsEnabled()) ? erlaubteAktionen(opts.access) : [];
-  const kontext = await buildContext(server, { eigenschaften: typen.includes('eigenschaft_setzen') });
+  const kontext = await buildContext(server, { eigenschaften: typen.includes('eigenschaft_setzen' as never) });
   const auftrag =
     question?.trim() ||
     'Warum läuft dieser Server nicht bzw. was ist das Problem im Protokoll, und was soll ich tun?';
@@ -427,14 +599,46 @@ export async function askAssistant(
     ...history.map((m) => ({ role: m.role, content: m.content })),
   ];
   if (history.length) messages.push({ role: 'user', content: auftrag });
+  return { messages, typen };
+}
 
-  const roh = await chatCompletion(cfg, messages);
+/**
+ * Aus der Rohtext-Antwort die geprüften Reparaturvorschläge bauen. Die
+ * AKTION-Zeilen werden aus dem Text entfernt; ohne freigeschaltete Aktionen
+ * wird nichts vorgeschlagen – auch dann nicht, wenn das Modell sich nicht an
+ * die Anweisung hält. Vorschläge ohne Recht kommen als gesperrt zurück
+ * (prepareActions prüft jedes einzeln).
+ */
+async function verarbeiteAntwort(
+  roh: string,
+  typen: AktionsTyp[],
+  opts: { access?: ServerAccess; userId?: string },
+): Promise<{ text: string; actions: AktionsVorschlag[] }> {
   const { text, aktionen } = extractActions(roh);
-  // Ohne freigeschaltete Aktionen wird nichts vorgeschlagen – auch dann nicht,
-  // wenn das Modell sich nicht an die Anweisung hält. Vorschläge ohne Recht
-  // kommen als gesperrt zurück (prepareActions prüft jedes einzeln).
   const actions = typen.length ? await prepareActions(opts.access!, opts.userId!, aktionen) : [];
-  return { answer: text || 'Siehe Vorschläge unten.', model: cfg.model, actions };
+  return { text: text || 'Siehe Vorschläge unten.', actions };
+}
+
+/**
+ * Dasselbe Gespräch, aber Antwort-Teile werden sofort per `onDelta`
+ * durchgereicht, sobald der Dienst sie liefert (Streaming). Die volle Antwort
+ * kommt zusätzlich zurück – an ihr hängen die Reparaturvorschläge.
+ */
+export async function askAssistantStream(
+  server: Server,
+  question: string | null,
+  history: AssistantMessage[],
+  opts: { access?: ServerAccess; userId?: string },
+  onDelta: (text: string) => void,
+): Promise<{ answer: string; model: string; actions: AktionsVorschlag[] }> {
+  const cfg = await getAssistantConfig();
+  if (!isConfigured(cfg)) {
+    throw badRequest('Der KI-Assistent ist nicht eingerichtet. Ein Administrator kann ihn unter Panel-Einstellungen anbinden.');
+  }
+  const { messages, typen } = await serverNachrichten(server, question, history, opts);
+  const roh = await chatCompletionStream(cfg, messages, onDelta);
+  const { text, actions } = await verarbeiteAntwort(roh, typen, opts);
+  return { answer: text, model: cfg.model, actions };
 }
 
 /**
@@ -476,6 +680,32 @@ export async function askAssistantGlobal(
     { role: 'user', content: frage },
   ];
   const antwort = await chatCompletion(cfg, messages);
+  return { answer: antwort, model: cfg.model, actions: [] };
+}
+
+/**
+ * Globale Frage mit Live-Stream – dieselbe Absicherung wie
+ * `askAssistantGlobal` (kein Serverkontext), aber die Antwortteile kommen
+ * sofort per `onDelta`, sobald der Dienst sie liefert.
+ */
+export async function askAssistantGlobalStream(
+  question: string,
+  history: AssistantMessage[],
+  onDelta: (text: string) => void,
+): Promise<{ answer: string; model: string; actions: never[] }> {
+  const cfg = await getAssistantConfig();
+  if (!isConfigured(cfg)) {
+    throw badRequest('Der KI-Assistent ist nicht eingerichtet. Ein Administrator kann ihn unter Panel-Einstellungen anbinden.');
+  }
+  const frage = question.trim();
+  if (!frage) throw badRequest('Bitte eine Frage stellen.');
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: GLOBAL_PROMPT },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    { role: 'user', content: frage },
+  ];
+  const antwort = await chatCompletionStream(cfg, messages, onDelta);
   return { answer: antwort, model: cfg.model, actions: [] };
 }
 

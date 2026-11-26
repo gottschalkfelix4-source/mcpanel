@@ -1,9 +1,9 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { audit, requireServer } from '../auth/context.js';
 import { PERMISSIONS } from '../auth/permissions.js';
-import { HttpError } from '../lib/errors.js';
-import { askAssistant, askAssistantGlobal } from '../services/assistant.js';
+import { HttpError, publicErrorMessage } from '../lib/errors.js';
+import { askAssistant, askAssistantGlobal, askAssistantGlobalStream, askAssistantStream } from '../services/assistant.js';
 import { executeAction } from '../services/assistantActions.js';
 
 const askSchema = z.object({
@@ -22,6 +22,37 @@ const freigabeSchema = z.object({
   /** Abgetippter Servername bei riskanten Vorschlägen. */
   bestaetigung: z.string().max(100).optional(),
 });
+
+/**
+ * Antwort als Server-Sent-Events: `delta`-Events mit Textteilen, am Ende ein
+ * `done`-Event mit Modell und Reparaturvorschlägen. Ein Fehler kommt als
+ * `error`-Event (Status bleibt 200, weil der Antwortstrom schon läuft) –
+ * der Client zeigt die Meldung dann an der richtigen Stelle im Verlauf.
+ * `X-Accel-Buffering: no` sagt dem nginx, dass er nicht puffern darf.
+ */
+async function streamReply(
+  reply: FastifyReply,
+  run: (send: (event: 'delta' | 'done', data: unknown) => void) => Promise<{ model: string; actions?: unknown[] }>,
+): Promise<void> {
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (event: 'delta' | 'done' | 'error', data: unknown) => {
+    reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  try {
+    const meta = await run(send);
+    send('done', { model: meta.model, actions: meta.actions ?? [] });
+  } catch (err) {
+    send('error', { message: publicErrorMessage(err, 'Anfrage fehlgeschlagen') });
+  } finally {
+    reply.raw.end();
+  }
+}
 
 /**
  * KI-Assistent je Server. Wer die Konsole lesen darf, darf auch fragen –
@@ -59,6 +90,41 @@ export default async function assistantRoutes(app: FastifyInstance) {
         body.question?.slice(0, 120) || 'Absturzanalyse',
       );
       return result;
+    },
+  );
+
+  /** Wie `/ask`, aber als Server-Sent-Events: die Antwort erscheint live. */
+  app.post(
+    '/ask-stream',
+    {
+      config: {
+        rateLimit: {
+          max: 12,
+          timeWindow: '1 minute',
+          errorResponseBuilder: () =>
+            new HttpError(429, 'Zu viele Anfragen an den KI-Assistenten. Bitte warte eine Minute.'),
+        },
+      },
+    },
+    async (req, reply) => {
+      const access = await requireServer(req, PERMISSIONS.CONSOLE_READ);
+      const body = askSchema.parse(req.body ?? {});
+      await streamReply(reply, async (send) => {
+        const result = await askAssistantStream(
+          access.server,
+          body.question ?? null,
+          body.history,
+          { access, userId: req.user!.id },
+          (text) => send('delta', { text }),
+        );
+        await audit(
+          req.user!.id,
+          access.server.id,
+          'assistant.ask',
+          body.question?.slice(0, 120) || 'Absturzanalyse',
+        );
+        return result;
+      });
     },
   );
 
@@ -112,6 +178,32 @@ export async function globalAssistantRoutes(app: FastifyInstance) {
       const result = await askAssistantGlobal(frage, body.history);
       await audit(req.user!.id, null, 'assistant.ask', frage.slice(0, 120));
       return result;
+    },
+  );
+
+  /** Wie `/ask`, aber als Server-Sent-Events: die Antwort erscheint live. */
+  app.post(
+    '/ask-stream',
+    {
+      config: {
+        rateLimit: {
+          max: 12,
+          timeWindow: '1 minute',
+          errorResponseBuilder: () =>
+            new HttpError(429, 'Zu viele Anfragen an den KI-Assistenten. Bitte warte eine Minute.'),
+        },
+      },
+    },
+    async (req, reply) => {
+      const body = askSchema.parse(req.body ?? {});
+      const frage = body.question?.trim();
+      if (!frage) throw new HttpError(400, 'Bitte eine Frage stellen.');
+
+      await streamReply(reply, async (send) => {
+        const result = await askAssistantGlobalStream(frage, body.history, (text) => send('delta', { text }));
+        await audit(req.user!.id, null, 'assistant.ask', frage.slice(0, 120));
+        return result;
+      });
     },
   );
 }

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ArrowUpRight, MessageSquareText, Send, Sparkles, X } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, streamAssistant } from '../lib/api';
 import type { AssistantMessage, ServerSummary } from '../lib/types';
 import { useAssistantAvailable } from './AssistantDialog';
 
@@ -66,24 +66,45 @@ export default function AssistantMascot() {
     if (busy) return;
     setBusy(true);
     setFehler(null);
+    // Leere Assistenten-Antwort anlegen – sie füllt sich live aus dem Stream.
+    setVerlauf((v) => [...v, { role: 'user', content: text }, { role: 'assistant', content: '' }]);
     try {
-      const res = serverId
-        ? await api.post<{ answer: string; model: string; actions?: unknown[] }>(
-            `/servers/${serverId}/assistant/ask`,
-            // Nur der eigene Verlauf; das Backend prüft den Zugriff frisch.
-            { question: text, history: verlauf.slice(-20) },
-          )
-        : await api.post<{ answer: string; model: string; actions?: unknown[] }>(
-            '/assistant/ask',
-            { question: text, history: verlauf.slice(-20) },
-          );
-      setModell(res.model);
-      setVerlauf((v) => [
-        ...v,
-        { role: 'user', content: text },
-        { role: 'assistant', content: res.answer, aktionsHinweis: Boolean(res.actions?.length) },
-      ]);
+      const pfad = serverId ? `/servers/${serverId}/assistant/ask-stream` : '/assistant/ask-stream';
+      let modell = '';
+      let aktionsHinweis = false;
+      await streamAssistant(
+        pfad,
+        // Nur der eigene Verlauf; das Backend prüft den Zugriff frisch.
+        { question: text, history: verlauf.slice(-20) },
+        (delta) => {
+          setVerlauf((v) => {
+            const kopie = [...v];
+            const letzte = kopie[kopie.length - 1];
+            if (letzte && letzte.role === 'assistant') {
+              kopie[kopie.length - 1] = { ...letzte, content: letzte.content + delta };
+            }
+            return kopie;
+          });
+        },
+        (meta) => {
+          modell = meta.model;
+          aktionsHinweis = Boolean(meta.actions?.length);
+        },
+      );
+      setModell(modell || null);
+      if (aktionsHinweis) {
+        setVerlauf((v) => {
+          const kopie = [...v];
+          const letzte = kopie[kopie.length - 1];
+          if (letzte && letzte.role === 'assistant') {
+            kopie[kopie.length - 1] = { ...letzte, aktionsHinweis: true };
+          }
+          return kopie;
+        });
+      }
     } catch (err) {
+      // Leeren Entwurf wieder entfernen, damit der Fehler klar dasteht.
+      setVerlauf((v) => v.filter((e) => e.content !== '' || e.role !== 'assistant'));
       setFehler(err instanceof Error ? err.message : 'Anfrage fehlgeschlagen');
     } finally {
       setBusy(false);

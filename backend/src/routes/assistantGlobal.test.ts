@@ -2,7 +2,7 @@ import Fastify from 'fastify';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ZodError } from 'zod';
 
-const m = vi.hoisted(() => ({ ask: vi.fn() }));
+const m = vi.hoisted(() => ({ ask: vi.fn(), askStream: vi.fn() }));
 vi.mock('../auth/jwt.js', () => ({ verifyToken: (token: string) => ({ sub: token, sessionVersion: 0 }) }));
 vi.mock('../config.js', () => ({ config: { jwtSecret: 'x' } }));
 vi.mock('../db.js', () => ({
@@ -14,14 +14,22 @@ vi.mock('../db.js', () => ({
 }));
 vi.mock('../services/assistant.js', () => ({
   askAssistantGlobal: m.ask,
+  askAssistantGlobalStream: m.askStream,
 }));
 
 import { globalAssistantRoutes } from './assistant.js';
 import { authenticate } from '../auth/context.js';
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.askStream.mockImplementation(async (frage: string, verlauf: unknown[], onDelta: (t: string) => void) => {
+    onDelta('Hal');
+    onDelta('lo');
+    return { answer: 'Hallo', model: 'test-modell', actions: [] };
+  });
+});
 
-async function call(token: string | null, payload: unknown) {
+async function call(token: string | null, payload: unknown, url = '/assistant/ask') {
   const app = Fastify();
   app.addHook('preHandler', authenticate);
   app.setErrorHandler((error, _req, reply) => reply.code(error instanceof ZodError ? 400 : error.statusCode ?? 500).send({ error: error.message }));
@@ -29,7 +37,7 @@ async function call(token: string | null, payload: unknown) {
   try {
     return await app.inject({
       method: 'POST',
-      url: '/assistant/ask',
+      url,
       headers: token ? { authorization: 'Bearer ' + token } : {},
       payload: payload as any,
     });
@@ -66,4 +74,31 @@ it('begrenzt die Verlaufslänge', async () => {
   });
   expect(res.statusCode).toBe(400);
   expect(m.ask).not.toHaveBeenCalled();
+});
+
+it('streamt die Antwort als Server-Sent-Events mit delta- und done-Events', async () => {
+  const res = await call('nutzer', { question: 'Hallo?', history: [] }, '/assistant/ask-stream');
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-type']).toContain('text/event-stream');
+  const body = res.body;
+  expect(body).toContain('event: delta');
+  expect(body).toContain('data: {"text":"Hal"}');
+  expect(body).toContain('event: done');
+  expect(body).toContain('"model":"test-modell"');
+  // Der Dienst wurde mit Frage, Verlauf und Durchreiche-Funktion gerufen.
+  expect(m.askStream).toHaveBeenCalledWith('Hallo?', [], expect.any(Function));
+});
+
+it('liefert einen Stream-Fehler als error-Event statt abzustürzen', async () => {
+  m.askStream.mockRejectedValue(new Error('Der Dienst ist nicht erreichbar: kaputt'));
+  const res = await call('nutzer', { question: 'Hi', history: [] }, '/assistant/ask-stream');
+  expect(res.statusCode).toBe(200);
+  expect(res.body).toContain('event: error');
+  expect(res.body).toContain('nicht erreichbar');
+});
+
+it('verlangt auch für den Stream eine Anmeldung', async () => {
+  const res = await call(null, { question: 'Hallo' }, '/assistant/ask-stream');
+  expect(res.statusCode).toBe(401);
+  expect(m.askStream).not.toHaveBeenCalled();
 });

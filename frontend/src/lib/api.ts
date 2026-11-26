@@ -88,6 +88,86 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   return data as T;
 }
 
+/**
+ * KI-Assistent mit Live-Stream: `POST` auf einen SSE-Endpunkt, `onDelta`
+ * bekommt jeden Textteil sofort, `onDone` die Abschluss-Metadaten (Modell,
+ * Reparaturvorschläge). Ein Fehler – egal ob HTTP-Status oder `error`-Event
+ * im Stream – wird als ApiError geworfen.
+ */
+export async function streamAssistant(
+  path: string,
+  body: unknown,
+  onDelta: (text: string) => void,
+  onDone: (meta: { model: string; actions?: unknown[] }) => void,
+): Promise<void> {
+  const token = tokenStore.get();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+  } catch {
+    throw new NetworkError();
+  }
+
+  if (res.status === 401) {
+    if (token && tokenStore.get() === token) {
+      tokenStore.clear();
+      if (!location.pathname.startsWith('/login')) location.href = '/login';
+    }
+    throw new ApiError(401, 'Nicht angemeldet');
+  }
+
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!res.ok || !contentType.includes('text/event-stream')) {
+    const text = await res.text().catch(() => '');
+    let data: { error?: string } | null = null;
+    try { data = JSON.parse(text) as { error?: string } | null; } catch { /* kein JSON */ }
+    throw new ApiError(res.status, data?.error ?? (res.ok ? 'Unerwartete Antwort des Assistenten' : `Fehler ${res.status}`));
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new ApiError(res.status, 'Kein Antwort-Stream erhalten');
+
+  let buffer = '';
+  let angefangen = false;
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const zeilen = buffer.split('\n');
+      buffer = zeilen.pop() ?? '';
+      let event = 'message';
+      for (const zeile of zeilen) {
+        if (zeile.startsWith('event:')) {
+          event = zeile.slice(6).trim();
+        } else if (zeile.startsWith('data:')) {
+          const payload = zeile.slice(5).trim();
+          if (!payload) continue;
+          let data: { text?: string; message?: string; model?: string; actions?: unknown[] };
+          try { data = JSON.parse(payload) as typeof data; } catch { continue; }
+          if (event === 'delta' && typeof data.text === 'string') {
+            angefangen = true;
+            onDelta(data.text);
+          } else if (event === 'error') {
+            throw new ApiError(500, data.message ?? 'Der KI-Dienst hat einen Fehler gemeldet.');
+          } else if (event === 'done') {
+            onDone({ model: data.model ?? '', actions: data.actions ?? [] });
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  // Manche Proxys schneiden den Stream nach [DONE] ab, ohne done-Event.
+  if (!angefangen) throw new ApiError(500, 'Der KI-Dienst hat eine leere Antwort geschickt.');
+}
+
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),

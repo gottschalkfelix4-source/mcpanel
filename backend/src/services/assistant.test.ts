@@ -180,6 +180,67 @@ describe('chatCompletion', () => {
   });
 });
 
+describe('chatCompletionStream', () => {
+  const sseAntwort = (teile: string[], finish = 'stop') =>
+    new Response(
+      teile
+        .map((t, i) => {
+          const chunk = { choices: [{ delta: { content: t }, finish_reason: i === teile.length - 1 ? finish : null }] };
+          return `data: ${JSON.stringify(chunk)}\n\n`;
+        })
+        .join('') + 'data: [DONE]\n\n',
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+
+  it('reicht Textteile sofort durch und liefert die volle Antwort', async () => {
+    m.fetch.mockResolvedValueOnce(sseAntwort(['Hal', 'lo ', 'Welt']));
+    const deltas: string[] = [];
+    const { chatCompletionStream } = await import('./assistant.js');
+    const antwort = await chatCompletionStream(cfg, [], (t) => deltas.push(t));
+    expect(antwort).toBe('Hallo Welt');
+    expect(deltas).toEqual(['Hal', 'lo ', 'Welt']);
+    const [, init] = m.fetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).stream).toBe(true);
+  });
+
+  it('fällt auf die normale Verarbeitung zurück, wenn der Dienst stream ignoriert', async () => {
+    // Zweiter Aufruf (der Fallback in chatCompletionStream) braucht denselben
+    // Mock noch einmal – deshalb als Dauer-Antwort registriert.
+    m.fetch.mockResolvedValue(antwort('Alles auf einmal'));
+    const deltas: string[] = [];
+    const { chatCompletionStream } = await import('./assistant.js');
+    await expect(chatCompletionStream(cfg, [], (t) => deltas.push(t))).resolves.toBe('Alles auf einmal');
+    expect(deltas).toEqual(['Alles auf einmal']);
+  });
+
+  it('übersetzt einen Stream-Fehler in der Mitte verständlich', async () => {
+    const sse = 'data: {"choices":[{"delta":{"content":"Anfang"}}]}\n\n'
+      + 'data: {"error":{"message":"Model overloaded"}}\n\n';
+    m.fetch.mockResolvedValueOnce(new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const { chatCompletionStream } = await import('./assistant.js');
+    await expect(chatCompletionStream(cfg, [], () => {})).rejects.toThrow(/Model overloaded/);
+  });
+
+  it('meldet ein erschöpftes Antwortbudget, wenn gar nichts ankam', async () => {
+    const sse = 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n';
+    m.fetch.mockResolvedValueOnce(new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const { chatCompletionStream } = await import('./assistant.js');
+    await expect(chatCompletionStream(cfg, [], () => {})).rejects.toThrow('max_tokens');
+  });
+
+  it('behält eine abgeschnittene Teilantwort statt sie zu verwerfen', async () => {
+    m.fetch.mockResolvedValueOnce(sseAntwort(['Hallo, der Rest fehlt'], 'length'));
+    const { chatCompletionStream } = await import('./assistant.js');
+    await expect(chatCompletionStream(cfg, [], () => {})).resolves.toBe('Hallo, der Rest fehlt');
+  });
+
+  it('lehnt einen ungültigen Key auch im Stream ab', async () => {
+    m.fetch.mockResolvedValueOnce(new Response('{"error":{"message":"bad key"}}', { status: 401 }));
+    const { chatCompletionStream } = await import('./assistant.js');
+    await expect(chatCompletionStream(cfg, [], () => {})).rejects.toThrow('API-Key abgelehnt');
+  });
+});
+
 describe('askAssistant', () => {
   it('haengt den Verlauf hinter den Kontext und die neue Frage ans Ende', async () => {
     await saveAssistantConfig(cfg);
